@@ -14,6 +14,10 @@
     --disp:'Arial Black','Arial Narrow Bold',Impact,sans-serif;
   }
   *{box-sizing:border-box;margin:0;padding:0}
+  body{-webkit-user-select:none;user-select:none}
+  input,textarea{-webkit-user-select:text;user-select:text}
+  body.gamefs{overflow:hidden}
+  body.gamefs #gamewrap{position:fixed;inset:0;z-index:40;border:none}
   html,body{height:100%}
   body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:14px;
     background-image:radial-gradient(ellipse at 50% -10%, #16202B 0%, var(--bg) 60%);}
@@ -189,12 +193,12 @@
     background:radial-gradient(ellipse at center, transparent 60%, rgba(180,20,15,.4) 100%);
     animation:pulse 1.2s infinite}
   @keyframes pulse{50%{opacity:.0}}
-  #pauseov{position:absolute;inset:0;background:rgba(6,9,12,.78);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:5}
+  #pauseov{position:absolute;inset:0;background:rgba(6,9,12,.78);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:5;pointer-events:auto}
   #pauseov.on{display:flex}
   #pauseov .pt{font-family:var(--disp);font-size:30px;letter-spacing:3px;color:#EDF1F5}
   #wavebreak{position:absolute;top:46%;left:0;right:0;text-align:center;color:var(--ink);font-size:13px;text-shadow:0 1px 2px #000;opacity:0}
   /* ---------- settings overlay + sliders ---------- */
-  #setov{position:absolute;inset:0;background:rgba(6,9,12,.85);display:none;align-items:center;justify-content:center;z-index:6}
+  #setov{position:absolute;inset:0;background:rgba(6,9,12,.85);display:none;align-items:center;justify-content:center;z-index:6;pointer-events:auto}
   #setov.on{display:flex}
   .spanel{background:var(--panel);border:1px solid var(--brass);padding:22px 26px;width:min(440px,92%);pointer-events:auto}
   .ctl{display:flex;justify-content:space-between;border-bottom:1px dotted #22303E;padding:5px 0;font-size:12px}
@@ -951,6 +955,7 @@ function openSetup(){
    ===================================================================== */
 const cv = $('#cv');
 let renderer = null, scene = null, camera = null, vm = null, muzzle = null, muzzleLight = null;
+let gameFS = false;
 let G = null, paused = false, locked = false;
 const keys = {};
 let mouseDown = false, yaw = 0, pitch = 0;
@@ -960,7 +965,10 @@ const EYE = 1.6, PR = 0.5;
 let SETTINGS = { volume: 0.8, sens: 1.0 };
 async function loadSettings(){
   const s = await sGet('settings');
-  if(s) SETTINGS = Object.assign({volume:0.8, sens:1.0}, s);
+  if(s){
+    SETTINGS.volume = (typeof s.volume === 'number' && isFinite(s.volume)) ? Math.min(1, Math.max(0, s.volume)) : 0.8;
+    SETTINGS.sens   = (typeof s.sens === 'number' && isFinite(s.sens)) ? Math.min(2.5, Math.max(0.2, s.sens)) : 1.0;
+  }
 }
 function saveSettings(){ sSet('settings', SETTINGS); }
 
@@ -968,10 +976,14 @@ function saveSettings(){ sSet('settings', SETTINGS); }
 let AC = null, masterG = null;
 function masterBus(){
   if(!AC) return null;
-  if(!masterG){ masterG = AC.createGain(); masterG.gain.value = SETTINGS.volume; masterG.connect(masterBus()); }
+  if(!masterG){ masterG = AC.createGain(); masterG.connect(AC.destination); }  // to the speakers — NOT to itself
+  masterG.gain.value = SETTINGS.volume;
   return masterG;
 }
-function au(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } }
+function au(){
+  if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  if(AC && AC.state === 'suspended'){ try{ AC.resume(); }catch(e){} }
+}
 function sfx(kind, vol){
   if(!AC) return;
   try{
@@ -1078,6 +1090,7 @@ $('#setreset').addEventListener('click', ()=>{
   syncSettingsUI(); saveSettings(); sfx('reload');
 });
 $('#quitbtn').addEventListener('click', abandonMatch);
+$('#gamewrap').addEventListener('contextmenu', e=>e.preventDefault());
 
 /* --- three.js scaffolding --- */
 function initRenderer(){
@@ -1089,7 +1102,7 @@ function initRenderer(){
 function sizeRenderer(){
   if(!renderer) return;
   let w, h;
-  if(document.fullscreenElement){
+  if(gameFS || document.fullscreenElement){
     w = window.innerWidth; h = window.innerHeight;
   } else {
     w = $('#gamewrap').clientWidth || 960;
@@ -1941,6 +1954,7 @@ function botThink(e, dt){
 
 /* --- match lifecycle --- */
 function startMatch(){
+  au();
   initRenderer();
   const L = computeLoadout();
   const map = MAPS.find(m=>m.id===setupSel.map);
@@ -2262,10 +2276,24 @@ function hud(){
 
 /* --- match end --- */
 function releasePointer(){ try{ if(document.pointerLockElement) document.exitPointerLock(); }catch(e){} }
-function leaveFullscreen(){ try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){} }
+function leaveFullscreen(){
+  gameFS = false; document.body.classList.remove('gamefs');
+  try{ if(HAS_NATIVE && window.gunforgeNative.setFullscreen) window.gunforgeNative.setFullscreen(false); }catch(e){}
+  try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){}
+  sizeRenderer();
+}
 function enterGameScreen(){
-  // fullscreen the arena, then capture the mouse
+  au();
   try{
+    // Electron: native window fullscreen — ESC only releases the mouse, not fullscreen
+    if(HAS_NATIVE && window.gunforgeNative.setFullscreen){
+      window.gunforgeNative.setFullscreen(true);
+      gameFS = true; document.body.classList.add('gamefs');
+      sizeRenderer();
+      cv.requestPointerLock();
+      return;
+    }
+    // browser fallback: element fullscreen
     const gw = document.getElementById('gamewrap');
     if(gw && gw.requestFullscreen && !document.fullscreenElement){
       gw.requestFullscreen().then(()=>{ cv.requestPointerLock(); }).catch(()=>{ cv.requestPointerLock(); });

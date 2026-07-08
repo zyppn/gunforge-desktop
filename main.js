@@ -3,6 +3,8 @@ const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
 
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 let win = null;
 let saveFile = null;
 let data = null;
@@ -22,6 +24,10 @@ function scheduleWrite(){
   writeT = setTimeout(flushStore, 150);
 }
 
+ipcMain.handle('win:fullscreen', (e, on) => {
+  if(win) win.setFullScreen(!!on);
+  return true;
+});
 ipcMain.handle('store:get', (e, key) => {
   const d = loadStore();
   return key in d ? d[key] : null;
