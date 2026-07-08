@@ -193,6 +193,22 @@
   #pauseov.on{display:flex}
   #pauseov .pt{font-family:var(--disp);font-size:30px;letter-spacing:3px;color:#EDF1F5}
   #wavebreak{position:absolute;top:46%;left:0;right:0;text-align:center;color:var(--ink);font-size:13px;text-shadow:0 1px 2px #000;opacity:0}
+  /* ---------- settings overlay + sliders ---------- */
+  #setov{position:absolute;inset:0;background:rgba(6,9,12,.85);display:none;align-items:center;justify-content:center;z-index:6}
+  #setov.on{display:flex}
+  .spanel{background:var(--panel);border:1px solid var(--brass);padding:22px 26px;width:min(440px,92%);pointer-events:auto}
+  .ctl{display:flex;justify-content:space-between;border-bottom:1px dotted #22303E;padding:5px 0;font-size:12px}
+  .ctl b{color:#EDF1F5}
+  .sldrow{margin-top:14px}
+  .sldrow label{display:flex;justify-content:space-between;font-size:11px;letter-spacing:1px;color:var(--dim);text-transform:uppercase}
+  .sldrow label span{color:var(--brass)}
+  .sldrow input[type=range]{width:100%;accent-color:var(--brass);margin-top:6px;cursor:pointer}
+  /* ---------- drop reveal ---------- */
+  .dropcard{animation:dropIn .7s cubic-bezier(.2,1.4,.3,1) .25s both}
+  .dropcard .part{animation:dropGlow 1.7s ease-out .25s both}
+  @keyframes dropIn{0%{opacity:0;transform:scale(.55) translateY(26px);filter:brightness(2.4)}60%{filter:brightness(1.5)}100%{opacity:1;transform:none;filter:none}}
+  @keyframes dropGlow{0%{box-shadow:0 0 46px rgba(232,163,61,.75)}100%{box-shadow:0 0 0 rgba(232,163,61,0)}}
+  @media (prefers-reduced-motion: reduce){.dropcard,.dropcard .part{animation:none}}
 </style>
 </head>
 <body>
@@ -240,7 +256,29 @@
           <div class="pt">PAUSED</div>
           <div class="note">Pointer released. Click resume to re-engage.</div>
           <div class="btnrow"><button class="btn primary" id="resumebtn">▸ RESUME</button>
+          <button class="btn" id="setbtn">SETTINGS</button>
           <button class="btn danger" id="quitbtn">ABANDON MATCH</button></div>
+        </div>
+        <div id="setov">
+          <div class="spanel">
+            <div class="eyebrow">Settings</div>
+            <h2>Settings</h2>
+            <div style="margin-top:8px">
+              <div class="ctl"><span>Move</span><b>W A S D</b></div>
+              <div class="ctl"><span>Aim</span><b>MOUSE</b></div>
+              <div class="ctl"><span>Fire</span><b>HOLD LMB</b></div>
+              <div class="ctl"><span>Reload</span><b>R</b></div>
+              <div class="ctl"><span>Pause</span><b>ESC</b></div>
+            </div>
+            <div class="sldrow"><label>Master volume <span id="volval">80%</span></label>
+              <input type="range" id="volsl" min="0" max="100" value="80"></div>
+            <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
+              <input type="range" id="senssl" min="20" max="250" value="100"></div>
+            <div class="btnrow">
+              <button class="btn sm" id="setreset">RESET TO DEFAULT</button>
+              <button class="btn sm primary" id="setclose">▸ RESUME</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -918,8 +956,21 @@ const keys = {};
 let mouseDown = false, yaw = 0, pitch = 0;
 const EYE = 1.6, PR = 0.5;
 
+/* --- settings (persisted) --- */
+let SETTINGS = { volume: 0.8, sens: 1.0 };
+async function loadSettings(){
+  const s = await sGet('settings');
+  if(s) SETTINGS = Object.assign({volume:0.8, sens:1.0}, s);
+}
+function saveSettings(){ sSet('settings', SETTINGS); }
+
 /* --- audio (tiny synth) --- */
-let AC = null;
+let AC = null, masterG = null;
+function masterBus(){
+  if(!AC) return null;
+  if(!masterG){ masterG = AC.createGain(); masterG.gain.value = SETTINGS.volume; masterG.connect(masterBus()); }
+  return masterG;
+}
 function au(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } }
 function sfx(kind, vol){
   if(!AC) return;
@@ -932,7 +983,7 @@ function sfx(kind, vol){
       const src = AC.createBufferSource(); src.buffer = buf;
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value=900;
       const g = AC.createGain(); g.gain.setValueAtTime(0.16, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.09);
-      src.connect(f); f.connect(g); g.connect(AC.destination); src.start(t);
+      src.connect(f); f.connect(g); g.connect(masterBus()); src.start(t);
     } else if(kind==='step'){
       const buf = AC.createBuffer(1, 900, AC.sampleRate);
       const d = buf.getChannelData(0);
@@ -940,23 +991,23 @@ function sfx(kind, vol){
       const s = AC.createBufferSource(); s.buffer = buf;
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 260;
       const g = AC.createGain(); g.gain.setValueAtTime(0.09*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.08);
-      s.connect(f); f.connect(g); g.connect(AC.destination); s.start(t);
+      s.connect(f); f.connect(g); g.connect(masterBus()); s.start(t);
     } else if(kind==='hit'){
       const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(660,t);
       const g = AC.createGain(); g.gain.setValueAtTime(0.05,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
-      o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t+0.07);
+      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.07);
     } else if(kind==='kill'){
       const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(440,t); o.frequency.setValueAtTime(880,t+0.07);
       const g = AC.createGain(); g.gain.setValueAtTime(0.06,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.16);
-      o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t+0.17);
+      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.17);
     } else if(kind==='reload'){
       const o = AC.createOscillator(); o.type='triangle'; o.frequency.setValueAtTime(220,t);
       const g = AC.createGain(); g.gain.setValueAtTime(0.05,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.08);
-      o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t+0.09);
+      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.09);
     } else if(kind==='hurt'){
       const o = AC.createOscillator(); o.type='sawtooth'; o.frequency.setValueAtTime(160,t);
       const g = AC.createGain(); g.gain.setValueAtTime(0.07,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.12);
-      o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t+0.13);
+      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.13);
     }
   }catch(e){}
 }
@@ -967,26 +1018,65 @@ window.addEventListener('keyup',   e=>{ keys[e.key.toLowerCase()] = false; });
 cv.addEventListener('mousedown', e=>{
   if(e.button!==0) return;
   au();
-  if(G && G.running && !locked){ cv.requestPointerLock(); return; }
+  if(G && G.running && !locked){ if(!settingsOpen) enterGameScreen(); return; }
   mouseDown = true;
 });
 window.addEventListener('mouseup', ()=> mouseDown = false);
 document.addEventListener('pointerlockchange', ()=>{
   locked = document.pointerLockElement === cv;
   if(G && G.running){
-    paused = !locked;
-    $('#pauseov').classList.toggle('on', paused);
+    paused = !locked || settingsOpen;
+    $('#pauseov').classList.toggle('on', !locked && !settingsOpen);
   }
 });
 document.addEventListener('mousemove', e=>{
   if(!locked) return;
-  yaw   -= e.movementX * 0.0022;
-  pitch -= e.movementY * 0.0022;
+  yaw   -= e.movementX * 0.0022 * SETTINGS.sens;
+  pitch -= e.movementY * 0.0022 * SETTINGS.sens;
   const lim = Math.PI/2 - 0.05;
   if(pitch >  lim) pitch =  lim;
   if(pitch < -lim) pitch = -lim;
 });
-$('#resumebtn').addEventListener('click', ()=>{ au(); cv.requestPointerLock(); });
+$('#resumebtn').addEventListener('click', ()=>{ au(); enterGameScreen(); });
+
+/* --- in-match settings panel --- */
+let settingsOpen = false;
+function syncSettingsUI(){
+  $('#volsl').value = Math.round(SETTINGS.volume*100);
+  $('#volval').textContent = Math.round(SETTINGS.volume*100)+'%';
+  $('#senssl').value = Math.round(SETTINGS.sens*100);
+  $('#sensval').textContent = SETTINGS.sens.toFixed(2)+'x';
+}
+function openSettings(){
+  settingsOpen = true; paused = true;
+  $('#pauseov').classList.remove('on');
+  $('#setov').classList.add('on');
+  syncSettingsUI();
+}
+function closeSettings(resume){
+  settingsOpen = false;
+  $('#setov').classList.remove('on');
+  if(resume && G && G.running){ au(); enterGameScreen(); }
+}
+$('#setbtn').addEventListener('click', openSettings);
+$('#setclose').addEventListener('click', ()=>closeSettings(true));
+$('#volsl').addEventListener('input', e=>{
+  SETTINGS.volume = (+e.target.value)/100;
+  if(masterG) masterG.gain.value = SETTINGS.volume;
+  $('#volval').textContent = e.target.value+'%';
+  saveSettings();
+  sfx('hit');  // audible preview at the new level
+});
+$('#senssl').addEventListener('input', e=>{
+  SETTINGS.sens = (+e.target.value)/100;
+  $('#sensval').textContent = SETTINGS.sens.toFixed(2)+'x';
+  saveSettings();
+});
+$('#setreset').addEventListener('click', ()=>{
+  SETTINGS = {volume:0.8, sens:1.0};
+  if(masterG) masterG.gain.value = SETTINGS.volume;
+  syncSettingsUI(); saveSettings(); sfx('reload');
+});
 $('#quitbtn').addEventListener('click', abandonMatch);
 
 /* --- three.js scaffolding --- */
@@ -998,11 +1088,17 @@ function initRenderer(){
 }
 function sizeRenderer(){
   if(!renderer) return;
-  const w = $('#gamewrap').clientWidth || 960;
-  const h = Math.round(w * 0.56);
+  let w, h;
+  if(document.fullscreenElement){
+    w = window.innerWidth; h = window.innerHeight;
+  } else {
+    w = $('#gamewrap').clientWidth || 960;
+    h = Math.round(w * 0.56);
+  }
   renderer.setSize(w, h, true);
   if(camera){ camera.aspect = w/h; camera.updateProjectionMatrix(); }
 }
+document.addEventListener('fullscreenchange', sizeRenderer);
 function mat(color, emissive, ei){
   return new THREE.MeshStandardMaterial({color, roughness:0.85, metalness:0.15, emissive:emissive||0x000000, emissiveIntensity:ei||0});
 }
@@ -1886,7 +1982,7 @@ function startMatch(){
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
   sizeRenderer();
-  cv.requestPointerLock();
+  enterGameScreen();
   requestAnimationFrame(tick);
 }
 function spawnWave(){
@@ -2166,19 +2262,33 @@ function hud(){
 
 /* --- match end --- */
 function releasePointer(){ try{ if(document.pointerLockElement) document.exitPointerLock(); }catch(e){} }
+function leaveFullscreen(){ try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){} }
+function enterGameScreen(){
+  // fullscreen the arena, then capture the mouse
+  try{
+    const gw = document.getElementById('gamewrap');
+    if(gw && gw.requestFullscreen && !document.fullscreenElement){
+      gw.requestFullscreen().then(()=>{ cv.requestPointerLock(); }).catch(()=>{ cv.requestPointerLock(); });
+      return;
+    }
+  }catch(e){}
+  cv.requestPointerLock();
+}
 function abandonMatch(){
   if(!G || !G.running) return;
-  G.running = false; G = null; paused = false;
+  G.running = false; G = null; paused = false; settingsOpen = false;
   $('#pauseov').classList.remove('on');
-  releasePointer();
+  $('#setov').classList.remove('on');
+  releasePointer(); leaveFullscreen();
   toast('MATCH ABANDONED — NO REWARDS');
   renderMenu();
 }
 async function endMatch(campWin){
   if(!G || !G.running) return;
-  G.running = false; paused = false;
+  G.running = false; paused = false; settingsOpen = false;
   $('#pauseov').classList.remove('on');
-  releasePointer();
+  $('#setov').classList.remove('on');
+  releasePointer(); leaveFullscreen();
   const me = G.me, mode = G.mode;
   let win = false, placeTxt = '';
   if(mode==='ffa'){
@@ -2228,12 +2338,43 @@ async function endMatch(campWin){
   G = null;
   show('results');
   hydrateThumbs();
+  if(drop) setTimeout(()=>playDropSound(drop.rarity), 320);
+}
+
+/* --- drop reveal fanfare: more notes and shimmer the rarer the part --- */
+function playDropSound(rarity){
+  au(); if(!AC) return;
+  try{
+    const tier = Math.max(0, RKEYS.indexOf(rarity));
+    const notes = 3 + tier;                       // common 3 ... legendary 7
+    const t0 = AC.currentTime + 0.02;
+    for(let i=0;i<notes;i++){
+      const o = AC.createOscillator(); o.type = 'triangle';
+      o.frequency.setValueAtTime(330 * Math.pow(1.335, i), t0 + i*0.09);
+      const g = AC.createGain();
+      g.gain.setValueAtTime(0.0001, t0 + i*0.09);
+      g.gain.exponentialRampToValueAtTime(0.07 + tier*0.012, t0 + i*0.09 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + i*0.09 + 0.38);
+      o.connect(g); g.connect(masterBus());
+      o.start(t0 + i*0.09); o.stop(t0 + i*0.09 + 0.42);
+    }
+    if(tier >= 3){ // epic/legendary: shimmer on top
+      const o = AC.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(1760, t0 + notes*0.09);
+      const g = AC.createGain();
+      g.gain.setValueAtTime(0.05, t0 + notes*0.09);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + notes*0.09 + 0.7);
+      o.connect(g); g.connect(masterBus());
+      o.start(t0 + notes*0.09); o.stop(t0 + notes*0.09 + 0.75);
+    }
+  }catch(e){}
 }
 
 /* ---------------- boot ---------------- */
 (async function boot(){
   try{
     await loadProfile();
+    await loadSettings();
     refreshChips();
     renderMenu();
   }catch(e){
