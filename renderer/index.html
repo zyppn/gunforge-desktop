@@ -2370,6 +2370,16 @@ function playDropSound(rarity){
   }catch(e){}
 }
 
+/* --- auto-updater toast (Electron desktop only) --- */
+(function(){
+  if(typeof window === 'undefined' || !window.gunforgeNative || !window.gunforgeNative.onUpdater) return;
+  window.gunforgeNative.onUpdater(msg => {
+    if(msg.type === 'available') toast('UPDATE AVAILABLE — DOWNLOADING IN BACKGROUND');
+    else if(msg.type === 'progress') toast('DOWNLOADING UPDATE — ' + msg.pct + '%');
+    else if(msg.type === 'downloaded') toast('UPDATE READY — WILL INSTALL ON NEXT LAUNCH');
+  });
+})();
+
 /* ---------------- boot ---------------- */
 (async function boot(){
   try{

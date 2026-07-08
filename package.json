@@ -20,10 +20,35 @@
   "build": {
     "appId": "com.zyppn.gunforge",
     "productName": "GUNFORGE",
-    "files": ["main.js", "preload.js", "renderer/**/*"],
-    "win": { "target": "nsis" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
-    "mac": { "target": "dmg", "category": "public.app-category.games" },
-    "linux": { "target": "AppImage", "category": "Game" }
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.games"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Game"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zyppn",
+        "repo": "gunforge-desktop"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.4"
   }
 }

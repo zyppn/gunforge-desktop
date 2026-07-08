@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
 
@@ -47,7 +48,28 @@ function createWindow(){
     }
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  win.webContents.on('did-finish-load', () => {
+    autoUpdater.checkForUpdates();
+  });
 }
+
+/* --- auto-updater events --- */
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on('update-available', () => {
+  win && win.webContents.send('updater', { type: 'available' });
+});
+autoUpdater.on('download-progress', (p) => {
+  win && win.webContents.send('updater', { type: 'progress', pct: Math.round(p.percent) });
+});
+autoUpdater.on('update-downloaded', () => {
+  win && win.webContents.send('updater', { type: 'downloaded' });
+});
+autoUpdater.on('error', (e) => {
+  console.error('updater error', e.message);
+});
 
 app.whenReady().then(() => {
   saveFile = path.join(app.getPath('userData'), 'gunforge-save.json');
