@@ -189,6 +189,10 @@
   #hitmark.crit i{background:#E05A4E}
   #vign{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .15s;
     background:radial-gradient(ellipse at center, transparent 55%, rgba(200,40,30,.55) 100%)}
+  #burnov{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .25s;
+    background:radial-gradient(ellipse at center, transparent 55%, rgba(255,150,60,.45) 100%)}
+  #frostov{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .25s;
+    background:radial-gradient(ellipse at center, transparent 50%, rgba(120,190,255,.5) 100%)}
   #lowhp{position:absolute;inset:0;pointer-events:none;opacity:0;
     background:radial-gradient(ellipse at center, transparent 60%, rgba(180,20,15,.4) 100%);
     animation:pulse 1.2s infinite}
@@ -238,7 +242,7 @@
     <div id="gamewrap">
       <canvas id="cv"></canvas>
       <div id="hud">
-        <div id="vign"></div><div id="lowhp"></div>
+        <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div>
         <div id="crosshair"></div>
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
         <div id="hudtop">
@@ -447,7 +451,7 @@ const SETS = [
    pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'},
    bonus:'SET · EXHALE — every hit ignites the target.', effect:'burn_all'},
   {id:'bulwark', weapon:'warden',   name:'Bulwark',       need:3, rarity:'epic',
-   pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Frame', optic:'Bulwark Ward'},
+   pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Chassis', optic:'Bulwark Ward'},
    bonus:'SET · RAMPART — every kill grants a 25 HP shield.', effect:'killshield'},
   {id:'ghost',   weapon:'ls1',      name:'Ghost Protocol',need:2, rarity:'legendary',
    pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'},
@@ -489,6 +493,12 @@ async function loadProfile(){
     await sSet('profile', p);
   }
   P = p;
+  // migrate: the Bulwark stock was named "Frame" before Frame became a slot
+  let migrated = false;
+  for(const part of P.inventory){
+    if(part.slot === 'stock' && part.name === 'Bulwark Frame'){ part.name = 'Bulwark Chassis'; migrated = true; }
+  }
+  if(migrated) await sSet('profile', P);
   await claimPayouts();
 }
 
@@ -621,6 +631,9 @@ function refreshChips(){
 function modal(html){ $('#modalbox').innerHTML = html; $('#modal').classList.add('on'); }
 function closeModal(){ $('#modal').classList.remove('on'); }
 $('#modal').addEventListener('click', e => { if(e.target.id==='modal') closeModal(); });
+document.addEventListener('click', e => {
+  if(e.target.closest && e.target.closest('.btn, .tile, .wrow, .opt, .fbtn')){ au(); sfx('ui'); }
+});
 
 function grantXp(amount){
   P.xp += amount;
@@ -680,7 +693,8 @@ function renderMenu(){
    +'<div class="statline"><span>Wins</span><b>'+P.stats.wins+'</b></div>'
    +'<div class="statline"><span>K / D</span><b>'+P.stats.kills+' / '+P.stats.deaths+'</b></div>'
    +'</div>'
-   +'<div class="btnrow"><button class="btn sm" onclick="renameOp()">CHANGE CALLSIGN</button></div>'
+   +'<div class="btnrow"><button class="btn sm" onclick="renameOp()">CHANGE CALLSIGN</button>'
+   +'<button class="btn sm" onclick="menuSettings()">SETTINGS</button></div>'
    +'</div>';
   show('menu');
 }
@@ -694,6 +708,33 @@ async function doRename(){
   const v = $('#nmin').value.trim();
   if(v){ P.name = v.slice(0,18); await saveProfile(); }
   closeModal(); renderMenu();
+}
+function menuSettings(){
+  modal('<div class="eyebrow">Settings</div><h2>Settings</h2>'
+   +'<div class="sldrow"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
+   +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.volume*100)+'" oninput="setVolPct(this.value, \'mvolval\')"></div>'
+   +'<div class="sldrow"><label>Mouse sensitivity <span id="msensval">'+SETTINGS.sens.toFixed(2)+'x</span></label>'
+   +'<input type="range" min="20" max="250" value="'+Math.round(SETTINGS.sens*100)+'" oninput="setSensPct(this.value, \'msensval\')"></div>'
+   +'<div class="btnrow"><button class="btn sm" onclick="resetSettingsAll()">RESET TO DEFAULT</button>'
+   +'<button class="btn sm primary" onclick="closeModal()">DONE</button></div>');
+}
+function setVolPct(v, labelId){
+  SETTINGS.volume = (+v)/100;
+  if(masterG) masterG.gain.value = SETTINGS.volume;
+  const el = document.getElementById(labelId); if(el) el.textContent = v+'%';
+  saveSettings(); au(); sfx('hit');
+}
+function setSensPct(v, labelId){
+  SETTINGS.sens = (+v)/100;
+  const el = document.getElementById(labelId); if(el) el.textContent = SETTINGS.sens.toFixed(2)+'x';
+  saveSettings();
+}
+function resetSettingsAll(){
+  SETTINGS = {volume:0.8, sens:1.0};
+  if(masterG) masterG.gain.value = 0.8;
+  saveSettings(); sfx('reload');
+  if(document.getElementById('mvolval')) menuSettings();
+  if(document.getElementById('volsl')) try{ syncSettingsUI(); }catch(e){}
 }
 
 /* ---------------- ARMORY ---------------- */
@@ -984,6 +1025,40 @@ function au(){
   if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
   if(AC && AC.state === 'suspended'){ try{ AC.resume(); }catch(e){} }
 }
+/* per-weapon gunshots: character + loudness per class, distance handled by caller */
+const GUNSND = {
+  'Pistol':        {n:1600, f:1100, g:0.13, d:0.09},
+  'SMG':           {n:1100, f:1500, g:0.10, d:0.07},
+  'Assault Rifle': {n:2000, f:950,  g:0.15, d:0.11},
+  'Shotgun':       {n:4200, f:420,  g:0.26, d:0.22, thump:70},
+  'Sniper':        {n:3800, f:700,  g:0.24, d:0.30, thump:110},
+  'LMG':           {n:2400, f:800,  g:0.17, d:0.13, thump:90},
+};
+function gunSound(type, vol){
+  au(); if(!AC || !masterBus() || (vol||0) <= 0.03) return;
+  try{
+    const s = GUNSND[type] || GUNSND['Assault Rifle'];
+    const t = AC.currentTime;
+    const buf = AC.createBuffer(1, s.n, AC.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2.0);
+    const src = AC.createBufferSource(); src.buffer = buf;
+    const fl = AC.createBiquadFilter(); fl.type='lowpass'; fl.frequency.value = s.f;
+    const g = AC.createGain();
+    g.gain.setValueAtTime(s.g*vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + s.d);
+    src.connect(fl); fl.connect(g); g.connect(masterBus()); src.start(t);
+    if(s.thump){
+      const o = AC.createOscillator(); o.type='sine';
+      o.frequency.setValueAtTime(s.thump, t);
+      o.frequency.exponentialRampToValueAtTime(Math.max(30, s.thump*0.5), t + s.d);
+      const g2 = AC.createGain();
+      g2.gain.setValueAtTime(s.g*0.9*vol, t);
+      g2.gain.exponentialRampToValueAtTime(0.001, t + s.d*1.5);
+      o.connect(g2); g2.connect(masterBus()); o.start(t); o.stop(t + s.d*1.6);
+    }
+  }catch(e){}
+}
 function sfx(kind, vol){
   if(!AC) return;
   try{
@@ -1004,6 +1079,22 @@ function sfx(kind, vol){
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 260;
       const g = AC.createGain(); g.gain.setValueAtTime(0.09*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.08);
       s.connect(f); f.connect(g); g.connect(masterBus()); s.start(t);
+    } else if(kind==='boom'){
+      const buf = AC.createBuffer(1, 5200, AC.sampleRate);
+      const d = buf.getChannelData(0);
+      for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 1.6);
+      const s = AC.createBufferSource(); s.buffer = buf;
+      const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 240;
+      const g = AC.createGain(); g.gain.setValueAtTime(0.3*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.35);
+      s.connect(f); f.connect(g); g.connect(masterBus()); s.start(t);
+      const o = AC.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(60, t);
+      o.frequency.exponentialRampToValueAtTime(32, t+0.3);
+      const g2 = AC.createGain(); g2.gain.setValueAtTime(0.22*(vol||1), t); g2.gain.exponentialRampToValueAtTime(0.001, t+0.4);
+      o.connect(g2); g2.connect(masterBus()); o.start(t); o.stop(t+0.42);
+    } else if(kind==='ui'){
+      const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(740, t);
+      const g = AC.createGain(); g.gain.setValueAtTime(0.035*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.05);
+      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.06);
     } else if(kind==='hit'){
       const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(660,t);
       const g = AC.createGain(); g.gain.setValueAtTime(0.05,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
@@ -1026,6 +1117,7 @@ function sfx(kind, vol){
 
 /* --- input --- */
 window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; });
+window.addEventListener('blur', ()=>{ for(const k in keys) keys[k] = false; mouseDown = false; });
 window.addEventListener('keyup',   e=>{ keys[e.key.toLowerCase()] = false; });
 cv.addEventListener('mousedown', e=>{
   if(e.button!==0) return;
@@ -1318,7 +1410,7 @@ function vmStock(p, w, rearZ){
     vmBox(m, 0.05, 0.016, 0.16, 0, 0.03, rearZ + 0.08);   // open frame: top rail
     vmBox(m, 0.05, 0.016, 0.15, 0, -0.05, rearZ + 0.075).rotation.x = 0.35; // lower strut
     vmBox(m, 0.05, 0.09, 0.02, 0, -0.01, rearZ + 0.155);  // rear plate
-  } else if(n.includes('Frame')){
+  } else if(n.includes('Chassis') || n.includes('Frame')){
     vmBox(m, 0.09, 0.11, 0.12, 0, -0.005, rearZ + 0.06);  // bulwark armor block
   } else vmBox(m, 0.07, 0.085, 0.12, 0, -0.01, rearZ + 0.06);
 }
@@ -1565,8 +1657,11 @@ function botMesh(color, grunt, gunInfo){
   const shSphere = new THREE.Mesh(new THREE.SphereGeometry(0.95, 12, 8),
     new THREE.MeshBasicMaterial({color:0x4C9BE8, transparent:true, opacity:0.18, depthWrite:false}));
   shSphere.position.y = 1.0; shSphere.visible = false;
-  g.add(burnRing, slowRing, shSphere);
-  g.userData = {hbFg:fg, hbGroup:hbG, burnRing, slowRing, shSphere, legL, legR, gun, gunMuzzle, gunBase, kick:0};
+  const iceShell = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 8),
+    new THREE.MeshBasicMaterial({color:0x9BE8FF, transparent:true, opacity:0.2, depthWrite:false}));
+  iceShell.position.y = 1.0; iceShell.visible = false;
+  g.add(burnRing, slowRing, shSphere, iceShell);
+  g.userData = {hbFg:fg, hbGroup:hbG, burnRing, slowRing, shSphere, iceShell, legL, legR, gun, gunMuzzle, gunBase, kick:0};
   return g;
 }
 
@@ -1599,7 +1694,7 @@ function rollBotLoadout(){
   }
   for(const st of SETS) if(st.weapon===w.id && (setCount[st.id]||0) >= st.need) abilities.add(st.effect);
   const wep = {
-    name: w.name,
+    name: w.name, type: w.type,
     dmg: w.dmg*0.72 * m.dmg,
     rof: Math.max(60, w.rof*1.35 / m.rof),
     mag: Math.max(3, Math.round(w.mag * m.mag)),
@@ -1619,8 +1714,20 @@ function mkEnt(o){
     dead:false, respawnT:0, kills:0, deaths:0,
     burnT:0, slowT:0, strafe:(Math.random()<0.5?1:-1), repathT:0, wanderA:Math.random()*6.28,
     lastX:null, lastZ:null, walkPhase:Math.random()*6.28, walkAmp:0,
-    path:null, pathT:0, pathGoal:null, stuckT:0, stepAcc:0
+    path:null, pathT:0, pathGoal:null, stuckT:0, stepAcc:0,
+    target:null, retargetT:0, alertSrc:null, alertT:0, reactT:0, seenT:0,
+    faceCur:Math.random()*6.28, burnSrc:null, flameT:0, frostT:0
   }, o);
+}
+function safePoint(x, z){
+  let bad = x<0.8 || x>AW-0.8 || z<0.8 || z>AD-0.8;
+  if(!bad && G) for(const w of G.map.walls){ if(circleRect(x, z, 0.6, w)){ bad=true; break; } }
+  if(!bad) return [x, z];
+  if(NAV){
+    const c = nearestFreeCell(...navCell(x, z));
+    if(c) return [(c[0]+0.5)*NAVCELL, (c[1]+0.5)*NAVCELL];
+  }
+  return [AW/2, AD/2];
 }
 function farSpawn(map, team){
   let best=null, bd=-1;
@@ -1628,10 +1735,10 @@ function farSpawn(map, team){
     let d = 1e9;
     for(const e of G.ents){ if(e.dead || e.team===team) continue;
       d = Math.min(d, Math.hypot(e.x-s[0], e.z-s[1])); }
-    d += Math.random()*4;
+    d += Math.random()*6;
     if(d > bd){ bd=d; best=s; }
   }
-  return best || map.spawns[0];
+  return safePoint(...(best || map.spawns[0]));
 }
 
 /* --- geometry --- */
@@ -1711,7 +1818,7 @@ function fire(e, dir){
     });
   }
   if(e.isPlayer){
-    sfx('shot');
+    gunSound(e.wep.type, 1);
     G.recoil = Math.min(1, G.recoil + 0.45);
     muzzle.material.opacity = 0.9; muzzle.rotation.z = Math.random()*6.28;
     muzzleLight.intensity = 1.6;
@@ -1720,6 +1827,11 @@ function fire(e, dir){
     u.gunMuzzle.material.opacity = 0.9;
     u.gunMuzzle.rotation.z = Math.random()*6.28;
     u.kick = 1;
+    // enemy gunfire is audible by class loudness, attenuated by distance to the player
+    const loud = e.wep.type==='Sniper'?1.35 : e.wep.type==='Shotgun'?1.25 : e.wep.type==='LMG'?1.05 : e.wep.type==='SMG'?0.65 : 0.85;
+    const dp = Math.hypot(e.x-G.me.x, e.z-G.me.z);
+    const range = 26 * loud;
+    if(dp < range) gunSound(e.wep.type, loud * (1 - dp/range));
   }
   if(e.ammo<=0) startReload(e);
 }
@@ -1734,6 +1846,9 @@ function damage(t, amount, src, isCrit){
   if(t.isPlayer && t.wep.abilities.has('firing_resist') && (G.elapsed - t.lastFire) < 0.45) dmg *= 0.7;
   if(t.shield > 0){ const s = Math.min(t.shield, dmg); t.shield -= s; dmg -= s; }
   t.hp -= dmg;
+  if(!t.isPlayer && !t.dead && src && src!==t && hostile(t, src)){
+    t.alertSrc = src; t.alertT = 3;
+  }
   if(t.isPlayer){
     sfx('hurt');
     const v = $('#vign'); v.style.opacity = 0.9; setTimeout(()=>{ v.style.opacity = 0; }, 160);
@@ -1752,7 +1867,8 @@ function damage(t, amount, src, isCrit){
 }
 function kill(t, src){
   t.dead = true; t.deaths++;
-  t.burnT = 0; t.slowT = 0; t.reloading = false;
+  t.burnT = 0; t.slowT = 0; t.burnSrc = null; t.reloading = false;
+  t.target = null; t.alertSrc = null; t.alertT = 0; t.path = null;
   spawnBurst(t.x, t.z, t.grunt ? 0x8A4640 : 0xE8A33D);
   if(src && src!==t){
     src.kills++;
@@ -1765,6 +1881,7 @@ function kill(t, src){
     const u = t.mesh.userData;
     u.hbGroup.visible = false;
     u.burnRing.visible = false; u.slowRing.visible = false; u.shSphere.visible = false;
+    if(u.iceShell) u.iceShell.visible = false;
     G.dying.push({mesh:t.mesh, t:0, dur:0.32, dir:(Math.random()<0.5?1:-1), grunt:t.grunt});
   }
   if(t.grunt){
@@ -1776,12 +1893,19 @@ function kill(t, src){
 }
 function respawn(e){
   e.dead=false; e.hp=e.maxhp; e.shield=0; e.ammo=e.wep.mag; e.reloading=false;
+  e.burnT=0; e.slowT=0; e.burnSrc=null; e.target=null; e.alertSrc=null; e.alertT=0;
+  e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0;
   const s = farSpawn(G.map, e.team); e.x=s[0]; e.z=s[1];
-  if(e.mesh){ e.mesh.visible = true; e.mesh.rotation.x = 0; e.mesh.position.y = 0; e.mesh.userData.hbGroup.visible = true; }
+  e.lastX=e.x; e.lastZ=e.z;
+  if(e.mesh){
+    e.mesh.visible = true; e.mesh.rotation.x = 0;
+    e.mesh.position.set(e.x, 0, e.z); // sync immediately — no one-frame teleport
+    e.mesh.userData.hbGroup.visible = true;
+  }
 }
 function damageOverTime(e, amt){
   e.hp -= amt;
-  if(e.hp<=0 && !e.dead) kill(e, null);
+  if(e.hp<=0 && !e.dead) kill(e, e.burnSrc && !e.burnSrc.dead ? e.burnSrc : e.burnSrc || null);
 }
 function spawnBurst(x, z, color){
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6),
@@ -1789,6 +1913,19 @@ function spawnBurst(x, z, color){
   m.position.set(x, 1.0, z);
   scene.add(m);
   G.fx.push({mesh:m, t:0.4, grow:6});
+}
+function spawnFlame(x, y, z){
+  const c = Math.random() < 0.5 ? 0xFF6A2A : 0xFFB13D;
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.07 + Math.random()*0.05, 6, 5),
+    new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:0.9, depthWrite:false}));
+  m.position.set(x, y, z); scene.add(m);
+  G.fx.push({mesh:m, t:0.4, grow:-1.4, vy:1.7});
+}
+function spawnFrost(x, y, z){
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.05, 5, 4),
+    new THREE.MeshBasicMaterial({color:0xBFE8FF, transparent:true, opacity:0.85, depthWrite:false}));
+  m.position.set(x, y, z); scene.add(m);
+  G.fx.push({mesh:m, t:0.5, grow:-0.8, vy:-0.9});
 }
 function spawnSpark(x, y, z, color){
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 5),
@@ -1875,12 +2012,45 @@ function navClear(x0,z0,x1,z1){
 }
 
 /* --- bot AI --- */
+function setTarget(e, t){
+  if(e.target === t) return;
+  e.target = t;
+  // reaction time scales with the turn required — no instant 180s
+  const want = Math.atan2(t.z-e.z, t.x-e.x);
+  let d = want - e.faceCur;
+  while(d > Math.PI) d -= 2*Math.PI;
+  while(d < -Math.PI) d += 2*Math.PI;
+  e.reactT = 0.12 + Math.abs(d)/Math.PI * 0.4;
+}
+function pickTarget(e, dt){
+  if(e.alertT > 0) e.alertT -= dt;
+  e.retargetT -= dt;
+  const curOK = e.target && !e.target.dead && hostile(e, e.target);
+  // being shot overrides: turn on the attacker
+  if(e.alertT > 0 && e.alertSrc && !e.alertSrc.dead && hostile(e, e.alertSrc)){
+    if(e.target !== e.alertSrc) setTarget(e, e.alertSrc);
+  } else if(!curOK){
+    const n = nearestEnemy(e);
+    if(n) setTarget(e, n); else e.target = null;
+    e.retargetT = 0.5 + Math.random()*0.4;
+  } else if(e.retargetT <= 0){
+    e.retargetT = 0.5 + Math.random()*0.4;
+    const n = nearestEnemy(e);
+    if(n && n !== e.target){
+      const dc = Math.hypot(e.target.x-e.x, e.target.z-e.z);
+      const dn = Math.hypot(n.x-e.x, n.z-e.z);
+      if(dn < dc*0.65) setTarget(e, n); // only switch for a much closer threat
+    }
+  }
+  return (e.target && !e.target.dead && hostile(e, e.target)) ? e.target : null;
+}
 function botThink(e, dt){
-  const tgt = nearestEnemy(e);
   const sp = e.baseSpeed * (e.slowT>0?0.65:1);
   const px = e.x, pz = e.z;
   let wantMove = false, faceAng = null;
+  if(e.reactT > 0) e.reactT -= dt;
 
+  const tgt = pickTarget(e, dt);
   if(!tgt){
     e.wanderA += (Math.random()-0.5)*2*dt;
     moveEnt(e, Math.cos(e.wanderA)*sp*0.5*dt, Math.sin(e.wanderA)*sp*0.5*dt);
@@ -1889,20 +2059,26 @@ function botThink(e, dt){
     const dx = tgt.x-e.x, dz = tgt.z-e.z, dist = Math.hypot(dx,dz), ang = Math.atan2(dz,dx);
     faceAng = ang;
     const los = hasLOS(e, tgt);
-    const ideal = e.grunt ? 7 : (e.wep.pellets>1 ? 6 : e.wep.bspd>60 ? 20 : 12);
+    // hysteresis: a flicker of lost sight at a corner doesn't flip the whole plan
+    e.seenT = los ? 0.4 : Math.max(0, e.seenT - dt);
+    const engaged = e.seenT > 0;
+    // the weapon knows its own range
+    const wp2 = e.wep;
+    const ideal = e.grunt ? 7 : (wp2.pellets>1 ? 5.5 : wp2.type==='Sniper' ? 22 : wp2.type==='SMG' ? 9 : 13);
+    const fireRange = e.grunt ? 18 : (wp2.pellets>1 ? 13 : wp2.type==='Sniper' ? 48 : wp2.type==='SMG' ? 22 : 30);
     e.repathT -= dt;
     if(e.repathT<=0){ e.strafe = Math.random()<0.5?1:-1; e.repathT = 0.8+Math.random()*1.2; }
 
-    if(los){
-      e.path = null; // direct combat movement
+    if(engaged){
+      e.path = null;
       let mvx=0, mvz=0;
       if(dist > ideal){ mvx += Math.cos(ang); mvz += Math.sin(ang); }
-      else if(dist < ideal*0.6){ mvx -= Math.cos(ang); mvz -= Math.sin(ang); }
+      else if(dist < ideal*0.6 && wp2.type!=='Shotgun'){ mvx -= Math.cos(ang); mvz -= Math.sin(ang); } // shotguns keep pushing
       if(!e.grunt){ mvx += Math.cos(ang+Math.PI/2)*e.strafe*0.8; mvz += Math.sin(ang+Math.PI/2)*e.strafe*0.8; }
       const ml = Math.hypot(mvx,mvz);
       if(ml > 0.01){ wantMove = true; moveEnt(e, mvx/ml*sp*dt, mvz/ml*sp*dt); }
     } else {
-      // no line of sight: follow the nav grid toward the target
+      // no reliable sight: navigate the grid toward the target
       e.pathT = (e.pathT||0) - dt;
       const stale = !e.path || !e.path.length || e.pathT <= 0 ||
         (e.pathGoal && Math.hypot(tgt.x-e.pathGoal.x, tgt.z-e.pathGoal.z) > 3);
@@ -1911,55 +2087,77 @@ function botThink(e, dt){
         e.pathGoal = {x:tgt.x, z:tgt.z};
         e.pathT = 0.7 + Math.random()*0.5;
       }
-      let wp = null;
+      let wpp = null;
       if(e.path && e.path.length){
         while(e.path.length && Math.hypot(e.path[0].x-e.x, e.path[0].z-e.z) < 0.7) e.path.shift();
-        for(let j = Math.min(e.path.length,6)-1; j>0; j--){  // string pulling
+        for(let j = Math.min(e.path.length,6)-1; j>0; j--){
           if(navClear(e.x, e.z, e.path[j].x, e.path[j].z)){ e.path.splice(0,j); break; }
         }
-        wp = e.path[0] || null;
+        wpp = e.path[0] || null;
       }
-      const mx = wp ? wp.x-e.x : dx, mz = wp ? wp.z-e.z : dz;
+      const mx = wpp ? wpp.x-e.x : dx, mz = wpp ? wpp.z-e.z : dz;
       const ml = Math.hypot(mx,mz)||1;
       wantMove = true;
       moveEnt(e, mx/ml*sp*dt, mz/ml*sp*dt);
-      if(wp) faceAng = Math.atan2(mz,mx);
+      if(wpp) faceAng = Math.atan2(mz,mx);
     }
 
-    if(los && dist < (e.grunt?18:26)){
-      const oy = e.grunt ? 1.2 : 1.5;
-      const ty = tgt.isPlayer ? EYE-0.25 : 1.1;
-      const dir = new THREE.Vector3(tgt.x-e.x, ty-oy, tgt.z-e.z).normalize();
-      fire(e, dir);
+    // fire only with true sight, after reacting, roughly on-target, within the weapon's range
+    if(los && dist < fireRange && e.reactT <= 0){
+      let fd = ang - e.faceCur;
+      while(fd > Math.PI) fd -= 2*Math.PI;
+      while(fd < -Math.PI) fd += 2*Math.PI;
+      if(Math.abs(fd) < 0.45){
+        const oy = e.grunt ? 1.2 : 1.5;
+        const ty = tgt.isPlayer ? EYE-0.25 : 1.1;
+        const dir = new THREE.Vector3(tgt.x-e.x, ty-oy, tgt.z-e.z).normalize();
+        fire(e, dir);
+      }
     }
     if(e.reloading===false && e.ammo < e.wep.mag*0.25 && (!los || dist > ideal)) startReload(e);
   }
 
-  // stuck recovery: wanted to move but barely did -> repath + sidestep
+  // stuck recovery + wall depenetration
   const movedNow = Math.hypot(e.x-px, e.z-pz);
   if(wantMove && movedNow < sp*dt*0.3){
     e.stuckT = (e.stuckT||0) + dt;
     if(e.stuckT > 0.55){
       e.stuckT = 0; e.path = null; e.pathT = 0; e.strafe *= -1;
-      const a = (faceAng||0) + (Math.random()<0.5?1:-1)*Math.PI/2;
-      moveEnt(e, Math.cos(a)*sp*dt*2.5, Math.sin(a)*sp*dt*2.5);
+      let inside = false;
+      for(const w3 of G.map.walls){ if(circleRect(e.x, e.z, e.r*0.8, w3)){ inside = true; break; } }
+      if(inside){ const s2 = safePoint(e.x, e.z); e.x = s2[0]; e.z = s2[1]; }
+      else {
+        const a = (faceAng||0) + (Math.random()<0.5?1:-1)*Math.PI/2;
+        moveEnt(e, Math.cos(a)*sp*dt*2.5, Math.sin(a)*sp*dt*2.5);
+      }
     }
   } else e.stuckT = 0;
 
+  // bots turn — they don't snap
+  if(faceAng !== null){
+    let d = faceAng - e.faceCur;
+    while(d > Math.PI) d -= 2*Math.PI;
+    while(d < -Math.PI) d += 2*Math.PI;
+    const rate = 9*dt;
+    e.faceCur += Math.abs(d) < rate ? d : Math.sign(d)*rate;
+  }
   if(e.mesh){
     e.mesh.position.x = e.x; e.mesh.position.z = e.z;
-    if(faceAng !== null) e.mesh.rotation.y = -faceAng + Math.PI/2;
+    e.mesh.rotation.y = -e.faceCur + Math.PI/2;
   }
 }
 
 /* --- match lifecycle --- */
 function startMatch(){
   au();
+  for(const k in keys) keys[k] = false;   // no phantom held keys from the menus
+  mouseDown = false;
   initRenderer();
   const L = computeLoadout();
   const map = MAPS.find(m=>m.id===setupSel.map);
   buildScene(map);
   buildNav(map);
+  const spawnOrder = [...map.spawns].sort(()=>Math.random()-0.5); // fresh spawn layout every match
   G = {
     running:true, mode:setupSel.mode, map, ents:[], bullets:[], fx:[],
     time: setupSel.mode==='camp' ? 0 : 180, elapsed:0, recoil:0,
@@ -1969,10 +2167,10 @@ function startMatch(){
   const me = mkEnt({
     name:P.name, isPlayer:true, team: G.mode==='ffa' ? 'me' : 'blue',
     baseSpeed: 6.0 * L.speedMul,
-    wep:{name:L.base.name, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
+    wep:{name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
     ammo: L.mag
   });
-  const sp = map.spawns[0]; me.x = sp[0]; me.z = sp[1];
+  const sp = spawnOrder[0]; me.x = sp[0]; me.z = sp[1];
   yaw = Math.atan2(me.x - AW/2, me.z - AD/2); pitch = 0;
   G.me = me; G.ents.push(me);
 
@@ -1982,7 +2180,7 @@ function startMatch(){
     const b = mkEnt({name, team, wep:lo.wep, baseSpeed:(4.4+Math.random()*1.2)*lo.speedMul});
     b.ammo = b.wep.mag;
     b.mesh = botMesh(colorHex, false, {wid:lo.wid, eq:lo.eq}); scene.add(b.mesh);
-    const s = map.spawns[(i+1) % map.spawns.length]; b.x=s[0]; b.z=s[1];
+    const s = spawnOrder[(i+1) % spawnOrder.length]; b.x=s[0]; b.z=s[1];
     b.mesh.position.set(b.x,0,b.z);
     G.ents.push(b);
   };
@@ -2010,11 +2208,12 @@ function spawnWave(){
     else if(edge===1){x=AW-1.5; z=2+Math.random()*(AD-4);}
     else if(edge===2){x=2+Math.random()*(AW-4); z=1.5;}
     else {x=2+Math.random()*(AW-4); z=AD-1.5;}
+    const sp2 = safePoint(x, z); x = sp2[0]; z = sp2[1];
     const hp = 34 + G.wave*7;
     const g = mkEnt({
       name:'Hostile', team:'red', grunt:true, x, z, r:0.45,
       hp, maxhp:hp, baseSpeed:3.2+G.wave*0.22+Math.random()*0.6,
-      wep:{name:'Scrap Pistol', dmg:6+G.wave, rof:900, mag:999, reload:0, spread:0.09, bspd:22, pellets:1, crit:0, abilities:new Set()},
+      wep:{name:'Scrap Pistol', type:'Pistol', dmg:6+G.wave, rof:900, mag:999, reload:0, spread:0.09, bspd:22, pellets:1, crit:0, abilities:new Set()},
       ammo:999
     });
     g.mesh = botMesh(0x8A4640, true, null); g.mesh.position.set(x,0,z); scene.add(g.mesh);
@@ -2085,8 +2284,26 @@ function tick(now){
       continue;
     }
     if(e.reloading && G.elapsed >= e.reloadT){ e.reloading=false; e.ammo=e.wep.mag; }
-    if(e.burnT > 0){ e.burnT -= dt; damageOverTime(e, 4*dt); }
-    if(e.slowT > 0) e.slowT -= dt;
+    if(e.burnT > 0){
+      e.burnT -= dt; damageOverTime(e, 4*dt);
+      if(!e.isPlayer){
+        e.flameT -= dt;
+        if(e.flameT <= 0){
+          e.flameT = 0.07;
+          spawnFlame(e.x + (Math.random()-0.5)*0.7, 0.3 + Math.random()*1.2, e.z + (Math.random()-0.5)*0.7);
+        }
+      }
+    }
+    if(e.slowT > 0){
+      e.slowT -= dt;
+      if(!e.isPlayer){
+        e.frostT -= dt;
+        if(e.frostT <= 0){
+          e.frostT = 0.16;
+          spawnFrost(e.x + (Math.random()-0.5)*0.8, 1.5 + Math.random()*0.6, e.z + (Math.random()-0.5)*0.8);
+        }
+      }
+    }
     if(!e.isPlayer) botThink(e, dt);
     if(e.mesh){
       const u = e.mesh.userData;
@@ -2098,6 +2315,7 @@ function tick(now){
       u.hbGroup.quaternion.copy(TMPQ.invert().multiply(camera.quaternion));
       u.burnRing.visible = e.burnT>0;
       u.slowRing.visible = e.slowT>0;
+      if(u.iceShell) u.iceShell.visible = e.slowT>0;
       u.shSphere.visible = e.shield>0;
       if(e.burnT>0) u.burnRing.rotation.z += dt*4;
       // walk cycle: legs swing with distance actually covered this frame
@@ -2129,6 +2347,22 @@ function tick(now){
         u.gun.position.z = u.gunBase.z - u.kick*0.07;
         u.gun.position.y = u.gunBase.y - (e.reloading ? 0.06 : 0) * Math.min(1, u.gun.rotation.x/0.85);
         u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*10);
+      }
+    }
+  }
+
+  // soft body separation — no more stacked bots running in place
+  for(let i=0;i<G.ents.length;i++){
+    const sa = G.ents[i]; if(sa.dead) continue;
+    for(let j=i+1;j<G.ents.length;j++){
+      const sb = G.ents[j]; if(sb.dead) continue;
+      const dx = sb.x-sa.x, dz = sb.z-sa.z;
+      const min = sa.r + sb.r + 0.05;
+      const d2 = dx*dx + dz*dz;
+      if(d2 > 0.0001 && d2 < min*min){
+        const d = Math.sqrt(d2), push = (min-d)/2;
+        moveEnt(sa, -dx/d*push, -dz/d*push);
+        moveEnt(sb, dx/d*push, dz/d*push);
       }
     }
   }
@@ -2168,10 +2402,11 @@ function tick(now){
         b.hitset.add(e.id);
         damage(e, b.dmg, b.owner, b.crit);
         spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
-        if(b.burn) e.burnT = Math.max(e.burnT, 3);
-        if(b.cryo) e.slowT = Math.max(e.slowT, 1.5);
+        if(b.burn && !e.dead){ e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; }
+        if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);
         if(b.expl){
           spawnBurst(p.x, p.z, 0xF08A3C);
+          sfx('boom', Math.max(0.1, 1 - Math.hypot(p.x-G.me.x, p.z-G.me.z)/30));
           for(const o of G.ents){
             if(o.dead || o===e || !hostile(b.owner,o)) continue;
             if((o.x-p.x)**2+(o.z-p.z)**2 < 9) damage(o, 10, b.owner, false);
@@ -2188,7 +2423,8 @@ function tick(now){
     const f = G.fx[i];
     f.t -= dt;
     if(f.t<=0){ scene.remove(f.mesh); G.fx.splice(i,1); continue; }
-    f.mesh.scale.multiplyScalar(1 + f.grow*dt);
+    f.mesh.scale.multiplyScalar(Math.max(0.05, 1 + f.grow*dt));
+    if(f.vy) f.mesh.position.y += f.vy*dt;
     f.mesh.material.opacity = Math.max(0, f.t*2.2);
   }
   // death topple
@@ -2272,35 +2508,42 @@ function hud(){
   $('#ammoline').textContent = me.ammo+' / '+me.wep.mag;
   $('#reloadtag').textContent = me.reloading ? 'RELOADING...' : (me.ammo===0?'PRESS R':'');
   $('#lowhp').style.opacity = (!me.dead && me.hp < 32) ? 1 : 0;
+  $('#burnov').style.opacity = (!me.dead && me.burnT > 0) ? 1 : 0;
+  $('#frostov').style.opacity = (!me.dead && me.slowT > 0) ? 1 : 0;
 }
 
 /* --- match end --- */
 function releasePointer(){ try{ if(document.pointerLockElement) document.exitPointerLock(); }catch(e){} }
 function leaveFullscreen(){
   gameFS = false; document.body.classList.remove('gamefs');
-  try{ if(HAS_NATIVE && window.gunforgeNative.setFullscreen) window.gunforgeNative.setFullscreen(false); }catch(e){}
   try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){}
   sizeRenderer();
 }
+/* pointer lock with retry: Chromium enforces a ~1.25s cooldown after ESC,
+   so the first re-lock attempt can silently fail — keep trying briefly */
+let lockTries = 0;
+function tryLock(){
+  if(!G || !G.running || locked || settingsOpen) return;
+  try{
+    const p = cv.requestPointerLock();
+    if(p && p.catch) p.catch(()=>scheduleLockRetry());
+  }catch(e){ scheduleLockRetry(); }
+}
+function scheduleLockRetry(){
+  if(lockTries >= 6) return;
+  lockTries++;
+  setTimeout(()=>{ if(G && G.running && !locked && !settingsOpen) tryLock(); }, 260);
+}
+document.addEventListener('pointerlockerror', ()=>scheduleLockRetry());
+
 function enterGameScreen(){
   au();
-  try{
-    // Electron: native window fullscreen — ESC only releases the mouse, not fullscreen
-    if(HAS_NATIVE && window.gunforgeNative.setFullscreen){
-      window.gunforgeNative.setFullscreen(true);
-      gameFS = true; document.body.classList.add('gamefs');
-      sizeRenderer();
-      cv.requestPointerLock();
-      return;
-    }
-    // browser fallback: element fullscreen
-    const gw = document.getElementById('gamewrap');
-    if(gw && gw.requestFullscreen && !document.fullscreenElement){
-      gw.requestFullscreen().then(()=>{ cv.requestPointerLock(); }).catch(()=>{ cv.requestPointerLock(); });
-      return;
-    }
-  }catch(e){}
-  cv.requestPointerLock();
+  lockTries = 0;
+  // "fullscreen" = the arena fills the entire app window (whatever size it is).
+  // No OS fullscreen forcing in either direction.
+  gameFS = true; document.body.classList.add('gamefs');
+  sizeRenderer();
+  tryLock();
 }
 function abandonMatch(){
   if(!G || !G.running) return;
