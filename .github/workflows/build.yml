@@ -15,10 +15,13 @@ jobs:
         include:
           - os: windows-latest
             args: --win
+            artifact: "*.exe"
           - os: macos-latest
             args: --mac
+            artifact: "*.dmg"
           - os: ubuntu-latest
             args: --linux
+            artifact: "*.AppImage"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +34,13 @@ jobs:
         run: npm install
 
       - name: Build installer
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder ${{ matrix.args }} --publish always
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
