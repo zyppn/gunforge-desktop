@@ -446,7 +446,7 @@ const SETS = [
    bonus:'SET · ABSOLUTION — critical hits restore 6 HP.', effect:'critheal'},
   {id:'hornet',  weapon:'havoc9',   name:'Hornet Swarm',  need:3, rarity:'epic',
    pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'},
-   bonus:'SET · SWARM LOGIC — all shots ricochet off walls once.', effect:'ricochet_all'},
+   bonus:'SET · SEEKER SWARM — bullets curve toward nearby enemies.', effect:'homing'},
   {id:'dragon',  weapon:'vkraptor', name:'Dragonfire',    need:2, rarity:'epic',
    pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'},
    bonus:'SET · EXHALE — every hit ignites the target.', effect:'burn_all'},
@@ -1812,6 +1812,7 @@ function fire(e, dir){
       pierce: ab.has('pierce_all') ? 99 : (ab.has('pierce') ? 1 : 0),
       bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 1 : 0,
       burn: ab.has('incendiary')||ab.has('burn_all'),
+      homing: ab.has('homing'),
       cryo: ab.has('cryo'), vamp: ab.has('vampiric'), expl: ab.has('explosive'),
       crit: Math.random() < (w.crit||0),
       hitset: new Set()
@@ -2373,6 +2374,28 @@ function tick(now){
     b.life -= dt;
     if(b.life<=0){ scene.remove(b.mesh); G.bullets.splice(i,1); continue; }
     const p = b.mesh.position;
+    if(b.homing){
+      let ht = null, hd = 144; // seek radius 12u
+      for(const e2 of G.ents){
+        if(e2.dead || e2 === b.owner || !hostile(b.owner, e2) || b.hitset.has(e2.id)) continue;
+        const ddx = e2.x-p.x, ddz = e2.z-p.z, dd = ddx*ddx + ddz*ddz;
+        if(dd < hd){ hd = dd; ht = e2; }
+      }
+      if(ht){
+        const spd = Math.hypot(b.vx, b.vz);
+        const cur = Math.atan2(b.vz, b.vx);
+        const want = Math.atan2(ht.z-p.z, ht.x-p.x);
+        let dA = want - cur;
+        while(dA > Math.PI) dA -= 2*Math.PI;
+        while(dA < -Math.PI) dA += 2*Math.PI;
+        if(Math.abs(dA) < 0.9){ // only bend toward targets roughly ahead — no boomerangs
+          const turn = Math.max(-3.5*dt, Math.min(3.5*dt, dA));
+          const na = cur + turn;
+          b.vx = Math.cos(na)*spd; b.vz = Math.sin(na)*spd;
+          b.vy += Math.max(-6, Math.min(6, (1.1 - p.y)*4)) * dt; // gentle vertical seek to chest height
+        }
+      }
+    }
     let nx = p.x + b.vx*dt, ny = p.y + b.vy*dt, nz = p.z + b.vz*dt;
     let dead = false;
     // bounds + floor
