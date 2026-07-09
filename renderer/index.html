@@ -176,7 +176,11 @@
   .kbd{border:1px solid var(--line);padding:1px 6px;background:var(--panel2);font-size:11px}
 
   /* ---------- 3D / FPS overlays ---------- */
-  #crosshair{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;pointer-events:none}
+  #crosshair{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;pointer-events:none;transition:opacity .1s}
+  #scopeov{position:absolute;inset:0;pointer-events:none;opacity:0;
+    background:radial-gradient(circle at 50% 50%, transparent 23%, rgba(2,4,6,.97) 24.5%)}
+  #scopeov:before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(200,220,235,.45)}
+  #scopeov:after{content:"";position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(200,220,235,.45)}
   #crosshair:before,#crosshair:after{content:"";position:absolute;background:#EDF1F5;box-shadow:0 0 3px #000}
   #crosshair:before{left:8px;top:0;width:2px;height:18px}
   #crosshair:after{left:0;top:8px;width:18px;height:2px}
@@ -244,6 +248,7 @@
       <div id="hud">
         <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div>
         <div id="crosshair"></div>
+        <div id="scopeov"></div>
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
         <div id="hudtop">
           <div class="box" id="timer">3:00</div>
@@ -275,6 +280,7 @@
               <div class="ctl"><span>Move</span><b>W A S D</b></div>
               <div class="ctl"><span>Aim</span><b>MOUSE</b></div>
               <div class="ctl"><span>Fire</span><b>HOLD LMB</b></div>
+              <div class="ctl"><span>Aim down sights</span><b>HOLD RMB</b></div>
               <div class="ctl"><span>Reload</span><b>R</b></div>
               <div class="ctl"><span>Pause</span><b>ESC</b></div>
             </div>
@@ -290,7 +296,7 @@
         </div>
       </div>
     </div>
-    <p class="note" style="margin-top:8px">CLICK TO LOCK AIM · MOVE <span class="kbd">W A S D</span> · FIRE <span class="kbd">HOLD LMB</span> · RELOAD <span class="kbd">R</span> · PAUSE <span class="kbd">ESC</span> — desktop + mouse required</p>
+    <p class="note" style="margin-top:8px">CLICK TO LOCK AIM · MOVE <span class="kbd">W A S D</span> · FIRE <span class="kbd">HOLD LMB</span> · ADS <span class="kbd">HOLD RMB</span> · RELOAD <span class="kbd">R</span> · PAUSE <span class="kbd">ESC</span> — desktop + mouse required</p>
   </div>
 
   <div id="results" class="screen"></div>
@@ -1000,6 +1006,7 @@ let gameFS = false;
 let G = null, paused = false, locked = false;
 const keys = {};
 let mouseDown = false, yaw = 0, pitch = 0;
+let aiming = false, adsT = 0, adsLook = 1;
 const EYE = 1.6, PR = 0.5;
 
 /* --- settings (persisted) --- */
@@ -1120,14 +1127,19 @@ window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; });
 window.addEventListener('blur', ()=>{ for(const k in keys) keys[k] = false; mouseDown = false; });
 window.addEventListener('keyup',   e=>{ keys[e.key.toLowerCase()] = false; });
 cv.addEventListener('mousedown', e=>{
+  if(e.button === 2){ if(G && G.running && locked) aiming = true; return; }
   if(e.button!==0) return;
   au();
   if(G && G.running && !locked){ if(!settingsOpen) enterGameScreen(); return; }
   mouseDown = true;
 });
-window.addEventListener('mouseup', ()=> mouseDown = false);
+window.addEventListener('mouseup', e=>{
+  if(e.button === 2){ aiming = false; return; }
+  mouseDown = false;
+});
 document.addEventListener('pointerlockchange', ()=>{
   locked = document.pointerLockElement === cv;
+  if(!locked) aiming = false;
   if(G && G.running){
     paused = !locked || settingsOpen;
     $('#pauseov').classList.toggle('on', !locked && !settingsOpen);
@@ -1135,8 +1147,8 @@ document.addEventListener('pointerlockchange', ()=>{
 });
 document.addEventListener('mousemove', e=>{
   if(!locked) return;
-  yaw   -= e.movementX * 0.0022 * SETTINGS.sens;
-  pitch -= e.movementY * 0.0022 * SETTINGS.sens;
+  yaw   -= e.movementX * 0.0022 * SETTINGS.sens * adsLook;
+  pitch -= e.movementY * 0.0022 * SETTINGS.sens * adsLook;
   const lim = Math.PI/2 - 0.05;
   if(pitch >  lim) pitch =  lim;
   if(pitch < -lim) pitch = -lim;
@@ -1788,11 +1800,12 @@ function fire(e, dir){
   e.ammo--;
   const ab = w.abilities;
   const oy = e.isPlayer ? EYE - 0.06 : (e.grunt ? 1.2 : 1.5);
+  const sprd = w.spread * (e.isPlayer ? (1 - adsT*0.55) : 1); // ADS: -55% spread at full aim
   for(let i=0;i<w.pellets;i++){
     const d = dir.clone();
-    d.x += (Math.random()-0.5)*2*w.spread;
-    d.y += (Math.random()-0.5)*2*w.spread;
-    d.z += (Math.random()-0.5)*2*w.spread;
+    d.x += (Math.random()-0.5)*2*sprd;
+    d.y += (Math.random()-0.5)*2*sprd;
+    d.z += (Math.random()-0.5)*2*sprd;
     d.normalize();
     const speed = e.isPlayer ? w.bspd/9 : w.bspd;
     const color = e.isPlayer ? 0xF5C468 : (e.grunt ? 0xB0685E : 0xD8DEE6);
@@ -2161,7 +2174,7 @@ function botThink(e, dt){
 function startMatch(){
   au();
   for(const k in keys) keys[k] = false;   // no phantom held keys from the menus
-  mouseDown = false;
+  mouseDown = false; aiming = false; adsT = 0; adsLook = 1;
   initRenderer();
   const L = computeLoadout();
   const map = MAPS.find(m=>m.id===setupSel.map);
@@ -2274,7 +2287,7 @@ function tick(now){
     let f=0, r=0;
     if(keys['w'])f++; if(keys['s'])f--; if(keys['d'])r++; if(keys['a'])r--;
     if(f||r){
-      const sp = me.baseSpeed * (me.slowT>0?0.65:1);
+      const sp = me.baseSpeed * (me.slowT>0?0.65:1) * (1 - adsT*0.4);
       let dx = (-Math.sin(yaw))*f + Math.cos(yaw)*r;
       let dz = (-Math.cos(yaw))*f + (-Math.sin(yaw))*r;
       const ml = Math.hypot(dx,dz)||1;
@@ -2472,6 +2485,23 @@ function tick(now){
     }
   }
 
+  // ADS: zoom, tightened feel, centered gun
+  adsT += ((aiming && !me.dead) ? 1 : -1) * dt * 8;
+  adsT = Math.max(0, Math.min(1, adsT));
+  const sniperAds = me.wep.type === 'Sniper';
+  const targetFov = 78 - adsT * (sniperAds ? 48 : 24); // 30 for scopes, 54 for sights
+  if(Math.abs(camera.fov - targetFov) > 0.01){
+    camera.fov = targetFov;
+    camera.updateProjectionMatrix();
+  }
+  adsLook = camera.fov / 78;
+  const scoped = sniperAds && adsT > 0.85;
+  vm.visible = !scoped;
+  $('#scopeov').style.opacity = sniperAds ? Math.max(0, (adsT-0.6)/0.4) : 0;
+  const ch = $('#crosshair');
+  ch.style.opacity = scoped ? 0 : 1;
+  ch.style.transform = 'translate(-50%,-50%) scale(' + (1 - adsT*0.35).toFixed(3) + ')';
+
   // camera + viewmodel
   camera.rotation.order = 'YXZ';
   camera.position.set(me.x, EYE, me.z);
@@ -2499,9 +2529,10 @@ function tick(now){
   }
   vm.rotation.x = -0.6*rl + jit + G.recoil*0.08;
   vm.rotation.z = -0.38*rl;
-  vm.position.x = 0.22 + bobX + 0.05*rl;
-  vm.position.y = -0.2 - bobY - 0.07*rl;
-  vm.position.z = -0.32 + G.recoil*0.06;
+  const bobScale = 1 - adsT*0.8; // steady hands while aimed
+  vm.position.x = 0.22*(1-adsT) + bobX*bobScale + 0.05*rl;
+  vm.position.y = -0.2 + adsT*0.045 - bobY*bobScale - 0.07*rl;
+  vm.position.z = -0.32 + adsT*0.03 + G.recoil*0.06;
   muzzle.material.opacity = Math.max(0, muzzle.material.opacity - dt*10);
   muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt*14);
 
