@@ -1479,6 +1479,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
       tube(0.043, 0.006, 0.10, z, cy, mat(0x2B3540));
       strip(0.078, 0.0006, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
       strip(0.0006, 0.078, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
+      const ctr2 = new THREE.Mesh(new THREE.RingGeometry(0.0013, 0.002, 16), glowM(0x9FB2C2, 0.95));
+      ctr2.position.set(0, cy, z - 0.0385); VMT.add(ctr2);
       const glass = new THREE.Mesh(new THREE.CircleGeometry(0.042, 16), glowM(0x9FB2C2, 0.1));
       glass.position.set(0, cy, z - 0.051); glassPane(glass, 0.1);
       setAim(0, cy, z, 0.26, 48);
@@ -1520,8 +1522,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     if(long){
       strip(0.074, 0.0006, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
       strip(0.0006, 0.074, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
-      const dia = new THREE.Mesh(new THREE.PlaneGeometry(0.006, 0.006), glowM(0x9BE8FF, 0.95));
-      dia.rotation.z = Math.PI/4; dia.position.set(0, cy, cz - 0.047); VMT.add(dia);
+      const ctr = new THREE.Mesh(new THREE.RingGeometry(0.0013, 0.002, 16), glowM(0x9BE8FF, 0.95));
+      ctr.position.set(0, cy, cz - 0.047); VMT.add(ctr);
     } else {
       const l1 = strip(0.012, 0.001, rc, 0.95, -0.004, cy - 0.002, cz - 0.028); l1.rotation.z = 0.85;
       const l2 = strip(0.012, 0.001, rc, 0.95, 0.004, cy - 0.002, cz - 0.028); l2.rotation.z = -0.85;
