@@ -1545,8 +1545,6 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy-hh-bz/2, z);          // bottom bar
     vmBox(m, bz, hh*2, 0.05, -(hw+bz/2), cy, z);              // side bezels
     vmBox(m, bz, hh*2, 0.05, (hw+bz/2), cy, z);
-    vmBox(m, 0.016, 0.07, 0.06, -(hw+bz+0.012), cy-0.004, z); // armor plates flank the window
-    vmBox(m, 0.016, 0.07, 0.06, (hw+bz+0.012), cy-0.004, z);
     const slitGlass = new THREE.Mesh(new THREE.PlaneGeometry(hw*2-0.002, hh*2-0.002), glowM(0x9BE8FF, 0.14));
     slitGlass.position.set(0, cy, z - 0.02); glassPane(slitGlass, 0.14);
     strip(hw*1.6, 0.0012, 0x9BE8FF, 0.9, 0, cy, z - 0.021);
