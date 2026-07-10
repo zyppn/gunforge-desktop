@@ -1,7 +1,7 @@
 {
   "name": "gunforge",
   "productName": "GUNFORGE",
-  "version": "1.2.22",
+  "version": "1.2.23",
   "description": "Arena shooter with persistent loot, part sets and a live auction house",
   "main": "main.js",
   "author": "Jacob Phillips",
