@@ -1281,8 +1281,10 @@ function buildGunModel(wid, eqOpt){
   for(const s of SLOTS){ const pp = eq[s]; if(pp && pp.set) setCount[pp.set] = (setCount[pp.set]||0)+1; }
   const act = SETS.filter(st => st.weapon===w.id && (setCount[st.id]||0) >= st.need);
   const accCol = act.length ? RCOL[act[0].rarity] : 0xE8A33D;
-  const accent = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.02, 0.12), mat(accCol, accCol, act.length?1.2:0.6));
-  accent.position.set(0, bodyH/2+0.008, bodyZ + bodyD*0.18);
+  const accent = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.014, 0.07), mat(accCol, accCol, act.length?1.2:0.6));
+  accent.position.set(0, bodyH/2+0.006, bodyZ + bodyD*0.18);
+  accent.userData = { baseEI: act.length?1.2:0.6, baseCol: new THREE.Color(accCol) };
+  VMT.userData.accent = accent;
   VMT.add(accent);
 
   // slot components — standard geometry, or replaced by the equipped part's variant
@@ -1451,10 +1453,16 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     const s = new THREE.Mesh(new THREE.PlaneGeometry(wd, ht), glowM(c, op));
     s.position.set(px, py, pz); VMT.add(s); return s;
   };
-  const tube = (r, len, cz, cy, color) => {
-    const t = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 16, 1, true), mat(color||0x14181D));
-    t.material.side = THREE.DoubleSide;
-    t.rotation.x = Math.PI/2; t.position.set(0, cy, cz); VMT.add(t); return t;
+  const tube = (rIn, wall, len, cz, cy, shellMat) => {
+    const outer = new THREE.Mesh(new THREE.CylinderGeometry(rIn+wall, rIn+wall, len, 16, 1, true), shellMat);
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(rIn, rIn, len, 16, 1, true), mat(0x0A0D10));
+    inner.material.side = THREE.BackSide; // the black you see when scoped in
+    for(const c of [outer, inner]){ c.rotation.x = Math.PI/2; c.position.set(0, cy, cz); VMT.add(c); }
+    for(const zz of [cz - len/2, cz + len/2]){
+      const ring = new THREE.Mesh(new THREE.RingGeometry(rIn, rIn+wall, 16), mat(0x11151A));
+      ring.material.side = THREE.DoubleSide;
+      ring.position.set(0, cy, zz); VMT.add(ring);
+    }
   };
   const setAim = (ax, ay, az, dist, fovDrop) => { VMT_AIM = {x:ax, y:ay, z:az}; VMT_ADS = {dist, fovDrop}; };
 
@@ -1462,21 +1470,21 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     if(w.type === 'Sniper'){
       // integral scope: wide short objective, eye relief keeps the world visible around the ring
       const cy = y + 0.055;
-      tube(0.045, 0.10, z, cy);
-      strip(0.086, 0.0006, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
-      strip(0.0006, 0.086, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
-      const glass = new THREE.Mesh(new THREE.CircleGeometry(0.044, 16), glowM(0x9FB2C2, 0.06));
+      tube(0.043, 0.006, 0.10, z, cy, mat(0x2B3540));
+      strip(0.078, 0.0006, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
+      strip(0.0006, 0.078, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
+      const glass = new THREE.Mesh(new THREE.CircleGeometry(0.042, 16), glowM(0x9FB2C2, 0.06));
       glass.position.set(0, cy, z - 0.051); VMT.add(glass);
       setAim(0, cy, z, 0.26, 48);
     } else {
-      vmBox(mat(0x1B232C), 0.02, 0.03, 0.02, 0, y+0.015, bodyZ - bodyD*0.3);
-      strip(0.005, 0.005, 0xEDF1F5, 0.9, 0, y+0.034, bodyZ - bodyD*0.3);
-      setAim(0, y+0.032, bodyZ - bodyD*0.3, 0.28, 24);
+      vmBox(mat(0x1B232C), 0.014, 0.045, 0.014, 0, y+0.022, bodyZ - bodyD*0.3); // taller post
+      strip(0.005, 0.005, 0xEDF1F5, 0.9, 0, y+0.05, bodyZ - bodyD*0.3);
+      setAim(0, y+0.048, bodyZ - bodyD*0.3, 0.3, 24);
     }
     return;
   }
   if(n.includes('Red Dot') || n.includes('Eye')){
-    const cy = y + 0.045;
+    const cy = y + 0.055;
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
     const c = n.includes('Eye') ? 0xFFE9A0 : 0xFF3B30;
@@ -1484,7 +1492,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, 0.02, 0.03, 0.02, 0, y+0.012, z);
     setAim(0, cy, z, 0.22, 24);
   } else if(n.includes('Holo')){
-    const cy = y + 0.04;
+    const cy = y + 0.052;
     vmBox(m, 0.06, 0.012, 0.05, 0, y+0.065, z);
     vmBox(m, 0.012, 0.055, 0.05, -0.028, cy, z);
     vmBox(m, 0.012, 0.055, 0.05, 0.028, cy, z);
@@ -1497,13 +1505,13 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
   } else if(n.includes('ACOG') || n.includes('Lens')){
     const long = n.includes('Lens');
     const cy = y + 0.05, cz = z - (long?0.02:0);
-    const r = long ? 0.044 : 0.03, len = long ? 0.10 : 0.08;
-    tube(r, len, cz, cy, long?0x16333F:0x14181D);
+    const r = long ? 0.041 : 0.028, len = long ? 0.10 : 0.08;
+    tube(r, 0.006, len, cz, cy, m); // shell wears the part's rarity color
     const glass = new THREE.Mesh(new THREE.CircleGeometry(r - 0.001, 16), glowM(long?0x9BE8FF:rc, 0.08));
     glass.position.set(0, cy, cz - len/2 - 0.001); VMT.add(glass);
     if(long){
-      strip(0.09, 0.0006, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
-      strip(0.0006, 0.09, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
+      strip(0.074, 0.0006, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
+      strip(0.0006, 0.074, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
       const dia = new THREE.Mesh(new THREE.PlaneGeometry(0.006, 0.006), glowM(0x9BE8FF, 0.95));
       dia.rotation.z = Math.PI/4; dia.position.set(0, cy, cz - 0.047); VMT.add(dia);
     } else {
@@ -1515,7 +1523,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     setAim(0, cy, cz, long?0.28:0.22, long?52:34);
   } else if(n.includes('Iron')){
     // an actual hollow ring — nothing blocks the center anymore
-    const cy = y + 0.05;
+    const cy = y + 0.06;
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.005, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
     strip(0.004, 0.004, rc, 1, 0, cy, z - 0.004); // luminous center bead
@@ -2568,6 +2576,11 @@ function tick(now){
     camera.updateProjectionMatrix();
   }
   adsLook = camera.fov / 78;
+  const acc = vm.userData.accent;
+  if(acc){
+    acc.material.emissiveIntensity = acc.userData.baseEI * (1 - adsT);
+    acc.material.color.copy(acc.userData.baseCol).multiplyScalar(1 - adsT*0.82);
+  }
   const ch = $('#crosshair');
   ch.style.opacity = Math.max(0, 1 - Math.max(0, (adsT - 0.25) / 0.45)).toFixed(3);
   ch.style.transform = 'translate(-50%,-50%) scale(' + (1 - adsT*0.35).toFixed(3) + ')';
