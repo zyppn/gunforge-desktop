@@ -177,10 +177,6 @@
 
   /* ---------- 3D / FPS overlays ---------- */
   #crosshair{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;pointer-events:none;transition:opacity .1s}
-  #scopeov{position:absolute;inset:0;pointer-events:none;opacity:0;
-    background:radial-gradient(circle at 50% 50%, transparent 23%, rgba(2,4,6,.97) 24.5%)}
-  #scopeov:before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(200,220,235,.45)}
-  #scopeov:after{content:"";position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(200,220,235,.45)}
   #crosshair:before,#crosshair:after{content:"";position:absolute;background:#EDF1F5;box-shadow:0 0 3px #000}
   #crosshair:before{left:8px;top:0;width:2px;height:18px}
   #crosshair:after{left:0;top:8px;width:18px;height:2px}
@@ -248,7 +244,6 @@
       <div id="hud">
         <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div>
         <div id="crosshair"></div>
-        <div id="scopeov"></div>
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
         <div id="hudtop">
           <div class="box" id="timer">3:00</div>
@@ -1255,6 +1250,7 @@ function buildScene(map){
 const RCOL = {common:0x9BA8B0, uncommon:0x5FBF6E, rare:0x4C9BE8, epic:0xB463E8, legendary:0xE8A33D};
 function partMat(p){ return p ? mat(RCOL[p.rarity], RCOL[p.rarity], p.set?0.75:0.25) : mat(0x1B232C); }
 let VMT = null; // current build target group
+let VMT_AIM = null, VMT_ADS = null; // set by vmOptic: aperture point + zoom/eye-distance
 function vmCyl(m, r, l, z, y){ const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 10), m); c.rotation.x = Math.PI/2; c.position.set(0, y===undefined?0.02:y, z); VMT.add(c); return c; }
 function vmBox(m, x, y, z, px, py, pz){ const b = new THREE.Mesh(new THREE.BoxGeometry(x, y, z), m); b.position.set(px, py, pz); VMT.add(b); return b; }
 
@@ -1262,6 +1258,7 @@ function buildGunModel(wid, eqOpt){
   const w = WEAPONS.find(x=>x.id===wid) || WEAPONS[0];
   const eq = eqOpt || equippedParts(w.id);
   VMT = new THREE.Group();
+  VMT_AIM = null; VMT_ADS = null;
 
   // receiver + grip: the only fixed frame — everything else is a swappable component
   const bodyD = w.type==='Pistol'?0.26 : w.type==='SMG'?0.36 : w.type==='Sniper'?0.6 : w.type==='LMG'?0.55 : 0.48;
@@ -1284,11 +1281,15 @@ function buildGunModel(wid, eqOpt){
   vmOptic(eq.optic, w, bodyZ, bodyH, bodyD);
 
   const g = VMT; VMT = null;
-  return {group:g, tipZ};
+  return {group:g, tipZ, aim:VMT_AIM, ads:VMT_ADS};
 }
+let vmAds = null;
 function buildViewmodel(){
   const built = buildGunModel(P.equippedWeapon);
   vm = built.group;
+  vmAds = (built.aim && built.ads)
+    ? {ax:built.aim.x, ay:built.aim.y, az:built.aim.z, dist:built.ads.dist, fovDrop:built.ads.fovDrop}
+    : {ax:0, ay:0.05, az:-0.28, dist:0.22, fovDrop:24};
   // muzzle flash tracks the actual built barrel tip
   muzzle = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.16),
     new THREE.MeshBasicMaterial({color:0xFFD27A, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide}));
@@ -1427,38 +1428,97 @@ function vmStock(p, w, rearZ){
   } else vmBox(m, 0.07, 0.085, 0.12, 0, -0.01, rearZ + 0.06);
 }
 function vmOptic(p, w, bodyZ, bodyH, bodyD){
+  /* Every optic is real, hollow geometry the camera looks THROUGH when aiming.
+     Reticles are emissive geometry inside the glass, colored by rarity (RCOL) —
+     a future skin system recolors everything by changing that one lookup. */
   const m = partMat(p), n = p ? p.name : '';
   const y = bodyH/2, z = bodyZ + bodyD*0.1;
-  if(!p){ vmBox(mat(0x1B232C), 0.02, 0.03, 0.02, 0, y+0.015, bodyZ - bodyD*0.3); return; } // iron nub
-  const glow = c => new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:0.95, side:THREE.DoubleSide});
+  const rc = p ? RCOL[p.rarity] : 0xC9D4DE;
+  const glowM = (c, op) => new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:op, depthWrite:false, side:THREE.DoubleSide});
+  const strip = (wd, ht, c, op, px, py, pz) => {
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(wd, ht), glowM(c, op));
+    s.position.set(px, py, pz); VMT.add(s); return s;
+  };
+  const tube = (r, len, cz, cy, color) => {
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 14, 1, true), mat(color||0x14181D));
+    t.material.side = THREE.DoubleSide; // inner walls render — this IS the scope ring
+    t.rotation.x = Math.PI/2; t.position.set(0, cy, cz); VMT.add(t); return t;
+  };
+  const setAim = (ax, ay, az, dist, fovDrop) => { VMT_AIM = {x:ax, y:ay, z:az}; VMT_ADS = {dist, fovDrop}; };
+
+  if(!p){
+    if(w.type === 'Sniper'){
+      // integral standard scope — a sniper always has a tube to look through
+      const cy = y + 0.055;
+      tube(0.03, 0.16, z, cy);
+      strip(0.052, 0.0022, 0x9FB2C2, 0.9, 0, cy, z - 0.01);
+      strip(0.0022, 0.052, 0x9FB2C2, 0.9, 0, cy, z - 0.01);
+      const glass = new THREE.Mesh(new THREE.CircleGeometry(0.029, 14), glowM(0x9FB2C2, 0.08));
+      glass.position.set(0, cy, z - 0.081); VMT.add(glass);
+      setAim(0, cy, z, 0.13, 48);
+    } else {
+      vmBox(mat(0x1B232C), 0.02, 0.03, 0.02, 0, y+0.015, bodyZ - bodyD*0.3); // iron nub
+      strip(0.006, 0.006, 0xEDF1F5, 0.9, 0, y+0.034, bodyZ - bodyD*0.3);     // aimable tip dot
+      setAim(0, y+0.03, bodyZ - bodyD*0.3, 0.24, 24);
+    }
+    return;
+  }
   if(n.includes('Red Dot') || n.includes('Eye')){
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 16), m);
-    ring.position.set(0, y+0.045, z); VMT.add(ring);
+    const cy = y + 0.045;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 18), m);
+    ring.position.set(0, cy, z); VMT.add(ring);
     const c = n.includes('Eye') ? 0xFFE9A0 : 0xFF3B30;
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 5), mat(c, c, 2));
-    dot.position.set(0, y+0.045, z); VMT.add(dot);
+    strip(0.008, 0.008, c, 1, 0, cy, z - 0.003); // the dot floats in the window
     vmBox(m, 0.02, 0.03, 0.02, 0, y+0.012, z);
+    setAim(0, cy, z, 0.2, 24);
   } else if(n.includes('Holo')){
+    const cy = y + 0.04;
     vmBox(m, 0.06, 0.012, 0.05, 0, y+0.065, z);
-    vmBox(m, 0.012, 0.055, 0.05, -0.028, y+0.035, z);
-    vmBox(m, 0.012, 0.055, 0.05, 0.028, y+0.035, z);
-    const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.04), glow(RCOL[p.rarity]));
-    lens.position.set(0, y+0.04, z); VMT.add(lens);
+    vmBox(m, 0.012, 0.055, 0.05, -0.028, cy, z);
+    vmBox(m, 0.012, 0.055, 0.05, 0.028, cy, z);
+    const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.04), glowM(rc, 0.14)); // see-through glass
+    lens.position.set(0, cy, z); VMT.add(lens);
+    const ret = new THREE.Mesh(new THREE.TorusGeometry(0.011, 0.0022, 6, 14), glowM(rc, 0.95));
+    ret.position.set(0, cy, z - 0.006); VMT.add(ret);
+    strip(0.005, 0.005, rc, 1, 0, cy, z - 0.007);
+    setAim(0, cy, z, 0.2, 24);
   } else if(n.includes('ACOG') || n.includes('Lens')){
-    const long = n.includes('Lens'); // Ghost Lens: full sniper scope
-    vmCyl(m, 0.026, long?0.2:0.12, z - (long?0.02:0), y+0.05);
-    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.024, 10), glow(long?0x9BE8FF:RCOL[p.rarity]));
-    lens.position.set(0, y+0.05, z - (long?0.12:0.06) - 0.002); lens.rotation.y = Math.PI; VMT.add(lens);
+    const long = n.includes('Lens'); // Ghost Lens: full sniper glass
+    const cy = y + 0.05, cz = z - (long?0.02:0), len = long?0.2:0.12;
+    tube(long?0.028:0.026, len, cz, cy, long?0x16333F:0x14181D);
+    const glass = new THREE.Mesh(new THREE.CircleGeometry(long?0.027:0.025, 14), glowM(long?0x9BE8FF:rc, 0.10));
+    glass.position.set(0, cy, cz - len/2 - 0.001); VMT.add(glass);
+    if(long){
+      strip(0.05, 0.002, 0x9BE8FF, 0.95, 0, cy, cz - 0.01);
+      strip(0.002, 0.05, 0x9BE8FF, 0.95, 0, cy, cz - 0.01);
+      const dia = new THREE.Mesh(new THREE.PlaneGeometry(0.009, 0.009), glowM(0x9BE8FF, 0.95));
+      dia.rotation.z = Math.PI/4; dia.position.set(0, cy, cz - 0.012); VMT.add(dia);
+    } else {
+      const l1 = strip(0.016, 0.0024, rc, 0.95, -0.0055, cy - 0.003, cz - 0.01); l1.rotation.z = 0.85;
+      const l2 = strip(0.016, 0.0024, rc, 0.95, 0.0055, cy - 0.003, cz - 0.01); l2.rotation.z = -0.85;
+      strip(0.0022, 0.024, rc, 0.95, 0, cy - 0.02, cz - 0.01); // chevron + drop line
+    }
     vmBox(m, 0.02, 0.03, 0.03, 0, y+0.015, z);
+    setAim(0, cy, cz, long?0.13:0.15, long?52:34);
   } else if(n.includes('Iron')){
     vmBox(m, 0.012, 0.035, 0.012, -0.02, y+0.018, z);
     vmBox(m, 0.012, 0.035, 0.012, 0.02, y+0.018, z);
     vmBox(m, 0.05, 0.012, 0.012, 0, y+0.04, z);
+    strip(0.006, 0.006, rc, 1, 0, y+0.043, z - 0.008); // luminous front tip
+    setAim(0, y+0.036, z, 0.24, 24);
   } else if(n.includes('Ward')){
-    vmBox(m, 0.07, 0.06, 0.07, 0, y+0.04, z); // armored sight block
-    const slit = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.012), glow(0x9BE8FF));
-    slit.position.set(0, y+0.045, z - 0.037); VMT.add(slit);
-  } else vmBox(m, 0.05, 0.05, 0.08, 0, y+0.035, z);
+    // hollowed armor sight: you aim through the slit itself
+    vmBox(m, 0.07, 0.022, 0.07, 0, y+0.056, z);        // top slab
+    vmBox(m, 0.07, 0.022, 0.07, 0, y+0.018, z);        // bottom slab
+    vmBox(m, 0.012, 0.06, 0.07, -0.034, y+0.037, z);   // side posts
+    vmBox(m, 0.012, 0.06, 0.07, 0.034, y+0.037, z);
+    strip(0.05, 0.0022, 0x9BE8FF, 0.9, 0, y+0.037, z - 0.037);
+    strip(0.0026, 0.01, 0x9BE8FF, 0.95, 0, y+0.037, z - 0.038);
+    setAim(0, y+0.037, z, 0.2, 24);
+  } else {
+    vmBox(m, 0.05, 0.05, 0.08, 0, y+0.035, z);
+    setAim(0, y+0.07, z, 0.22, 24);
+  }
 }
 
 /* ---- armory preview: rotating, draggable render of the assembled gun ---- */
@@ -2488,18 +2548,14 @@ function tick(now){
   // ADS: zoom, tightened feel, centered gun
   adsT += ((aiming && !me.dead) ? 1 : -1) * dt * 8;
   adsT = Math.max(0, Math.min(1, adsT));
-  const sniperAds = me.wep.type === 'Sniper';
-  const targetFov = 78 - adsT * (sniperAds ? 48 : 24); // 30 for scopes, 54 for sights
+  const targetFov = 78 - adsT * (vmAds ? vmAds.fovDrop : 24);
   if(Math.abs(camera.fov - targetFov) > 0.01){
     camera.fov = targetFov;
     camera.updateProjectionMatrix();
   }
   adsLook = camera.fov / 78;
-  const scoped = sniperAds && adsT > 0.85;
-  vm.visible = !scoped;
-  $('#scopeov').style.opacity = sniperAds ? Math.max(0, (adsT-0.6)/0.4) : 0;
   const ch = $('#crosshair');
-  ch.style.opacity = scoped ? 0 : 1;
+  ch.style.opacity = Math.max(0, 1 - Math.max(0, (adsT - 0.25) / 0.45)).toFixed(3);
   ch.style.transform = 'translate(-50%,-50%) scale(' + (1 - adsT*0.35).toFixed(3) + ')';
 
   // camera + viewmodel
@@ -2530,9 +2586,18 @@ function tick(now){
   vm.rotation.x = -0.6*rl + jit + G.recoil*0.08;
   vm.rotation.z = -0.38*rl;
   const bobScale = 1 - adsT*0.8; // steady hands while aimed
-  vm.position.x = 0.22*(1-adsT) + bobX*bobScale + 0.05*rl;
-  vm.position.y = -0.2 + adsT*0.045 - bobY*bobScale - 0.07*rl;
-  vm.position.z = -0.32 + adsT*0.03 + G.recoil*0.06;
+  const adsEff = adsT * (1 - rl); // reloading pulls you off the sight
+  const A = vmAds || {ax:0, ay:0.05, az:-0.28, dist:0.22};
+  // solve: place the optic's aperture exactly at (0, 0, -dist) in front of the eye
+  const aimX = -A.ax, aimY = -A.ay, aimZ = -A.dist - A.az;
+  const hipX = 0.22 + bobX*bobScale + 0.05*rl;
+  const hipY = -0.2 - bobY*bobScale - 0.07*rl;
+  const hipZ = -0.32 + G.recoil*0.06;
+  vm.position.x = hipX + (aimX - hipX)*adsEff;
+  vm.position.y = hipY + (aimY - hipY)*adsEff;
+  vm.position.z = hipZ + (aimZ - hipZ)*adsEff + G.recoil*0.05*adsEff;
+  vm.rotation.x = vm.rotation.x * (1 - adsEff*0.5);
+  vm.rotation.z = vm.rotation.z * (1 - adsEff);
   muzzle.material.opacity = Math.max(0, muzzle.material.opacity - dt*10);
   muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt*14);
 
