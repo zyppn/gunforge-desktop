@@ -1539,18 +1539,28 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, 0.014, 0.03, 0.014, 0, y+0.014, z);  // riser
     setAim(0, cy, z, 0.3, 24);
   } else if(n.includes('Ward')){
-    vmBox(m, 0.07, 0.022, 0.07, 0, y+0.056, z);
-    vmBox(m, 0.07, 0.022, 0.07, 0, y+0.018, z);
-    vmBox(m, 0.012, 0.06, 0.07, -0.034, y+0.037, z);
-    vmBox(m, 0.012, 0.06, 0.07, 0.034, y+0.037, z);
-    const slitGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.056, 0.013), glowM(0x9BE8FF, 0.14));
-    slitGlass.position.set(0, y+0.037, z - 0.036); glassPane(slitGlass, 0.14);
-    strip(0.05, 0.0014, 0x9BE8FF, 0.9, 0, y+0.037, z - 0.037);
-    strip(0.0018, 0.008, 0x9BE8FF, 0.95, 0, y+0.037, z - 0.038);
-    setAim(0, y+0.037, z, 0.24, 24);
+    // armored WINDOW: generous opening, thin bezel, chunky plates pushed outboard
+    const cy = y + 0.045, hw = 0.04, hh = 0.028, bz = 0.008;
+    vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy+hh+bz/2, z);          // top bar
+    vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy-hh-bz/2, z);          // bottom bar
+    vmBox(m, bz, hh*2, 0.05, -(hw+bz/2), cy, z);              // side bezels
+    vmBox(m, bz, hh*2, 0.05, (hw+bz/2), cy, z);
+    vmBox(m, 0.016, 0.07, 0.06, -(hw+bz+0.012), cy-0.004, z); // armor plates flank the window
+    vmBox(m, 0.016, 0.07, 0.06, (hw+bz+0.012), cy-0.004, z);
+    const slitGlass = new THREE.Mesh(new THREE.PlaneGeometry(hw*2-0.002, hh*2-0.002), glowM(0x9BE8FF, 0.14));
+    slitGlass.position.set(0, cy, z - 0.02); glassPane(slitGlass, 0.14);
+    strip(hw*1.6, 0.0012, 0x9BE8FF, 0.9, 0, cy, z - 0.021);
+    strip(0.0016, 0.012, 0x9BE8FF, 0.95, 0, cy, z - 0.022);
+    setAim(0, cy, z, 0.26, 24);
   } else {
-    vmBox(m, 0.05, 0.05, 0.08, 0, y+0.035, z);
-    setAim(0, y+0.07, z, 0.26, 24);
+    // unknown optics: hollow window frame, never a solid block in your face
+    const cy = y + 0.05;
+    vmBox(m, 0.05, 0.006, 0.05, 0, cy+0.018, z);
+    vmBox(m, 0.05, 0.006, 0.05, 0, cy-0.018, z);
+    vmBox(m, 0.006, 0.03, 0.05, -0.025, cy, z);
+    vmBox(m, 0.006, 0.03, 0.05, 0.025, cy, z);
+    strip(0.004, 0.004, rc, 1, 0, cy, z - 0.004);
+    setAim(0, cy, z, 0.24, 24);
   }
 }
 
