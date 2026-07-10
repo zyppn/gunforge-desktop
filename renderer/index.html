@@ -1824,7 +1824,8 @@ function mkEnt(o){
     lastX:null, lastZ:null, walkPhase:Math.random()*6.28, walkAmp:0,
     path:null, pathT:0, pathGoal:null, stuckT:0, stepAcc:0,
     target:null, retargetT:0, alertSrc:null, alertT:0, reactT:0, seenT:0,
-    faceCur:Math.random()*6.28, burnSrc:null, flameT:0, frostT:0
+    faceCur:Math.random()*6.28, burnSrc:null, flameT:0, frostT:0,
+    wantAim:false, aimT:0
   }, o);
 }
 function safePoint(x, z){
@@ -1903,7 +1904,7 @@ function fire(e, dir){
   e.ammo--;
   const ab = w.abilities;
   const oy = e.isPlayer ? EYE - 0.06 : (e.grunt ? 1.2 : 1.5);
-  const sprd = w.spread * (e.isPlayer ? (1 - adsT*0.55) : 1); // ADS: -55% spread at full aim
+  const sprd = w.spread * (1 - (e.isPlayer ? adsT : (e.aimT||0)) * 0.55); // ADS: -55% spread at full aim, player and bot alike
   for(let i=0;i<w.pellets;i++){
     const d = dir.clone();
     d.x += (Math.random()-0.5)*2*sprd;
@@ -2014,7 +2015,7 @@ function kill(t, src){
 function respawn(e){
   e.dead=false; e.hp=e.maxhp; e.shield=0; e.ammo=e.wep.mag; e.reloading=false;
   e.burnT=0; e.slowT=0; e.burnSrc=null; e.target=null; e.alertSrc=null; e.alertT=0;
-  e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0;
+  e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0; e.wantAim=false; e.aimT=0;
   const s = farSpawn(G.map, e.team); e.x=s[0]; e.z=s[1];
   e.lastX=e.x; e.lastZ=e.z;
   if(e.mesh){
@@ -2175,9 +2176,11 @@ function botThink(e, dt){
   const px = e.x, pz = e.z;
   let wantMove = false, faceAng = null;
   if(e.reactT > 0) e.reactT -= dt;
+  e.aimT = Math.max(0, Math.min(1, e.aimT + (e.wantAim ? 1 : -1) * dt * 5)); // raising the glass takes time
 
   const tgt = pickTarget(e, dt);
   if(!tgt){
+    e.wantAim = false;
     e.wanderA += (Math.random()-0.5)*2*dt;
     moveEnt(e, Math.cos(e.wanderA)*sp*0.5*dt, Math.sin(e.wanderA)*sp*0.5*dt);
     faceAng = e.wanderA;
@@ -2192,6 +2195,12 @@ function botThink(e, dt){
     const wp2 = e.wep;
     const ideal = e.grunt ? 7 : (wp2.pellets>1 ? 5.5 : wp2.type==='Sniper' ? 22 : wp2.type==='SMG' ? 9 : 13);
     const fireRange = e.grunt ? 18 : (wp2.pellets>1 ? 13 : wp2.type==='Sniper' ? 48 : wp2.type==='SMG' ? 22 : 30);
+    // aim doctrine: glass up when range favors it; shotguns and grunts stay hip
+    e.wantAim = engaged && !e.reloading && !e.grunt && (
+      wp2.type==='Sniper' ? dist > 8 :
+      (wp2.type==='Assault Rifle' || wp2.type==='LMG') ? dist > ideal*0.9 :
+      wp2.type==='SMG' ? dist > 14 : false
+    );
     e.repathT -= dt;
     if(e.repathT<=0){ e.strafe = Math.random()<0.5?1:-1; e.repathT = 0.8+Math.random()*1.2; }
 
@@ -2202,7 +2211,8 @@ function botThink(e, dt){
       else if(dist < ideal*0.6 && wp2.type!=='Shotgun'){ mvx -= Math.cos(ang); mvz -= Math.sin(ang); } // shotguns keep pushing
       if(!e.grunt){ mvx += Math.cos(ang+Math.PI/2)*e.strafe*0.8; mvz += Math.sin(ang+Math.PI/2)*e.strafe*0.8; }
       const ml = Math.hypot(mvx,mvz);
-      if(ml > 0.01){ wantMove = true; moveEnt(e, mvx/ml*sp*dt, mvz/ml*sp*dt); }
+      const msp = sp * (1 - e.aimT*0.4); // steady hands, slow feet — same trade as the player
+      if(ml > 0.01){ wantMove = true; moveEnt(e, mvx/ml*msp*dt, mvz/ml*msp*dt); }
     } else {
       // no reliable sight: navigate the grid toward the target
       e.pathT = (e.pathT||0) - dt;
@@ -2466,8 +2476,11 @@ function tick(now){
         u.kick = Math.max(0, u.kick - dt*7);
         const tiltTarget = e.reloading ? 0.85 : 0;
         u.gun.rotation.x += (tiltTarget - u.gun.rotation.x) * Math.min(1, dt*9);
-        u.gun.position.z = u.gunBase.z - u.kick*0.07;
-        u.gun.position.y = u.gunBase.y - (e.reloading ? 0.06 : 0) * Math.min(1, u.gun.rotation.x/0.85);
+        const bAim = e.aimT || 0;
+        u.gun.position.x = u.gunBase.x + (0.1 - u.gunBase.x) * bAim;   // pulls inboard...
+        u.gun.position.z = u.gunBase.z - u.kick*0.07 - 0.02*bAim;
+        u.gun.position.y = u.gunBase.y + 0.32*bAim                      // ...and up to the visor
+          - (e.reloading ? 0.06 : 0) * Math.min(1, u.gun.rotation.x/0.85);
         u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*10);
       }
     }
