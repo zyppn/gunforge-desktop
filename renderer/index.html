@@ -1465,6 +1465,12 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     }
   };
   const setAim = (ax, ay, az, dist, fovDrop) => { VMT_AIM = {x:ax, y:ay, z:az}; VMT_ADS = {dist, fovDrop}; };
+  // glass panes: visible at hip so reticles aren't floating, fade out while aimed
+  const glassPane = (mesh, baseOp) => {
+    mesh.userData.baseOp = baseOp;
+    (VMT.userData.glass = VMT.userData.glass || []).push(mesh);
+    VMT.add(mesh); return mesh;
+  };
 
   if(!p){
     if(w.type === 'Sniper'){
@@ -1473,13 +1479,13 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
       tube(0.043, 0.006, 0.10, z, cy, mat(0x2B3540));
       strip(0.078, 0.0006, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
       strip(0.0006, 0.078, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
-      const glass = new THREE.Mesh(new THREE.CircleGeometry(0.042, 16), glowM(0x9FB2C2, 0.06));
-      glass.position.set(0, cy, z - 0.051); VMT.add(glass);
+      const glass = new THREE.Mesh(new THREE.CircleGeometry(0.042, 16), glowM(0x9FB2C2, 0.1));
+      glass.position.set(0, cy, z - 0.051); glassPane(glass, 0.1);
       setAim(0, cy, z, 0.26, 48);
     } else {
       vmBox(mat(0x1B232C), 0.014, 0.045, 0.014, 0, y+0.022, bodyZ - bodyD*0.3); // taller post
-      strip(0.005, 0.005, 0xEDF1F5, 0.9, 0, y+0.05, bodyZ - bodyD*0.3);
-      setAim(0, y+0.048, bodyZ - bodyD*0.3, 0.3, 24);
+      strip(0.005, 0.005, 0xEDF1F5, 0.9, 0, y+0.046, bodyZ - bodyD*0.3);
+      setAim(0, y+0.046, bodyZ - bodyD*0.3, 0.3, 24);
     }
     return;
   }
@@ -1488,6 +1494,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
     const c = n.includes('Eye') ? 0xFFE9A0 : 0xFF3B30;
+    const win = new THREE.Mesh(new THREE.CircleGeometry(0.028, 16), glowM(rc, 0.15));
+    win.position.set(0, cy, z + 0.001); glassPane(win, 0.15);
     strip(0.005, 0.005, c, 1, 0, cy, z - 0.003);
     vmBox(m, 0.02, 0.03, 0.02, 0, y+0.012, z);
     setAim(0, cy, z, 0.22, 24);
@@ -1496,8 +1504,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, 0.06, 0.012, 0.05, 0, y+0.065, z);
     vmBox(m, 0.012, 0.055, 0.05, -0.028, cy, z);
     vmBox(m, 0.012, 0.055, 0.05, 0.028, cy, z);
-    const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.04), glowM(rc, 0.12));
-    lens.position.set(0, cy, z); VMT.add(lens);
+    const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.04), glowM(rc, 0.16));
+    lens.position.set(0, cy, z); glassPane(lens, 0.16);
     const ret = new THREE.Mesh(new THREE.TorusGeometry(0.009, 0.0012, 6, 16), glowM(rc, 0.95));
     ret.position.set(0, cy, z - 0.006); VMT.add(ret);
     strip(0.0035, 0.0035, rc, 1, 0, cy, z - 0.007);
@@ -1507,8 +1515,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     const cy = y + 0.05, cz = z - (long?0.02:0);
     const r = long ? 0.041 : 0.028, len = long ? 0.10 : 0.08;
     tube(r, 0.006, len, cz, cy, m); // shell wears the part's rarity color
-    const glass = new THREE.Mesh(new THREE.CircleGeometry(r - 0.001, 16), glowM(long?0x9BE8FF:rc, 0.08));
-    glass.position.set(0, cy, cz - len/2 - 0.001); VMT.add(glass);
+    const glass = new THREE.Mesh(new THREE.CircleGeometry(r - 0.001, 16), glowM(long?0x9BE8FF:rc, 0.12));
+    glass.position.set(0, cy, cz - len/2 - 0.001); glassPane(glass, 0.12);
     if(long){
       strip(0.074, 0.0006, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
       strip(0.0006, 0.074, 0x9BE8FF, 0.95, 0, cy, cz - 0.045);
@@ -1526,7 +1534,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     const cy = y + 0.06;
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.005, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
-    strip(0.004, 0.004, rc, 1, 0, cy, z - 0.004); // luminous center bead
+    vmBox(m, 0.0035, 0.028, 0.0035, 0, cy - 0.016, z); // bead post from the ring's base
+    strip(0.004, 0.004, rc, 1, 0, cy - 0.001, z - 0.004); // bead on top of its post
     vmBox(m, 0.014, 0.03, 0.014, 0, y+0.014, z);  // riser
     setAim(0, cy, z, 0.3, 24);
   } else if(n.includes('Ward')){
@@ -1534,6 +1543,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, 0.07, 0.022, 0.07, 0, y+0.018, z);
     vmBox(m, 0.012, 0.06, 0.07, -0.034, y+0.037, z);
     vmBox(m, 0.012, 0.06, 0.07, 0.034, y+0.037, z);
+    const slitGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.056, 0.013), glowM(0x9BE8FF, 0.14));
+    slitGlass.position.set(0, y+0.037, z - 0.036); glassPane(slitGlass, 0.14);
     strip(0.05, 0.0014, 0x9BE8FF, 0.9, 0, y+0.037, z - 0.037);
     strip(0.0018, 0.008, 0x9BE8FF, 0.95, 0, y+0.037, z - 0.038);
     setAim(0, y+0.037, z, 0.24, 24);
@@ -2580,6 +2591,9 @@ function tick(now){
   if(acc){
     acc.material.emissiveIntensity = acc.userData.baseEI * (1 - adsT);
     acc.material.color.copy(acc.userData.baseCol).multiplyScalar(1 - adsT*0.82);
+  }
+  if(vm.userData.glass){
+    for(const gp of vm.userData.glass) gp.material.opacity = gp.userData.baseOp * (1 - adsT*0.92);
   }
   const ch = $('#crosshair');
   ch.style.opacity = Math.max(0, 1 - Math.max(0, (adsT - 0.25) / 0.45)).toFixed(3);
