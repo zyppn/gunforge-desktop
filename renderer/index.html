@@ -1465,6 +1465,11 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     }
   };
   const setAim = (ax, ay, az, dist, fovDrop) => { VMT_AIM = {x:ax, y:ay, z:az}; VMT_ADS = {dist, fovDrop}; };
+  // black inner lining: rarity color outside, black where the eye lands (matches the tubes)
+  const lineBlack = (wd, ht, px, py, pz) => {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.052), mat(0x0A0D10));
+    b.position.set(px, py, pz); VMT.add(b);
+  };
   // glass panes: visible at hip so reticles aren't floating, fade out while aimed
   const glassPane = (mesh, baseOp) => {
     mesh.userData.baseOp = baseOp;
@@ -1506,6 +1511,9 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, 0.06, 0.012, 0.05, 0, y+0.065, z);
     vmBox(m, 0.012, 0.055, 0.05, -0.028, cy, z);
     vmBox(m, 0.012, 0.055, 0.05, 0.028, cy, z);
+    lineBlack(0.0025, 0.05, -0.0208, cy, z);
+    lineBlack(0.0025, 0.05, 0.0208, cy, z);
+    lineBlack(0.0415, 0.0025, 0, y+0.0578, z);
     const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.04), glowM(rc, 0.16));
     lens.position.set(0, cy, z); glassPane(lens, 0.16);
     const ret = new THREE.Mesh(new THREE.TorusGeometry(0.009, 0.0012, 6, 16), glowM(rc, 0.95));
@@ -1547,6 +1555,10 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy-hh-bz/2, z);          // bottom bar
     vmBox(m, bz, hh*2, 0.05, -(hw+bz/2), cy, z);              // side bezels
     vmBox(m, bz, hh*2, 0.05, (hw+bz/2), cy, z);
+    lineBlack(hw*2, 0.003, 0, cy+hh-0.0015, z);
+    lineBlack(hw*2, 0.003, 0, cy-hh+0.0015, z);
+    lineBlack(0.003, hh*2-0.006, -(hw-0.0015), cy, z);
+    lineBlack(0.003, hh*2-0.006, (hw-0.0015), cy, z);
     const slitGlass = new THREE.Mesh(new THREE.PlaneGeometry(hw*2-0.002, hh*2-0.002), glowM(0x9BE8FF, 0.14));
     slitGlass.position.set(0, cy, z - 0.02); glassPane(slitGlass, 0.14);
     strip(hw*1.6, 0.0012, 0x9BE8FF, 0.9, 0, cy, z - 0.021);
@@ -1559,6 +1571,10 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     vmBox(m, 0.05, 0.006, 0.05, 0, cy-0.018, z);
     vmBox(m, 0.006, 0.03, 0.05, -0.025, cy, z);
     vmBox(m, 0.006, 0.03, 0.05, 0.025, cy, z);
+    lineBlack(0.044, 0.003, 0, cy+0.0135, z);
+    lineBlack(0.044, 0.003, 0, cy-0.0135, z);
+    lineBlack(0.003, 0.024, -0.0205, cy, z);
+    lineBlack(0.003, 0.024, 0.0205, cy, z);
     strip(0.004, 0.004, rc, 1, 0, cy, z - 0.004);
     setAim(0, cy, z, 0.24, 24);
   }
@@ -2602,7 +2618,7 @@ function tick(now){
   }
 
   // ADS: zoom, tightened feel, centered gun
-  adsT += ((aiming && !me.dead) ? 1 : -1) * dt * 8;
+  adsT += ((aiming && !me.dead && !me.reloading) ? 1 : -1) * dt * 8; // reload breaks ADS; held RMB re-engages after
   adsT = Math.max(0, Math.min(1, adsT));
   const targetFov = 78 - adsT * (vmAds ? vmAds.fovDrop : 24);
   if(Math.abs(camera.fov - targetFov) > 0.01){
