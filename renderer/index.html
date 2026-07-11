@@ -1290,7 +1290,7 @@ function buildGunModel(wid, eqOpt){
   // slot components — standard geometry, or replaced by the equipped part's variant
   const tipZ = vmBarrel(eq.barrel, w, frontZ);
   vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH);
-  vmForegrip(eq.foregrip, w, frontZ, bodyD);
+  vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH);
   vmStock(eq.stock, w, rearZ, bodyH);
   vmOptic(eq.optic, w, bodyZ, bodyH, bodyD);
 
@@ -1319,9 +1319,9 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
   const n = p ? p.name : '';
   const m = p ? partMat(p) : mat(0x2B3540);
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
-  const dark = () => tone(0.55);          // machined recess: darker shade of the part's OWN finish
+  const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
-  const voidM = () => mat(0x14181C);      // true openings only: vents, ports
+  const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
   let bw = 0.045; // half-width, drives side furniture placement
   if(!p){ vmBox(m, 0.09, bodyH, bodyD, 0, 0, bodyZ); }
   else if(n.includes('Forged')){
@@ -1360,9 +1360,9 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
 function vmBarrel(p, w, frontZ){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
-  const dark = () => tone(0.55);          // machined recess: darker shade of the part's OWN finish
+  const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
-  const voidM = () => mat(0x14181C);      // true openings only: vents, ports
+  const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
   const glowB = c => new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:0.9, side:THREE.DoubleSide, depthWrite:false});
   const base = w.type==='Pistol'?0.15 : w.type==='SMG'?0.2 : w.type==='Sniper'?0.5 : w.type==='LMG'?0.4 : 0.3;
   let len = base, tipPad = 0;
@@ -1440,9 +1440,9 @@ function vmBarrel(p, w, frontZ){
 function vmMagazine(p, w, bodyZ, bodyD, bodyH){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
-  const dark = () => tone(0.55);          // machined recess: darker shade of the part's OWN finish
+  const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
-  const voidM = () => mat(0x14181C);      // true openings only: vents, ports
+  const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
   const z = bodyZ + bodyD*0.05;
   const topIn = -bodyH/2 + 0.02; // mag tops tuck 2cm INTO the receiver — no float on any body height
   const well = (wd, dp) => vmBox(dark(), wd+0.014, 0.032, dp+0.014, 0, -bodyH/2 - 0.006, z); // magwell collar hides the seam
@@ -1470,7 +1470,6 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     }
     const rim = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.004, 6, 18), dark());
     rim.rotation.y = Math.PI/2; rim.position.set(0.027, topIn - 0.072, z); VMT.add(rim);
-    well(0.05, 0.052);
   } else if(n.includes('Extended')){
     const h = 0.22;
     vmBox(m, 0.05, h, 0.065, 0, topIn - h/2, z).rotation.x = -0.16;
@@ -1511,44 +1510,53 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     basePlate(0.05, 0.062, topIn - h - 0.004, -0.1);
   }
 }
-function vmForegrip(p, w, frontZ, bodyD){
+function vmForegrip(p, w, frontZ, bodyD, bodyH){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
-  const dark = () => tone(0.55);          // machined recess: darker shade of the part's OWN finish
-  const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
-  const voidM = () => mat(0x14181C);      // true openings only: vents, ports
+  const dark = () => tone(0.75);
+  const steel = () => mat(0x27303A);
   const z = frontZ + bodyD*0.22;
-  if(!p){ if(w.type!=='Pistol') vmBox(mat(0x1B232C), 0.05, 0.02, 0.1, 0, -0.065, z); return; }
+  const mountY = -bodyH/2; // actual receiver underside — grips attach HERE on every body height
+  const rail = (wd, dp) => vmBox(dark(), wd, 0.016, dp, 0, mountY - 0.006, z);
+  const hang = (g, h, rotX) => {
+    // pivot at the top: the grip's attachment point stays ON the rail no matter the angle
+    g.geometry.translate(0, -h/2, 0);
+    g.position.set(0, mountY - 0.012, z);
+    if(rotX) g.rotation.x = rotX;
+    VMT.add(g); return g;
+  };
+  if(!p){ if(w.type!=='Pistol') rail(0.05, 0.1); return; }
   if(n.includes('Vertical')){
-    vmBox(m, 0.04, 0.1, 0.045, 0, -0.11, z);
-    for(const dy of [-0.095, -0.125]) vmBox(dark(), 0.042, 0.005, 0.047, 0, dy, z); // finger grooves
-    vmBox(dark(), 0.046, 0.008, 0.05, 0, -0.062, z); // mount collar
-  }
-  else if(n.includes('Angled')){
-    const g = vmBox(m, 0.04, 0.09, 0.05, 0, -0.1, z); g.rotation.x = 0.55;
-    const fin = vmBox(dark(), 0.006, 0.07, 0.008, 0, -0.1, z - 0.02); fin.rotation.x = 0.55; // ridge fin
-  }
-  else if(n.includes('Skeleton') || n.includes('Claw')){
-    vmBox(m, 0.035, 0.09, 0.012, 0, -0.1, z-0.018);
-    vmBox(m, 0.035, 0.09, 0.012, 0, -0.1, z+0.018);
-    vmBox(steel(), 0.03, 0.01, 0.03, 0, -0.1, z); // cross brace
-  }
-  else if(n.includes('Brace')){
-    vmBox(m, 0.09, 0.07, 0.11, 0, -0.09, z);
+    rail(0.046, 0.06);
+    hang(new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.045), m), 0.1);
+    for(const fy of [0.05, 0.075]) vmBox(dark(), 0.042, 0.005, 0.047, 0, mountY - 0.012 - fy, z); // finger grooves
+  } else if(n.includes('Angled')){
+    rail(0.046, 0.07);
+    hang(new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.05), m), 0.1, 0.5);
+  } else if(n.includes('Skeleton') || n.includes('Claw')){
+    rail(0.04, 0.06);
+    for(const dz of [-0.018, 0.018]){
+      const pl = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.09, 0.012), m);
+      pl.geometry.translate(0, -0.045, 0);
+      pl.position.set(0, mountY - 0.012, z + dz); VMT.add(pl);
+    }
+    vmBox(steel(), 0.03, 0.01, 0.03, 0, mountY - 0.06, z); // cross brace
+  } else if(n.includes('Brace')){
+    hang(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, 0.11), m), 0.07);
     for(const sx of [-0.036, 0.036]) for(const dz of [-0.04, 0.04])
-      vmBox(steel(), 0.008, 0.008, 0.008, sx, -0.052, z + dz); // rivet studs
-  }
-  else {
-    vmBox(m, 0.055, 0.06, 0.06, 0, -0.085, z);
-    vmBox(dark(), 0.057, 0.014, 0.062, 0, -0.085, z); // knurl band
+      vmBox(steel(), 0.008, 0.008, 0.008, sx, mountY - 0.008, z + dz); // rivets along the mount line
+  } else {
+    rail(0.05, 0.062);
+    hang(new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), m), 0.06);
+    vmBox(dark(), 0.057, 0.014, 0.062, 0, mountY - 0.045, z); // knurl band
   }
 }
 function vmStock(p, w, rearZ, bodyH){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
-  const dark = () => tone(0.55);          // machined recess: darker shade of the part's OWN finish
+  const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
-  const voidM = () => mat(0x14181C);      // true openings only: vents, ports
+  const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
   // coupler: the block every stock bolts through — kills floating joints on all receiver heights
   const coupler = () => vmBox(tone(0.62), 0.074, Math.min(bodyH*0.78, 0.096), 0.028, 0, 0, rearZ + 0.012);
   if(!p){
@@ -1566,7 +1574,7 @@ function vmStock(p, w, rearZ, bodyH){
     vmBox(m, 0.05, 0.03, 0.09, 0, 0.04, rearZ + 0.1); // riser sits ON the body now
     const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.012, 10), steel());
     wheel.rotation.z = Math.PI/2; wheel.position.set(0.033, 0.04, rearZ + 0.1); VMT.add(wheel);
-    for(const dz of [0.155, 0.17]) vmBox(dark(), 0.062, 0.082, 0.004, 0, -0.015, rearZ + dz); // butt spacers
+    for(const dz of [0.155, 0.17]) vmBox(tone(0.8), 0.06, 0.08, 0.004, 0, -0.015, rearZ + dz); // butt spacers, flush
   } else if(n.includes('CQB')){
     vmBox(m, 0.065, 0.075, 0.06, 0, -0.005, rearZ + 0.03);
     vmCyl(dark(), 0.016, 0.045, rearZ + 0.008, -0.002); // buffer tube
@@ -1820,7 +1828,7 @@ function partThumb(part){
     if(part.slot==='frame') vmFrame(part, w, 0.44, 0.11, 0);
     else if(part.slot==='barrel') vmBarrel(part, w, 0);
     else if(part.slot==='magazine') vmMagazine(part, w, 0, 0.44, 0.11);
-    else if(part.slot==='foregrip') vmForegrip(part, w, -0.22, 0.44);
+    else if(part.slot==='foregrip') vmForegrip(part, w, -0.22, 0.44, 0.11);
     else if(part.slot==='stock') vmStock(part, w, 0, 0.11);
     else vmOptic(part, w, 0, 0.055, 0.44);
     const grp = VMT; VMT = null;
