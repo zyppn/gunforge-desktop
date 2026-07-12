@@ -2110,7 +2110,14 @@ function fire(e, dir){
   }
   if(e.isPlayer){
     gunSound(e.wep.type, 1);
-    G.recoil = Math.min(1, G.recoil + 0.45);
+    // violence scales with the shot: energy = dmg x pellets, plus class mass
+    const E = w.dmg * w.pellets;
+    const mass = w.type==='LMG' ? 0.5 : w.type==='Shotgun' ? 0.35 : w.type==='Sniper' ? 0.45 : 0;
+    const kick = (0.6 + E/45 + mass) * (adsT > 0.5 ? 0.85 : 1); // steadier on the sight
+    G.recoil = Math.min(1, G.recoil + 0.35*kick);
+    G.kickPitch = Math.min(0.085, G.kickPitch + 0.011*kick);
+    G.kickYaw += (Math.random()-0.5) * 0.006 * kick;
+    G.shake = Math.min(1, G.shake + (E > 40 ? 0.16 : 0.05) * kick);
     muzzle.material.opacity = 0.9; muzzle.rotation.z = Math.random()*6.28;
     muzzleLight.intensity = 1.6;
   } else if(e.mesh && e.mesh.userData.gunMuzzle){
@@ -2167,7 +2174,9 @@ function kill(t, src){
     if(src.wep && src.wep.abilities.has('killshield')) src.shield = Math.min(50, src.shield+25);
     if(src.wep && src.wep.abilities.has('fire_nova')){
       spawnBurst(t.x, t.z, 0xFF7A2A);
-      sfx('boom', Math.max(0.15, 1 - Math.hypot(t.x-G.me.x, t.z-G.me.z)/28) * 0.8);
+      const dNova = Math.hypot(t.x-G.me.x, t.z-G.me.z);
+      sfx('boom', Math.max(0.15, 1 - dNova/28) * 0.8);
+      G.shake = Math.min(1, G.shake + Math.max(0, 1 - dNova/20) * 0.4);
       for(const o of G.ents){
         if(o.dead || o === src || !hostile(src, o)) continue;
         if((o.x-t.x)**2 + (o.z-t.z)**2 < 16){ // 4u blast
@@ -2478,7 +2487,8 @@ function startMatch(){
     running:true, mode:setupSel.mode, map, ents:[], bullets:[], fx:[],
     time: setupSel.mode==='camp' ? 0 : 180, elapsed:0, recoil:0,
     teamScore:{blue:0, red:0}, wave:0, waveBreak:1.2, over:false, feed:[], dying:[],
-    last: performance.now()
+    last: performance.now(),
+    kickPitch: 0, kickYaw: 0, shake: 0
   };
   const me = mkEnt({
     name:P.name, isPlayer:true, team: G.mode==='ffa' ? 'me' : 'blue',
@@ -2743,7 +2753,9 @@ function tick(now){
         if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);
         if(b.expl){
           spawnBurst(p.x, p.z, 0xF08A3C);
-          sfx('boom', Math.max(0.1, 1 - Math.hypot(p.x-G.me.x, p.z-G.me.z)/30));
+          const dExp = Math.hypot(p.x-G.me.x, p.z-G.me.z);
+          sfx('boom', Math.max(0.1, 1 - dExp/30));
+          G.shake = Math.min(1, G.shake + Math.max(0, 1 - dExp/22) * 0.5);
           for(const o of G.ents){
             if(o.dead || o===e || !hostile(b.owner,o)) continue;
             if((o.x-p.x)**2+(o.z-p.z)**2 < 9) damage(o, 10, b.owner, false);
@@ -2805,8 +2817,17 @@ function tick(now){
   // camera + viewmodel
   camera.rotation.order = 'YXZ';
   camera.position.set(me.x, EYE, me.z);
-  camera.rotation.y = yaw; camera.rotation.x = pitch;
+  if(G.shake > 0.002){
+    camera.position.x += (Math.random()-0.5) * G.shake * 0.05;
+    camera.position.y += (Math.random()-0.5) * G.shake * 0.04;
+    camera.position.z += (Math.random()-0.5) * G.shake * 0.05;
+  }
+  camera.rotation.y = yaw + G.kickYaw;
+  camera.rotation.x = pitch + G.kickPitch;
   G.recoil = Math.max(0, G.recoil - dt*5);
+  G.kickPitch *= Math.max(0, 1 - 9*dt);   // the barrel settles
+  G.kickYaw   *= Math.max(0, 1 - 9*dt);
+  G.shake     *= Math.max(0, 1 - 7*dt);
   // movement bob
   const isMoving = !me.dead && (keys['w']||keys['a']||keys['s']||keys['d']);
   if(isMoving){
