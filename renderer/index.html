@@ -1477,23 +1477,25 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     well(0.05, 0.065);
     basePlate(0.05, 0.065, topIn - h - 0.004, -0.16);
   } else if(n.includes('Belt')){
-    // belt-fed = ONE flank ammo box with the belt visibly feeding out of it
+    // ONE flank ammo box; the belt TAIL dangles from its bottom corner — unmistakably bullets
     const tw = 0.08, th = 0.12, td = 0.105;
     const bx = 0.012 + tw/2;
     vmBox(m, tw, th, td, bx, topIn - th/2 + 0.012, z);                       // ammo box
-    vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, topIn - th + 0.018, z);     // base band — 2mm clear of the bottom face (kills the z-fight)
-    vmBox(dark(), 0.002, th*0.66, td*0.78, 0.012 + tw + 0.0015, topIn - th/2 + 0.008, z); // lid seam, 0.5mm proud of the face
+    vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, topIn - th + 0.018, z);     // base band, 2mm clear of the bottom
+    for(const fy of [0.32, 0.58]) // stamped ribs like a real ammo can — no more porthole plate
+      vmBox(dark(), 0.0015, 0.005, td*0.78, 0.012 + tw + 0.0008, topIn + 0.012 - th*fy, z);
     vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.004, topIn - th*0.5, z); // latch
     vmBox(tone(0.8), 0.022, 0.018, 0.045, 0.016, topIn + 0.004, z);          // feed chute into the receiver
-    // exposed belt draping down the OUTER face — visible on the gun and on the card
-    const ox = 0.012 + tw + 0.006;
-    vmBox(tone(0.7), 0.016, 0.01, 0.03, 0.012 + tw - 0.002, topIn - 0.017, z); // exit guide at the top edge
-    for(let i=0;i<5;i++){
-      const ry = topIn - 0.026 - i*0.0125;
-      const rz = z + Math.sin(i*0.9) * 0.006; // slight sway — a belt, not a rod
-      const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.0048, 0.0048, 0.02, 6), mat(0xC9A15A));
-      rnd.rotation.x = Math.PI/2; rnd.position.set(ox, ry, rz); VMT.add(rnd);
-      if(i < 4) vmBox(steel(), 0.002, 0.009, 0.016, ox + 0.0035, ry - 0.006, rz); // links between rounds
+    const byBot = topIn + 0.012 - th, bz0 = z - td/2 + 0.014;
+    const tx = 0.012 + tw + 0.005; // OUTBOARD of the outer face — outside the box silhouette from every angle
+    vmBox(tone(0.7), 0.014, 0.012, 0.02, 0.012 + tw - 0.002, byBot + 0.004, bz0); // exit port wraps the bottom edge
+    const brass = () => mat(0xC9A15A, 0xC9A15A, 0.18);
+    for(let i=0;i<4;i++){ // chunky linked rounds hanging with a slight curl
+      const ry = byBot - 0.009 - i*0.017;
+      const rz = bz0 - Math.sin(i*0.55)*0.011;
+      const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.0068, 0.0068, 0.026, 7), brass());
+      rnd.rotation.x = Math.PI/2; rnd.position.set(tx, ry, rz); VMT.add(rnd);
+      if(i < 3) vmBox(steel(), 0.014, 0.004, 0.01, tx, ry - 0.0085, rz - 0.0045); // links
     }
   } else if(n.includes('Compact')){
     const h = 0.075;
