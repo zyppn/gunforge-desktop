@@ -2117,7 +2117,7 @@ function fire(e, dir){
     G.recoil = Math.min(1, G.recoil + 0.35*kick);
     G.kickPitch = Math.min(0.085, G.kickPitch + 0.011*kick);
     G.kickYaw += (Math.random()-0.5) * 0.006 * kick;
-    G.shake = Math.min(1, G.shake + (E > 40 ? 0.16 : 0.05) * kick);
+    if(w.type === 'Shotgun') G.shake = Math.min(1, G.shake + 0.16 * kick); // only the Warden rattles the frame
     muzzle.material.opacity = 0.9; muzzle.rotation.z = Math.random()*6.28;
     muzzleLight.intensity = 1.6;
   } else if(e.mesh && e.mesh.userData.gunMuzzle){
@@ -2149,6 +2149,11 @@ function damage(t, amount, src, isCrit){
   }
   if(t.isPlayer){
     sfx('hurt');
+    // flinch: quick rattle + small view punch, scaled to the hit (Warzone-style)
+    const hitF = Math.min(1, dmg / 30);
+    G.shake = Math.min(1, G.shake + 0.12 + hitF * 0.25);
+    G.kickPitch = Math.min(0.085, G.kickPitch + 0.006 + hitF * 0.008);
+    G.kickYaw += (Math.random()-0.5) * (0.005 + hitF * 0.006);
     const v = $('#vign'); v.style.opacity = 0.9; setTimeout(()=>{ v.style.opacity = 0; }, 160);
   }
   if(src && src.isPlayer && src!==t){
@@ -2176,7 +2181,6 @@ function kill(t, src){
       spawnBurst(t.x, t.z, 0xFF7A2A);
       const dNova = Math.hypot(t.x-G.me.x, t.z-G.me.z);
       sfx('boom', Math.max(0.15, 1 - dNova/28) * 0.8);
-      G.shake = Math.min(1, G.shake + Math.max(0, 1 - dNova/20) * 0.4);
       for(const o of G.ents){
         if(o.dead || o === src || !hostile(src, o)) continue;
         if((o.x-t.x)**2 + (o.z-t.z)**2 < 16){ // 4u blast
@@ -2755,7 +2759,6 @@ function tick(now){
           spawnBurst(p.x, p.z, 0xF08A3C);
           const dExp = Math.hypot(p.x-G.me.x, p.z-G.me.z);
           sfx('boom', Math.max(0.1, 1 - dExp/30));
-          G.shake = Math.min(1, G.shake + Math.max(0, 1 - dExp/22) * 0.5);
           for(const o of G.ents){
             if(o.dead || o===e || !hostile(b.owner,o)) continue;
             if((o.x-p.x)**2+(o.z-p.z)**2 < 9) damage(o, 10, b.owner, false);
