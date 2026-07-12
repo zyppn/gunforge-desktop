@@ -2114,10 +2114,12 @@ function fire(e, dir){
     const E = w.dmg * w.pellets;
     const mass = w.type==='LMG' ? 0.5 : w.type==='Shotgun' ? 0.35 : w.type==='Sniper' ? 0.45 : 0;
     const kick = (0.6 + E/45 + mass) * (adsT > 0.5 ? 0.85 : 1); // steadier on the sight
-    G.recoil = Math.min(1, G.recoil + 0.35*kick);
-    G.kickPitch = Math.min(0.085, G.kickPitch + 0.011*kick);
-    G.kickYaw += (Math.random()-0.5) * 0.006 * kick;
-    if(w.type === 'Shotgun') G.shake = Math.min(1, G.shake + 0.16 * kick); // only the Warden rattles the frame
+    G.recoil = Math.min(1, G.recoil + 0.35*kick); // the gun bucks in your hands on every weapon...
+    if(w.type === 'Shotgun' || w.type === 'Sniper'){ // ...but only the heavy hitters punch the camera
+      G.kickPitch = Math.min(0.085, G.kickPitch + 0.011*kick);
+      G.kickYaw += (Math.random()-0.5) * 0.006 * kick;
+    }
+    if(w.type === 'Shotgun') G.shake = Math.min(1, G.shake + 0.16 * kick); // and only the Warden rattles the frame
     muzzle.material.opacity = 0.9; muzzle.rotation.z = Math.random()*6.28;
     muzzleLight.intensity = 1.6;
   } else if(e.mesh && e.mesh.userData.gunMuzzle){
