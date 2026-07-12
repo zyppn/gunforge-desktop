@@ -1477,25 +1477,25 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     well(0.05, 0.065);
     basePlate(0.05, 0.065, topIn - h - 0.004, -0.16);
   } else if(n.includes('Belt')){
-    // ONE flank ammo box; the belt TAIL dangles from its bottom corner — unmistakably bullets
-    const tw = 0.08, th = 0.12, td = 0.105;
+    // macro-scale belt feed: the box hangs on brackets below the receiver,
+    // and FAT cartridges visibly climb the open gap into the gun. Chunky, style-native.
+    const tw = 0.08, th = 0.115, td = 0.105;
     const bx = 0.012 + tw/2;
-    vmBox(m, tw, th, td, bx, topIn - th/2 + 0.012, z);                       // ammo box
-    vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, topIn - th + 0.018, z);     // base band, 2mm clear of the bottom
-    for(const fy of [0.32, 0.58]) // stamped ribs like a real ammo can — no more porthole plate
-      vmBox(dark(), 0.0015, 0.005, td*0.78, 0.012 + tw + 0.0008, topIn + 0.012 - th*fy, z);
-    vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.004, topIn - th*0.5, z); // latch
-    vmBox(tone(0.8), 0.022, 0.018, 0.045, 0.016, topIn + 0.004, z);          // feed chute into the receiver
-    const byBot = topIn + 0.012 - th, bz0 = z - td/2 + 0.014;
-    const tx = 0.012 + tw + 0.005; // OUTBOARD of the outer face — outside the box silhouette from every angle
-    vmBox(tone(0.7), 0.014, 0.012, 0.02, 0.012 + tw - 0.002, byBot + 0.004, bz0); // exit port wraps the bottom edge
-    const brass = () => mat(0xC9A15A, 0xC9A15A, 0.18);
-    for(let i=0;i<4;i++){ // chunky linked rounds hanging with a slight curl
-      const ry = byBot - 0.009 - i*0.017;
-      const rz = bz0 - Math.sin(i*0.55)*0.011;
-      const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.0068, 0.0068, 0.026, 7), brass());
-      rnd.rotation.x = Math.PI/2; rnd.position.set(tx, ry, rz); VMT.add(rnd);
-      if(i < 3) vmBox(steel(), 0.014, 0.004, 0.01, tx, ry - 0.0085, rz - 0.0045); // links
+    const gap = 0.016;
+    const boxTop = -bodyH/2 - gap;
+    vmBox(m, tw, th, td, bx, boxTop - th/2, z);
+    vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, boxTop - th + 0.006, z);        // base band
+    vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.003, boxTop - th*0.5, z);  // latch
+    for(const fy of [0.3, 0.55])
+      vmBox(dark(), 0.0015, 0.005, td*0.75, 0.012 + tw + 0.0008, boxTop - th*fy, z); // stamped ribs
+    for(const dz of [-td*0.35, td*0.35])                                          // hanger straps to the receiver
+      vmBox(steel(), 0.006, gap + 0.012, 0.014, bx + 0.028, -bodyH/2 - gap/2 + 0.002, z + dz);
+    for(let i=0;i<4;i++){ // the belt: big cartridges bridging box -> receiver
+      const t = i/3;
+      const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.05, 8), mat(0xC9A15A, 0xC9A15A, 0.15));
+      rnd.rotation.x = Math.PI/2;
+      rnd.position.set(bx + 0.012 - t*0.022, boxTop + 0.004 + t*(gap + 0.008), z - 0.01 + t*0.02);
+      VMT.add(rnd);
     }
   } else if(n.includes('Compact')){
     const h = 0.075;
