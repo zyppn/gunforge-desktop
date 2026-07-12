@@ -1477,16 +1477,20 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     well(0.05, 0.065);
     basePlate(0.05, 0.065, topIn - h - 0.004, -0.16);
   } else if(n.includes('Belt')){
-    // belt-fed = ONE ammo box saddled on the receiver's flank — no stick mag alongside
-    const tw = 0.085, th = 0.11, td = 0.1;
-    vmBox(m, tw, th, td, 0.012 + tw/2, topIn - th/2 + 0.012, z);                   // ammo box, top tucked into the body
-    vmBox(dark(), tw+0.004, 0.006, td+0.004, 0.012 + tw/2, topIn - th + 0.015, z); // base seam
-    vmBox(dark(), 0.002, th*0.7, td*0.8, 0.012 + tw + 0.001, topIn - th/2 + 0.01, z); // lid seam on the outer face
-    vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.003, topIn - th*0.55, z);    // latch
-    vmBox(tone(0.8), 0.022, 0.018, 0.045, 0.018, topIn + 0.005, z);                // feed chute into the receiver
-    for(let i=0;i<3;i++){
-      const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.018, 6), mat(0xC9A15A));
-      rnd.rotation.x = Math.PI/2; rnd.position.set(0.03 + i*0.013, topIn + 0.001, z); VMT.add(rnd);
+    // belt-fed = ONE flank ammo box with the belt visibly feeding out of it
+    const tw = 0.08, th = 0.12, td = 0.105;
+    const bx = 0.012 + tw/2;
+    vmBox(m, tw, th, td, bx, topIn - th/2 + 0.012, z);                       // ammo box
+    vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, topIn - th + 0.018, z);     // base band — 2mm clear of the bottom face (kills the z-fight)
+    vmBox(dark(), 0.002, th*0.66, td*0.78, 0.012 + tw + 0.0015, topIn - th/2 + 0.008, z); // lid seam, 0.5mm proud of the face
+    vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.004, topIn - th*0.5, z); // latch
+    vmBox(tone(0.8), 0.022, 0.018, 0.045, 0.016, topIn + 0.004, z);          // feed chute into the receiver
+    for(let i=0;i<6;i++){ // linked belt arcing from the box top into the chute
+      const t = i/5;
+      const rx = 0.055 - t*0.04, ry = topIn - 0.012 + t*0.018;
+      const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.0048, 0.0048, 0.02, 6), mat(0xC9A15A));
+      rnd.rotation.x = Math.PI/2; rnd.position.set(rx, ry, z); VMT.add(rnd);
+      vmBox(steel(), 0.011, 0.003, 0.023, rx, ry - 0.0045, z); // belt links under the rounds
     }
   } else if(n.includes('Compact')){
     const h = 0.075;
