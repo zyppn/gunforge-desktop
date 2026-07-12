@@ -1485,12 +1485,15 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     vmBox(dark(), 0.002, th*0.66, td*0.78, 0.012 + tw + 0.0015, topIn - th/2 + 0.008, z); // lid seam, 0.5mm proud of the face
     vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.004, topIn - th*0.5, z); // latch
     vmBox(tone(0.8), 0.022, 0.018, 0.045, 0.016, topIn + 0.004, z);          // feed chute into the receiver
-    for(let i=0;i<6;i++){ // linked belt arcing from the box top into the chute
-      const t = i/5;
-      const rx = 0.055 - t*0.04, ry = topIn - 0.012 + t*0.018;
+    // exposed belt draping down the OUTER face — visible on the gun and on the card
+    const ox = 0.012 + tw + 0.006;
+    vmBox(tone(0.7), 0.016, 0.01, 0.03, 0.012 + tw - 0.002, topIn - 0.017, z); // exit guide at the top edge
+    for(let i=0;i<5;i++){
+      const ry = topIn - 0.026 - i*0.0125;
+      const rz = z + Math.sin(i*0.9) * 0.006; // slight sway — a belt, not a rod
       const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.0048, 0.0048, 0.02, 6), mat(0xC9A15A));
-      rnd.rotation.x = Math.PI/2; rnd.position.set(rx, ry, z); VMT.add(rnd);
-      vmBox(steel(), 0.011, 0.003, 0.023, rx, ry - 0.0045, z); // belt links under the rounds
+      rnd.rotation.x = Math.PI/2; rnd.position.set(ox, ry, rz); VMT.add(rnd);
+      if(i < 4) vmBox(steel(), 0.002, 0.009, 0.016, ox + 0.0035, ry - 0.006, rz); // links between rounds
     }
   } else if(n.includes('Compact')){
     const h = 0.075;
@@ -1840,7 +1843,7 @@ function partThumb(part){
     const grp = VMT; VMT = null;
     // long parts read best side-on; compact parts get a three-quarter view
     const sideOn = part.slot==='barrel' || part.slot==='stock' || part.slot==='frame';
-    grp.rotation.y = sideOn ? 1.25 : 0.7;
+    grp.rotation.y = sideOn ? 1.25 : (part.slot==='magazine' ? -0.7 : 0.7); // mags face their feed side to the camera
     grp.rotation.x = sideOn ? 0.18 : 0.35;
     scene2.add(grp);
     grp.updateMatrixWorld(true);
