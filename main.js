@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
@@ -38,6 +38,16 @@ ipcMain.handle('store:set', (e, key, value) => {
   return true;
 });
 
+function buildMenu(){
+  // no View menu = no Cmd+/Cmd- zoom or Cmd+R reload accelerators; edit/window shortcuts kept
+  const template = [
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow(){
   win = new BrowserWindow({
     width: 1280,
@@ -53,6 +63,12 @@ function createWindow(){
       sandbox: true
     }
   });
+  win.webContents.setVisualZoomLevelLimits(1, 1); // no pinch zoom
+  win.webContents.on('before-input-event', (e, input) => {
+    // swallow browser-zoom chords even if a future menu reintroduces them
+    if((input.control || input.meta) && ['=', '+', '-', '_', '0'].includes(input.key)) e.preventDefault();
+  });
+  win.webContents.on('did-finish-load', () => { try{ win.webContents.setZoomFactor(1); }catch(e){} });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   win.webContents.on('did-finish-load', () => {
@@ -78,6 +94,7 @@ autoUpdater.on('error', (e) => {
 });
 
 app.whenReady().then(() => {
+  buildMenu();
   saveFile = path.join(app.getPath('userData'), 'gunforge-save.json');
   createWindow();
   app.on('activate', () => { if(BrowserWindow.getAllWindows().length === 0) createWindow(); });

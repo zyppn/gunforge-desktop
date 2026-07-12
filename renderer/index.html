@@ -1488,8 +1488,8 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.003, boxTop - th*0.5, z);  // latch
     for(const fy of [0.3, 0.55])
       vmBox(dark(), 0.0015, 0.005, td*0.75, 0.012 + tw + 0.0008, boxTop - th*fy, z); // stamped ribs
-    for(const dz of [-td*0.35, td*0.35])                                          // hanger straps to the receiver
-      vmBox(steel(), 0.006, gap + 0.012, 0.014, bx + 0.028, -bodyH/2 - gap/2 + 0.002, z + dz);
+    for(const dz of [-td*0.35, td*0.35])                                          // flat mounting studs on the lid
+      vmBox(steel(), 0.014, 0.008, 0.02, bx + 0.026, boxTop + 0.004, z + dz);
     for(let i=0;i<4;i++){ // the belt: big cartridges bridging box -> receiver
       const t = i/3;
       const rnd = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.05, 8), mat(0xC9A15A, 0xC9A15A, 0.15));
