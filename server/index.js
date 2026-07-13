@@ -134,6 +134,7 @@ class ArenaRoom extends Room {
     const now = Date.now();
     if((this.fireT.get(id) || 0) > now) return;
     this.fireT.set(id, now + 140); // phase 1: single generic ROF; phase 2 reads the verified loadout
+    this.broadcast('shot', { id, x: p.x, z: p.z, yaw: inp.yaw }, { except: this.clients.find(c => c.sessionId === id) });
     // instant-trace hit registration on the server
     const dx = Math.cos(inp.yaw), dz = Math.sin(inp.yaw);
     let best = null, bestD = 60;
