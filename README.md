@@ -59,3 +59,4 @@ Desktop packaging doesn't change the netcode reality: real-time PvP needs an
 authoritative server (Colyseus/Node on Fly.io or Railway) relaying inputs and
 adjudicating hits. The desktop client connects to it over WebSocket exactly like
 a web client would. Shared-economy multiplayer (the Supabase market) works today.
+
