@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
@@ -24,6 +24,10 @@ function scheduleWrite(){
   writeT = setTimeout(flushStore, 150);
 }
 
+ipcMain.handle('open:releases', () => {
+  shell.openExternal('https://github.com/zyppn/gunforge-desktop/releases/latest');
+  return true;
+});
 ipcMain.handle('win:fullscreen', (e, on) => {
   if(win) win.setFullScreen(!!on);
   return true;
@@ -77,11 +81,17 @@ function createWindow(){
 }
 
 /* --- auto-updater events --- */
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+// Unsigned macOS apps cannot self-install (Squirrel validates code signatures),
+// so on mac we detect updates and hand the user a one-click download instead.
+const canSelfUpdate = process.platform !== 'darwin';
+autoUpdater.autoDownload = canSelfUpdate;
+autoUpdater.autoInstallOnAppQuit = canSelfUpdate;
 
-autoUpdater.on('update-available', () => {
-  win && win.webContents.send('updater', { type: 'available' });
+autoUpdater.on('update-available', (info) => {
+  const version = info && info.version;
+  win && win.webContents.send('updater', canSelfUpdate
+    ? { type: 'available', version }
+    : { type: 'manual', version });
 });
 autoUpdater.on('download-progress', (p) => {
   win && win.webContents.send('updater', { type: 'progress', pct: Math.round(p.percent) });

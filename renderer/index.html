@@ -3041,8 +3041,27 @@ function playDropSound(rarity){
 /* --- auto-updater toast (Electron desktop only) --- */
 (function(){
   if(typeof window === 'undefined' || !window.gunforgeNative || !window.gunforgeNative.onUpdater) return;
+  function manualBanner(version){
+    let b = document.getElementById('updbanner');
+    if(!b){
+      b = document.createElement('div');
+      b.id = 'updbanner';
+      b.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:80;' +
+        'background:#12181F;border:1px solid #E8A33D;color:#E8A33D;padding:11px 18px;' +
+        'font-weight:600;font-size:12px;letter-spacing:.08em;cursor:pointer;border-radius:4px;' +
+        'box-shadow:0 6px 24px rgba(0,0,0,.5)';
+      b.addEventListener('click', () => {
+        b.textContent = 'OPENING DOWNLOAD PAGE…';
+        try{ window.gunforgeNative.openReleases(); }catch(e){}
+        setTimeout(() => b.remove(), 2500);
+      });
+      document.body.appendChild(b);
+    }
+    b.textContent = 'UPDATE ' + (version ? 'v'+version+' ' : '') + 'AVAILABLE — CLICK TO DOWNLOAD';
+  }
   window.gunforgeNative.onUpdater(msg => {
-    if(msg.type === 'available') toast('UPDATE AVAILABLE — DOWNLOADING IN BACKGROUND');
+    if(msg.type === 'manual') manualBanner(msg.version);                     // macOS: unsigned apps can't self-install
+    else if(msg.type === 'available') toast('UPDATE AVAILABLE — DOWNLOADING IN BACKGROUND');
     else if(msg.type === 'progress') toast('DOWNLOADING UPDATE — ' + msg.pct + '%');
     else if(msg.type === 'downloaded') toast('UPDATE READY — WILL INSTALL ON NEXT LAUNCH');
   });
