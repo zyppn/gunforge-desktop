@@ -3059,12 +3059,19 @@ function playDropSound(rarity){
     }
     b.textContent = 'UPDATE ' + (version ? 'v'+version+' ' : '') + 'AVAILABLE — CLICK TO DOWNLOAD';
   }
-  window.gunforgeNative.onUpdater(msg => {
+  function handleUpd(msg){
+    if(!msg) return;
     if(msg.type === 'manual') manualBanner(msg.version);                     // macOS: unsigned apps can't self-install
     else if(msg.type === 'available') toast('UPDATE AVAILABLE — DOWNLOADING IN BACKGROUND');
     else if(msg.type === 'progress') toast('DOWNLOADING UPDATE — ' + msg.pct + '%');
     else if(msg.type === 'downloaded') toast('UPDATE READY — WILL INSTALL ON NEXT LAUNCH');
-  });
+    else if(msg.type === 'error') toast('UPDATE CHECK FAILED — ' + (msg.message || 'unknown'));
+  }
+  window.gunforgeNative.onUpdater(handleUpd);
+  // late-join: if the check finished before this script loaded, pull the last state
+  if(window.gunforgeNative.updaterState){
+    window.gunforgeNative.updaterState().then(handleUpd).catch(()=>{});
+  }
 })();
 
 /* ---------------- boot ---------------- */

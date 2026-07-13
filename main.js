@@ -76,32 +76,48 @@ function createWindow(){
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   win.webContents.on('did-finish-load', () => {
-    autoUpdater.checkForUpdates();
+    // slight delay dodges the load race; periodic re-checks catch releases published while playing
+    setTimeout(() => { try{ autoUpdater.checkForUpdates(); }catch(e){ sendUpd({type:'error', message: e.message}); } }, 2000);
   });
+  setInterval(() => { try{ autoUpdater.checkForUpdates(); }catch(e){} }, 10*60*1000);
 }
 
 /* --- auto-updater events --- */
+let lastUpdaterMsg = null;
+function updLog(msg){
+  try{
+    fs.appendFileSync(path.join(app.getPath('userData'), 'updater.log'),
+      new Date().toISOString() + ' ' + JSON.stringify(msg) + '\n');
+  }catch(e){}
+}
+function sendUpd(msg){
+  lastUpdaterMsg = msg;
+  updLog(msg);
+  win && win.webContents.send('updater', msg);
+}
 // Unsigned macOS apps cannot self-install (Squirrel validates code signatures),
 // so on mac we detect updates and hand the user a one-click download instead.
 const canSelfUpdate = process.platform !== 'darwin';
 autoUpdater.autoDownload = canSelfUpdate;
 autoUpdater.autoInstallOnAppQuit = canSelfUpdate;
 
+autoUpdater.on('checking-for-update', () => updLog({type:'checking', current: app.getVersion()}));
+autoUpdater.on('update-not-available', () => updLog({type:'none', current: app.getVersion()}));
 autoUpdater.on('update-available', (info) => {
   const version = info && info.version;
-  win && win.webContents.send('updater', canSelfUpdate
-    ? { type: 'available', version }
-    : { type: 'manual', version });
+  sendUpd(canSelfUpdate ? { type: 'available', version } : { type: 'manual', version });
 });
 autoUpdater.on('download-progress', (p) => {
-  win && win.webContents.send('updater', { type: 'progress', pct: Math.round(p.percent) });
+  sendUpd({ type: 'progress', pct: Math.round(p.percent) });
 });
 autoUpdater.on('update-downloaded', () => {
-  win && win.webContents.send('updater', { type: 'downloaded' });
+  sendUpd({ type: 'downloaded' });
 });
 autoUpdater.on('error', (e) => {
-  console.error('updater error', e.message);
+  sendUpd({ type: 'error', message: String(e && e.message || e).slice(0, 200) });
 });
+
+ipcMain.handle('updater:state', () => lastUpdaterMsg);
 
 app.whenReady().then(() => {
   buildMenu();
