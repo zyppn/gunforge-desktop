@@ -5,6 +5,16 @@ const path = require('path');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
+/* One game instance per machine: no multi-window match farming, no save-file write races.
+   Dev/LAN testing on one machine: `npm start -- --multi` opts out. */
+const multiOk = process.argv.includes('--multi');
+if(!multiOk && !app.requestSingleInstanceLock()){
+  app.quit();
+}
+app.on('second-instance', () => {
+  if(win){ if(win.isMinimized()) win.restore(); win.focus(); }
+});
+
 let win = null;
 let saveFile = null;
 let data = null;
@@ -47,6 +57,7 @@ function buildMenu(){
   const template = [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
     { role: 'editMenu' },
+    ...(app.isPackaged ? [] : [{ role: 'viewMenu' }]), // devtools + reload for `npm start` only
     { role: 'windowMenu' },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -61,6 +72,7 @@ function createWindow(){
     backgroundColor: '#0D1117',
     autoHideMenuBar: true,
     webPreferences: {
+      backgroundThrottling: false, // live matches keep rendering/syncing when the window loses focus
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,

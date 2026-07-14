@@ -146,7 +146,8 @@
   #killfeed .me{color:var(--brass)}
   #hudbl{position:absolute;left:12px;bottom:12px;width:230px}
   .hbar{height:14px;background:rgba(10,14,19,.8);border:1px solid var(--line);position:relative;margin-top:4px}
-  .hbar i{position:absolute;inset:1px;transform-origin:left;background:var(--green)}
+  .hbar i{position:absolute;inset:1px;transform-origin:left !important;background:var(--green)}
+  #hpbar,#shbar{transform-origin:left !important}
   .hbar.sh i{background:var(--blue)}
   .hbar span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;text-shadow:0 1px 2px #000}
   #hudbr{position:absolute;right:12px;bottom:12px;text-align:right;text-shadow:0 1px 2px #000}
@@ -247,6 +248,7 @@
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
         <div id="hudtop">
           <div class="box" id="timer">3:00</div>
+          <div id="pingtag" style="position:absolute;top:2px;left:10px;display:none;font-size:10px;letter-spacing:.1em;opacity:.6;color:#7E8B99;pointer-events:none">PING —</div>
           <div class="box" id="scoreline">—</div>
         </div>
         <div id="killfeed"></div>
@@ -261,8 +263,8 @@
         </div>
         <div id="banner"></div>
         <div id="pauseov">
-          <div class="pt">PAUSED</div>
-          <div class="note">Pointer released. Click resume to re-engage.</div>
+          <div class="pt" id="pausetitle">PAUSED</div>
+          <div class="note" id="pausenote">Pointer released. Click resume to re-engage.</div>
           <div class="btnrow"><button class="btn primary" id="resumebtn">▸ RESUME</button>
           <button class="btn" id="setbtn">SETTINGS</button>
           <button class="btn danger" id="quitbtn">ABANDON MATCH</button></div>
@@ -301,6 +303,7 @@
 <div id="toasts"></div>
 
 <script src="vendor/three.min.js"></script>
+<script src="vendor/colyseus.js"></script>
 <script>
 if (typeof THREE === 'undefined') {
   // local copy missing — pull from CDN before the game script runs (blocking on purpose)
@@ -706,6 +709,7 @@ function renderMenu(){
    +'<div class="statline"><span>Wins</span><b>'+P.stats.wins+'</b></div>'
    +'<div class="statline"><span>K / D</span><b>'+P.stats.kills+' / '+P.stats.deaths+'</b></div>'
    +'</div>'
+   +'<div class="note" style="margin-top:10px;opacity:.55">CLIENT BUILD '+CLIENT_BUILD+'</div>'
    +'<div class="btnrow"><button class="btn sm" onclick="renameOp()">CHANGE CALLSIGN</button>'
    +'<button class="btn sm" onclick="menuSettings()">SETTINGS</button></div>'
    +'</div>';
@@ -983,10 +987,12 @@ const MAPS = [
     spawns:[[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] },
 ];
 
+const CLIENT_BUILD = 'live-14';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
   {id:'camp', name:'CAMPAIGN',       d:'PvE. Survive 8 escalating waves of hostiles. One life per run.'},
+  {id:'live', name:'LIVE ARENA',     d:'Online PvP against real operators. Server-authoritative. First to 20.'},
 ];
 let setupSel = {mode:'ffa', map:'foundry'};
 function openSetup(){
@@ -997,6 +1003,13 @@ function openSetup(){
    '<div class="eyebrow">Deployment</div><h2>Match Setup</h2>'
    +'<div class="panel" style="margin-top:12px"><div class="eyebrow">Game mode</div><div class="optrow">'+modeRow+'</div></div>'
    +'<div class="panel"><div class="eyebrow">Map</div><div class="optrow">'+mapRow+'</div></div>'
+   +(setupSel.mode==='live'
+      ? '<div class="panel"><div class="eyebrow">Live server</div>'
+        +'<input id="livesrv" type="text" value="'+esc(liveUrl())+'" '
+        +'style="width:100%;margin-top:8px;background:#0D1218;border:1px solid #2A3542;color:var(--ink);padding:9px 10px;font-family:inherit;font-size:13px" '
+        +'onchange="localStorage.setItem(\'gunforge_live_url\', this.value.trim())">'
+        +'<div class="note" style="margin-top:6px">ws://host:2567 — where your gunforge-server is running.</div></div>'
+      : '')
    +'<div class="panel"><div class="eyebrow">Loadout check</div>'
    +'<div class="note" style="margin-top:6px">Deploying with <b style="color:var(--brass)">'+esc(L.base.name)+'</b> ('+esc(L.base.type)+')'
    +(L.sets.length? ' — active sets: '+L.sets.map(s=>esc(s.name)).join(', ') : '')+'. Change it in the Armory.</div></div>'
@@ -1130,8 +1143,39 @@ function sfx(kind, vol){
 }
 
 /* --- input --- */
-window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; });
-window.addEventListener('blur', ()=>{ for(const k in keys) keys[k] = false; mouseDown = false; });
+window.addEventListener('keydown', e=>{
+  keys[e.key.toLowerCase()] = true;
+  if(e.key === 'Tab'){
+    // Tab never drives browser focus in a game shell — no focus ring hopping between buttons
+    const tg = e.target;
+    if(!tg || !/^(INPUT|TEXTAREA)$/.test(tg.tagName || '')) e.preventDefault();
+  }
+  if(e.key === 'Tab' && G && G.running && G.mode === 'live'){
+    let sb = document.getElementById('livescore');
+    if(!sb){
+      sb = document.createElement('div');
+      sb.id = 'livescore';
+      sb.style.cssText = 'position:absolute;top:64px;left:50%;transform:translateX(-50%);z-index:4;background:rgba(10,14,19,.9);border:1px solid var(--line);padding:12px 18px;min-width:280px;pointer-events:none';
+      document.getElementById('gamewrap').appendChild(sb);
+    }
+    if(live && live.room){
+      const rows = [];
+      live.room.state.players.forEach(p => rows.push(p));
+      rows.sort((a,b)=>b.kills-a.kills);
+      sb.innerHTML = '<div class="eyebrow">Operators</div>' + rows.map((p,i)=>
+        '<div style="display:flex;justify-content:space-between;gap:18px'+(p.name===P.name?';color:var(--accent)':'')+'"><span>#'+(i+1)+' '+esc(p.name)+'</span><b>'+p.kills+' / '+p.deaths+'</b></div>').join('')
+        + (typeof live.ping === 'number' ? '<div style="margin-top:6px;opacity:.5;font-size:10px">PING '+live.ping+'ms</div>' : '');
+    }
+    sb.style.display = 'block';
+  }
+});
+window.addEventListener('keyup', e=>{
+  if(e.key === 'Tab'){ const sb = document.getElementById('livescore'); if(sb) sb.style.display = 'none'; }
+});
+window.addEventListener('blur', ()=>{
+  for(const k in keys) keys[k] = false; mouseDown = false;
+  try{ document.exitPointerLock(); }catch(e){} // owning the pointer while unfocused yanks macOS Spaces back
+});
 window.addEventListener('keyup',   e=>{ keys[e.key.toLowerCase()] = false; });
 cv.addEventListener('mousedown', e=>{
   if(e.button === 2){ if(G && G.running && locked) aiming = true; return; }
@@ -1147,6 +1191,12 @@ window.addEventListener('mouseup', e=>{
 document.addEventListener('pointerlockchange', ()=>{
   locked = document.pointerLockElement === cv;
   if(!locked) aiming = false;
+  if(!locked && G && G.running){
+    const lv = G.mode === 'live';
+    const pt = document.getElementById('pausetitle'), pn = document.getElementById('pausenote');
+    if(pt) pt.textContent = lv ? 'MENU' : 'PAUSED';
+    if(pn) pn.textContent = lv ? 'Live match continues — you are exposed. Resume fast.' : 'Pointer released. Click resume to re-engage.';
+  }
   if(G && G.running){
     paused = !locked || settingsOpen;
     $('#pauseov').classList.toggle('on', !locked && !settingsOpen);
@@ -1299,6 +1349,7 @@ function buildGunModel(wid, eqOpt){
 }
 let vmAds = null;
 function buildViewmodel(){
+  if(typeof vm !== 'undefined' && vm && vm.parent) vm.parent.remove(vm); // never two guns in hand
   const built = buildGunModel(P.equippedWeapon);
   vm = built.group;
   vmAds = (built.aim && built.ads)
@@ -2481,6 +2532,8 @@ function botThink(e, dt){
 /* --- match lifecycle --- */
 function startMatch(){
   au();
+  if(G && G.running) return; // a match is already up — ignore double deploys
+  if(setupSel.mode === 'live'){ startLiveMatch(); return; }
   for(const k in keys) keys[k] = false;   // no phantom held keys from the menus
   mouseDown = false; aiming = false; adsT = 0; adsLook = 1;
   initRenderer();
@@ -2570,14 +2623,27 @@ function tick(now){
   requestAnimationFrame(tick);
   let dt = (now - G.last)/1000; G.last = now;
   if(dt > 0.05) dt = 0.05;
-  if(paused){ renderer.render(scene, camera); return; }
+  if(paused){
+    if(G.mode === 'live'){
+      liveTick(dt); hud(); // the server plays on — sync and repaint under the menu
+      camera.rotation.order = 'YXZ';
+      camera.position.set(G.me.x, EYE, G.me.z); // camera follows respawns even while menuing
+      camera.rotation.y = yaw + G.kickYaw;
+      camera.rotation.x = pitch + G.kickPitch;
+      G.kickPitch *= Math.max(0, 1 - 9*dt);
+      G.kickYaw   *= Math.max(0, 1 - 9*dt);
+      G.shake     *= Math.max(0, 1 - 7*dt);
+    }
+    renderer.render(scene, camera);
+    return;
+  }
   G.elapsed += dt;
 
   // timers / waves
-  if(G.mode!=='camp'){
+  if(G.mode!=='camp' && G.mode!=='live'){
     G.time -= dt;
     if(G.time <= 0){ endMatch(null); return; }
-  } else {
+  } else if(G.mode==='camp'){
     const alive = G.ents.some(e=>e.grunt);
     if(!alive){
       G.waveBreak -= dt;
@@ -2681,6 +2747,8 @@ function tick(now){
       }
     }
   }
+
+  if(G.mode === 'live') liveTick(dt);
 
   // soft body separation — no more stacked bots running in place
   for(let i=0;i<G.ents.length;i++){
@@ -2890,7 +2958,16 @@ function hud(){
   } else {
     const t = Math.max(0,G.time);
     $('#timer').textContent = Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
-    if(G.mode==='ffa'){
+    if(G.mode==='live'){
+      const st = live && live.room ? live.room.state : null;
+      if(st && st.phase === 'waiting'){
+        $('#scoreline').textContent = 'WAITING FOR OPERATORS — MATCH STARTS WHEN A SECOND PLAYER JOINS';
+      } else {
+        let lead = {name:'—', kills:0};
+        if(st) st.players.forEach(p => { if(p.kills >= lead.kills) lead = {name:p.name, kills:p.kills}; });
+        $('#scoreline').textContent = 'YOU: '+me.kills+'  ·  LEAD: '+lead.name+' '+lead.kills+'  ·  TARGET '+(st ? st.target : 20);
+      }
+    } else if(G.mode==='ffa'){
       const lead = [...G.ents].sort((a,b)=>b.kills-a.kills)[0];
       $('#scoreline').textContent = 'YOU: '+me.kills+'  ·  LEAD: '+lead.name+' '+lead.kills+'  ·  TARGET 20';
     } else {
@@ -2899,7 +2976,7 @@ function hud(){
   }
   $('#hpbar').style.transform = 'scaleX('+Math.max(0,me.hp/me.maxhp)+')';
   $('#hptext').textContent = Math.max(0,Math.ceil(me.hp))+' / '+me.maxhp;
-  $('#shbar').style.transform = 'scaleX('+(me.shield/50)+')';
+  $('#shbar').style.transform = 'scaleX('+((me.shield||0)/50)+')';
   $('#shtext').textContent = me.shield>0 ? 'SHIELD '+Math.ceil(me.shield) : '';
   $('#wepline').textContent = me.wep.name;
   $('#ammoline').textContent = me.ammo+' / '+me.wep.mag;
@@ -2944,6 +3021,7 @@ function enterGameScreen(){
 }
 function abandonMatch(){
   if(!G || !G.running) return;
+  liveLeave();
   G.running = false; G = null; paused = false; settingsOpen = false;
   $('#pauseov').classList.remove('on');
   $('#setov').classList.remove('on');
@@ -3036,6 +3114,324 @@ function playDropSound(rarity){
       o.start(t0 + notes*0.09); o.stop(t0 + notes*0.09 + 0.75);
     }
   }catch(e){}
+}
+
+
+/* =====================================================================
+   LIVE ARENA — online PvP (Colyseus client)
+   The server owns positions/HP/kills; we render + send inputs.
+===================================================================== */
+function RCOL_CSS(r){ return '#' + RCOL[r].toString(16).padStart(6,'0'); }
+function liveUrl(){
+  try{ return localStorage.getItem('gunforge_live_url') || 'ws://localhost:2567'; }catch(e){ return 'ws://localhost:2567'; }
+}
+let live = null; // { room, myId, remotes: Map, sendT, lastHp }
+
+function startLiveMatch(){
+ try{
+  if(G && G.running) return;
+  if(typeof Colyseus === 'undefined'){
+    toast('LIVE ARENA UNAVAILABLE — colyseus client failed to load'); return;
+  }
+  for(const k in keys) keys[k] = false;
+  mouseDown = false; aiming = false; adsT = 0; adsLook = 1;
+  initRenderer();
+  const L = computeLoadout();
+  const map = MAPS.find(m=>m.id===setupSel.map);
+  buildScene(map);
+  G = {
+    running:true, mode:'live', map, ents:[], bullets:[], fx:[],
+    time: 300, elapsed:0, recoil:0,
+    teamScore:{blue:0,red:0}, wave:0, waveBreak:0, over:false, feed:[], dying:[],
+    last: performance.now(),
+    kickPitch: 0, kickYaw: 0, shake: 0
+  };
+  const me = mkEnt({
+    isPlayer:true, team:'blue', name:P.name, x:AW/2, z:AD/2, r:0.5,
+    hp:100, maxhp:100, baseSpeed: 6.0 * L.speedMul,
+    wep:{name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
+    ammo:L.mag
+  });
+  G.me = me; G.ents.push(me);
+  buildViewmodel();
+  yaw = 0; pitch = 0;
+  live = { room:null, myId:null, remotes:new Map(), sendT:0, lastHp:100, results:false, rewarded:false };
+  $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
+  paused = false; $('#pauseov').classList.remove('on');
+  show('game');
+  sizeRenderer();
+  G.last = performance.now();
+  requestAnimationFrame(tick);
+  const client = new Colyseus.Client(liveUrl());
+  toast('CONNECTING TO LIVE ARENA…');
+  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map }).then(room => {
+    if(!G || G.mode!=='live'){ try{ room.leave(); }catch(e){} return; }
+    live.room = room; live.myId = room.sessionId;
+    room.state.players.onAdd((p, id) => {
+      if(id === live.myId){
+        me.x = p.x; me.z = p.z; // take the server's spawn
+        return;
+      }
+      liveAddRemote(id, p);
+    });
+    room.state.players.onRemove((p, id) => liveRemoveRemote(id));
+    room.onMessage('pong', m => {
+      const ms = Math.max(0, Math.round(performance.now() - m.t));
+      live.ping = ms;
+      const el = document.getElementById('pingtag');
+      if(el){
+        el.textContent = 'PING ' + ms + 'ms';
+        el.style.color = ms > 150 ? '#E05A4E' : ms > 80 ? '#E8A33D' : '#7E8B99';
+      }
+    });
+    room.onMessage('rematch', () => feed('ARENA RESET — NEW ROUND', true));
+    room.onMessage('presence', m => {
+      feed(m.name + (m.on ? '  CONNECTED' : '  DISCONNECTED'), false);
+    });
+    room.onMessage('kill', m => {
+      feed(m.killer+'  ⟿  '+m.victim, m.killer===P.name || m.victim===P.name);
+      if(m.killer === P.name){ sfx('kill'); }
+    });
+    room.onMessage('shot', m => {
+      const r = live.remotes.get(m.id);
+      if(!r) return;
+      if(r.mesh && r.mesh.userData.gunMuzzle){
+        r.mesh.userData.gunMuzzle.material.opacity = 0.9;
+        r.mesh.userData.kick = 1;
+      }
+      const d = Math.hypot(m.x - G.me.x, m.z - G.me.z);
+      const range = 26;
+      if(d < range) gunSound('Assault Rifle', 0.8 * (1 - d/range));
+    });
+    room.onLeave(() => {
+      if(G && G.running && G.mode==='live'){ toast('DISCONNECTED FROM ARENA'); abandonMatch(); }
+    });
+    toast('CONNECTED — OPERATORS IN ROOM WILL APPEAR');
+    const pt = document.getElementById('pingtag');
+    if(pt){ pt.style.display = 'block'; pt.textContent = 'PING —'; }
+    show('game'); sizeRenderer();
+    enterGameScreen();
+  }).catch(e => {
+    toast('CONNECTION FAILED — ' + (e.message||'server unreachable').slice(0,80));
+    G.running = false; G = null;
+    releasePointer(); leaveFullscreen();
+    renderMenu();
+  });
+ }catch(err){
+  toast('LIVE START FAILED — ' + (err && err.message || err).slice(0, 120));
+  try{ console.error(err); }catch(e){}
+  if(G){ G.running = false; G = null; }
+  releasePointer(); leaveFullscreen();
+  renderMenu();
+ }
+}
+
+function liveAddRemote(id, p){
+  const built = botMesh(0xE8734A, false, { wid: p.wid || 'm17', eq: {} });
+  built.position.set(p.x, 0, p.z);
+  scene.add(built);
+  const r = { p, mesh: built, cx:p.x, cz:p.z, cyaw:0, lastX:p.x, lastZ:p.z, phase:Math.random()*6.28 };
+  live.remotes.set(id, r);
+}
+function liveRemoveRemote(id){
+  const r = live.remotes.get(id);
+  if(r){ if(r.mesh) scene.remove(r.mesh); live.remotes.delete(id); }
+}
+
+function liveTick(dt){
+  if(!live || !live.room) return;
+  const me = G.me, room = live.room;
+  const sp = room.state.players.get(live.myId);
+
+  // ---- ping probe every 2s ----
+  live.pingT = (live.pingT || 0) - dt;
+  if(live.pingT <= 0){ live.pingT = 2; try{ room.send('ping', { t: performance.now() }); }catch(e){} }
+
+  // ---- inputs up at ~30 Hz: direction, look, fire intent ----
+  live.sendT -= dt;
+  if(live.sendT <= 0){
+    live.sendT = 0.033;
+    const canAct = locked && !live.results && !paused;
+    const f = canAct ? (keys['w']?1:0) - (keys['s']?1:0) : 0;
+    const r2 = canAct ? (keys['d']?1:0) - (keys['a']?1:0) : 0;
+    let mx = 0, mz = 0;
+    if(f || r2){
+      mx = (-Math.sin(yaw))*f + Math.cos(yaw)*r2;
+      mz = (-Math.cos(yaw))*f + (-Math.sin(yaw))*r2;
+      const ml = Math.hypot(mx,mz)||1; mx/=ml; mz/=ml;
+    }
+    const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw);
+    room.send('input', {
+      mx, mz,
+      yaw: Math.atan2(fwdZ, fwdX),
+      pitch,
+      fire: (locked && !live.results && !paused) && mouseDown && !me.reloading && !me.dead
+    });
+  }
+
+  // ---- server authority over my HP / life / (gross) position ----
+  if(sp){
+    if(sp.hp < live.lastHp && !me.dead){
+      damageFlinchOnly(live.lastHp - sp.hp);
+    }
+    live.lastHp = sp.hp;
+    me.hp = sp.hp;
+    if(sp.dead && !me.dead){ me.dead = true; toast('DOWN — RESPAWNING'); }
+    if(!sp.dead && me.dead){ me.dead = false; me.hp = sp.hp; me.x = sp.x; me.z = sp.z; live.lastHp = sp.hp; }
+    if(!me.dead){
+      // reconciliation: soft pull for small drift, hard snap only for teleport-scale (respawn) jumps
+      const dvx = sp.x - me.x, dvz = sp.z - me.z, dv = Math.hypot(dvx, dvz);
+      if(dv > 5){ me.x = sp.x; me.z = sp.z; }
+      else if(dv > 0.35){ me.x += dvx * Math.min(1, dt*6); me.z += dvz * Math.min(1, dt*6); }
+    }
+    me.kills = sp.kills; me.deaths = sp.deaths;
+  }
+
+  // ---- remotes: interpolate + walk ----
+  live.remotes.forEach(r => {
+    const t = r.p;
+    r.cx += (t.x - r.cx) * Math.min(1, dt*12);
+    r.cz += (t.z - r.cz) * Math.min(1, dt*12);
+    let dy = (-t.yaw) - r.cyaw; // server yaw -> mesh yaw handled below
+    const speed = Math.hypot(r.cx - r.lastX, r.cz - r.lastZ) / Math.max(dt, 0.001);
+    r.lastX = r.cx; r.lastZ = r.cz;
+    const u = r.mesh.userData;
+    // death/respawn transitions drive the same fall animation bots use
+    if(t.dead && !r.wasDead){
+      r.wasDead = true;
+      u.hbGroup.visible = false;
+      spawnBurst(r.cx, r.cz, 0xE05A4E);
+      G.dying.push({mesh:r.mesh, t:0, dur:0.32, dir:(Math.random()<0.5?1:-1), grunt:false});
+    } else if(!t.dead && r.wasDead){
+      r.wasDead = false;
+      r.cx = t.x; r.cz = t.z; r.lastX = t.x; r.lastZ = t.z;
+      r.mesh.visible = true;
+      r.mesh.rotation.x = 0; r.mesh.position.y = 0;
+      u.hbGroup.visible = true;
+    }
+    if(t.dead) return;
+    r.mesh.position.set(r.cx, 0, r.cz);
+    r.mesh.rotation.y = -t.yaw + Math.PI/2;
+    if(u.hbFg){
+      const pct = Math.max(0, t.hp/100);
+      u.hbFg.scale.x = Math.max(0.001, pct);
+      u.hbFg.position.x = -(1-pct)*0.45;
+      u.hbFg.material.color.setHex(pct>0.4 ? 0x5FBF6E : 0xE05A4E);
+      r.mesh.getWorldQuaternion(TMPQ);
+      u.hbGroup.quaternion.copy(TMPQ.invert().multiply(camera.quaternion)); // billboard: bar always faces you
+    }
+    r.phase += speed * dt * 1.6;
+    const amp = Math.min(1, speed/4) * 0.5;
+    if(u.legL){ u.legL.rotation.x = Math.sin(r.phase)*amp; u.legR.rotation.x = -Math.sin(r.phase)*amp; }
+    if(u.gunMuzzle){ u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*6); }
+    if(u.kick){ u.kick = Math.max(0, u.kick - dt*5); if(u.gun && u.gunBase) u.gun.position.z = u.gunBase.z - u.kick*0.07; }
+  });
+
+  // ---- match clock + phase from the server ----
+  G.time = room.state.timeLeft;
+  if(room.state.phase === 'over' && !G.over){
+    G.over = true;
+    endLiveMatch();
+  }
+  if(live.results){
+    const cd = document.getElementById('rematchcount');
+    if(room.state.phase === 'over'){
+      if(cd) cd.textContent = 'REMATCH IN ' + Math.ceil(room.state.rematchIn) + 's — same operators, same arena';
+    } else {
+      // the server reset the room: arm the deploy button
+      if(cd) cd.textContent = 'MATCH IS LIVE';
+      const db = document.getElementById('rematchdeploy');
+      if(db) db.style.display = 'inline-block';
+    }
+  }
+}
+
+function damageFlinchOnly(dmg){
+  sfx('hurt');
+  const hitF = Math.min(1, dmg / 30);
+  G.shake = Math.min(1, G.shake + 0.12 + hitF * 0.25);
+  G.kickPitch = Math.min(0.085, G.kickPitch + 0.006 + hitF * 0.008);
+}
+
+function liveLeave(){
+  if(live && live.room){ try{ live.room.leave(); }catch(e){} }
+  const pt = document.getElementById('pingtag');
+  if(pt) pt.style.display = 'none';
+  live = null;
+}
+
+async function endLiveMatch(){
+  if(!G || !live || !live.room) return;
+  live.results = true;
+  releasePointer();
+  paused = false; settingsOpen = false;
+  $('#pauseov').classList.remove('on');
+  $('#setov').classList.remove('on');
+
+  const rows = [];
+  live.room.state.players.forEach(p => rows.push({name:p.name, kills:p.kills, deaths:p.deaths}));
+  rows.sort((a,b)=>b.kills-a.kills);
+  const place = Math.max(1, rows.findIndex(r=>r.name===P.name)+1);
+
+  // participation rewards — everyone earns; placement and kills add on top
+  let rewardHtml = '';
+  if(!live.rewarded){
+    live.rewarded = true;
+    const kills = G.me.kills, deaths = G.me.deaths;
+    const xp = 30 + kills*12 + (place===1 ? 40 : place===2 ? 20 : 0);
+    const cr = 40 + kills*10 + (place===1 ? 50 : place===2 ? 25 : 0);
+    const drop = rollDrop(kills, true);
+    P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+    if(place===1) P.stats.wins++;
+    grantXp(xp); P.credits += cr;
+    if(drop) P.inventory.push(drop);
+    await saveProfile();
+    rewardHtml = '<div class="panel" style="margin-top:10px"><div class="eyebrow">Debrief rewards</div>'
+      +'<div style="margin-top:6px">+'+cr+' CR · +'+xp+' XP'
+      +(drop ? ' · <span style="color:'+RCOL_CSS(drop.rarity)+'">'+esc(drop.name)+' ['+drop.rarity.toUpperCase()+']</span>' : ' · no part recovered this drop')
+      +'</div></div>';
+  }
+
+  const board = rows.map((r,i)=>'<div class="rrow'+(r.name===P.name?' me':'')+'"><span>#'+(i+1)+' '+esc(r.name)+'</span><b>'+r.kills+' / '+r.deaths+'</b></div>').join('');
+  let ov = document.getElementById('liveresults');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'liveresults';
+    ov.style.cssText = 'position:absolute;inset:0;z-index:6;background:rgba(6,9,12,.82);display:flex;align-items:center;justify-content:center;pointer-events:auto';
+    document.getElementById('gamewrap').appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  ov.innerHTML =
+    '<div style="width:min(480px,92%)">'
+    +'<div class="eyebrow">Live arena</div><h2 style="margin:4px 0 0">'+(place===1?'VICTORY':'#'+place+' — MATCH COMPLETE')+'</h2>'
+    +'<div class="panel" style="margin-top:10px"><div class="eyebrow">Final standings — kills / deaths</div>'+board+'</div>'
+    +rewardHtml
+    +'<div class="note" style="margin-top:10px" id="rematchcount">REMATCH IN 12s — same operators, same arena</div>'
+    +'<div class="btnrow" style="margin-top:12px">'
+    +'<button class="btn primary" id="rematchdeploy" style="display:none" onclick="liveRematchDeploy()">▸ DEPLOY</button>'
+    +'<button class="btn" onclick="liveExitToLobby()">← BACK TO LOBBY</button></div>'
+    +'</div>';
+}
+
+function liveRematchDeploy(){
+  const ov = document.getElementById('liveresults');
+  if(ov) ov.style.display = 'none';
+  if(!G || !live) return;
+  live.results = false; live.rewarded = false;
+  G.over = false;
+  const sp = live.room && live.room.state.players.get(live.myId);
+  if(sp){ G.me.x = sp.x; G.me.z = sp.z; G.me.hp = sp.hp; G.me.dead = false; G.me.kills = 0; G.me.deaths = 0; live.lastHp = sp.hp; }
+  feed('REMATCH — FIGHT', true);
+  enterGameScreen();
+}
+
+function liveExitToLobby(){
+  const ov = document.getElementById('liveresults');
+  if(ov) ov.style.display = 'none';
+  liveLeave();
+  if(G){ G.running = false; G = null; }
+  releasePointer(); leaveFullscreen();
+  renderMenu();
 }
 
 /* --- auto-updater toast (Electron desktop only) --- */
