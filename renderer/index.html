@@ -304,6 +304,7 @@
 
 <script src="vendor/three.min.js"></script>
 <script src="vendor/colyseus.js"></script>
+<script src="vendor/loadout-core.js"></script>
 <script>
 if (typeof THREE === 'undefined') {
   // local copy missing — pull from CDN before the game script runs (blocking on purpose)
@@ -987,7 +988,7 @@ const MAPS = [
     spawns:[[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] },
 ];
 
-const CLIENT_BUILD = 'live-14';
+const CLIENT_BUILD = 'live-17';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
@@ -3164,7 +3165,10 @@ function startLiveMatch(){
   requestAnimationFrame(tick);
   const client = new Colyseus.Client(liveUrl());
   toast('CONNECTING TO LIVE ARENA…');
-  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map }).then(room => {
+  const eqForServer = {};
+  { const _eq = equippedParts(P.equippedWeapon);
+    for(const s of SLOTS){ const pp = _eq[s]; eqForServer[s] = pp ? {slot:s, weapon:pp.weapon, rarity:pp.rarity, set:pp.set||undefined, ability:pp.ability||undefined, mods:pp.mods||{}} : null; } }
+  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map, equipped:eqForServer }).then(room => {
     if(!G || G.mode!=='live'){ try{ room.leave(); }catch(e){} return; }
     live.room = room; live.myId = room.sessionId;
     room.state.players.onAdd((p, id) => {
@@ -3176,7 +3180,9 @@ function startLiveMatch(){
     });
     room.state.players.onRemove((p, id) => liveRemoveRemote(id));
     room.onMessage('pong', m => {
-      const ms = Math.max(0, Math.round(performance.now() - m.t));
+      const raw = Math.max(0, performance.now() - (live.pingSentAt || m.t));
+      live.pingEMA = live.pingEMA == null ? raw : live.pingEMA * 0.6 + raw * 0.4;
+      const ms = Math.round(live.pingEMA);
       live.ping = ms;
       const el = document.getElementById('pingtag');
       if(el){
@@ -3209,6 +3215,13 @@ function startLiveMatch(){
     toast('CONNECTED — OPERATORS IN ROOM WILL APPEAR');
     const pt = document.getElementById('pingtag');
     if(pt){ pt.style.display = 'block'; pt.textContent = 'PING —'; }
+    if(live.pingTimer) clearInterval(live.pingTimer);
+    live.pingSentAt = 0;
+    live.pingTimer = setInterval(() => {                       // ping measured OFF the render loop
+      if(!live || !live.room){ clearInterval(live.pingTimer); return; }
+      live.pingSentAt = performance.now();
+      try{ live.room.send('ping', { t: live.pingSentAt }); }catch(e){}
+    }, 1000);
     show('game'); sizeRenderer();
     enterGameScreen();
   }).catch(e => {
@@ -3242,10 +3255,6 @@ function liveTick(dt){
   if(!live || !live.room) return;
   const me = G.me, room = live.room;
   const sp = room.state.players.get(live.myId);
-
-  // ---- ping probe every 2s ----
-  live.pingT = (live.pingT || 0) - dt;
-  if(live.pingT <= 0){ live.pingT = 2; try{ room.send('ping', { t: performance.now() }); }catch(e){} }
 
   // ---- inputs up at ~30 Hz: direction, look, fire intent ----
   live.sendT -= dt;
@@ -3354,7 +3363,7 @@ function damageFlinchOnly(dmg){
 }
 
 function liveLeave(){
-  if(live && live.room){ try{ live.room.leave(); }catch(e){} }
+  if(live){ if(live.pingTimer) clearInterval(live.pingTimer); if(live.room){ try{ live.room.leave(); }catch(e){} } }
   const pt = document.getElementById('pingtag');
   if(pt) pt.style.display = 'none';
   live = null;

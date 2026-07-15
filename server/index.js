@@ -9,6 +9,7 @@ const http = require('http');
 const { Server, Room } = require('@colyseus/core');
 const { WebSocketTransport } = require('@colyseus/ws-transport');
 const { Schema, MapSchema, defineTypes } = require('@colyseus/schema');
+const LoadoutCore = require('./loadout-core.js');
 
 const TICK = 1000 / 30;           // 30 Hz simulation
 const AW = 60, AD = 40;           // arena size — mirrors the client maps
@@ -70,6 +71,7 @@ class ArenaRoom extends Room {
     this.spawns = MAPS[state.map].spawns;
     this.inputs = new Map();   // sessionId -> latest input
     this.fireT = new Map();    // sessionId -> next allowed fire time
+    this.loadouts = new Map(); // sessionId -> computed weapon stats (server-authoritative)
 
     this.onMessage('ping', (client, msg) => {
       client.send('pong', { t: msg && msg.t });
@@ -97,6 +99,8 @@ class ArenaRoom extends Room {
     }
     activeCallsigns.set(key, client.sessionId);
     p.wid = String(options.wid || 'm17').slice(0, 16);
+    const cleanEq = LoadoutCore.sanitizeEquipped(p.wid, options.equipped);
+    this.loadouts.set(client.sessionId, LoadoutCore.computeStats(p.wid, cleanEq));
     const s = this.spawns[this.clients.length % this.spawns.length];
     p.x = s[0]; p.z = s[1]; p.yaw = 0;
     p.hp = 100; p.kills = 0; p.deaths = 0; p.dead = false;
@@ -115,6 +119,7 @@ class ArenaRoom extends Room {
     }
     this.inputs.delete(client.sessionId);
     this.fireT.delete(client.sessionId);
+    this.loadouts.delete(client.sessionId);
   }
 
   tick(){
@@ -170,8 +175,9 @@ class ArenaRoom extends Room {
   tryFire(id, p, inp){
     if(this.state.phase !== 'live') return; // no damage during waiting or results
     const now = Date.now();
+    const ld = this.loadouts.get(id) || { rof: 140, dmg: 12, pellets: 1, abilities: [] };
     if((this.fireT.get(id) || 0) > now) return;
-    this.fireT.set(id, now + 140); // phase 1: single generic ROF; phase 2 reads the verified loadout
+    this.fireT.set(id, now + ld.rof); // real fire-rate from the verified loadout
     this.broadcast('shot', { id, x: p.x, z: p.z, yaw: inp.yaw }, { except: this.clients.find(c => c.sessionId === id) });
     // instant-trace hit registration on the server
     const dx = Math.cos(inp.yaw), dz = Math.sin(inp.yaw);
@@ -188,7 +194,11 @@ class ArenaRoom extends Room {
       }
     });
     if(best){
-      best.t.hp -= 12; // phase 2: damage from the verified loadout
+      const tld = this.loadouts.get(best.tid);
+      let dmg = ld.dmg * (ld.pellets || 1);
+      const tInp = this.inputs.get(best.tid);
+      if(tld && tld.abilities && tld.abilities.indexOf('firing_resist') >= 0 && tInp && tInp.fire) dmg *= 0.7;
+      best.t.hp -= dmg;
       if(best.t.hp <= 0){
         best.t.dead = true; best.t.deaths++;
         p.kills++;
@@ -238,6 +248,9 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end();
   }
 });
-const game = new Server({ transport: new WebSocketTransport({ server }) });
+const transport = new WebSocketTransport({ server });
+const game = new Server({ transport });
+// Nagle's algorithm batches small packets, adding 40-200ms to tiny realtime messages — disable it per socket
+transport.wss.on('connection', (ws) => { try{ ws._socket.setNoDelay(true); }catch(e){} });
 game.define('arena', ArenaRoom);
 server.listen(port, () => console.log('[gunforge-server] listening on :' + port));
