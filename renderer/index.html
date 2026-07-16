@@ -1089,7 +1089,7 @@ const MAPS = [
     spawns:[[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] },
 ];
 
-const CLIENT_BUILD = 'live-25';
+const CLIENT_BUILD = 'live-26';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
@@ -1280,7 +1280,7 @@ cv.addEventListener('mousedown', e=>{
   if(e.button === 2){ if(G && G.running && locked) aiming = true; return; }
   if(e.button!==0) return;
   au();
-  if(G && G.running && !locked){ if(!settingsOpen) enterGameScreen(); return; }
+  if(G && G.running && !locked){ if(!settingsOpen && !G.connecting) enterGameScreen(); return; }
   mouseDown = true;
 });
 window.addEventListener('mouseup', e=>{
@@ -2400,6 +2400,7 @@ function spawnFrost(x, y, z){
     vx:(Math.random()-0.5)*0.7, vz:(Math.random()-0.5)*0.7, spin:(Math.random()-0.5)*6});
 }
 function spawnSpark(x, y, z, color){
+  if(!G || !G.fx) return; // guard: no spark during connect/disconnect transitions
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 5),
     new THREE.MeshBasicMaterial({color, transparent:true, opacity:0.9, depthWrite:false}));
   m.position.set(x, y, z);
@@ -3302,6 +3303,7 @@ function startLiveMatch(){
   sizeRenderer();
   G.last = performance.now();
   requestAnimationFrame(tick);
+  G.connecting = true; // suppress click-to-fullscreen until the arena connection resolves
   const client = new Colyseus.Client(liveUrl());
   toast('CONNECTING TO LIVE ARENA…');
   const eqForServer = {};
@@ -3362,8 +3364,9 @@ function startLiveMatch(){
       live.pingSentAt = performance.now();
       try{ live.room.send('ping', { t: live.pingSentAt }); }catch(e){}
     }, 1000);
+    G.connecting = false;
     show('game'); sizeRenderer();
-    enterGameScreen();
+    enterGameScreen();  // fullscreen entered exactly once, after connect
   }).catch(e => {
     toast('CONNECTION FAILED — ' + (e.message||'server unreachable').slice(0,80));
     G.running = false; G = null;
