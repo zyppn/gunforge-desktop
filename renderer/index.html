@@ -332,6 +332,7 @@ const BACKEND = {
   supabaseAnonKey: 'sb_publishable_3orxbOE498Pys84J7Db66w_nx6MEgXn'
 };
 const HAS_ARTIFACT = typeof window!=='undefined' && window.storage && typeof window.storage.get==='function';
+const HAS_NATIVE = typeof window!=='undefined' && window.gunforgeNative && typeof window.gunforgeNative.set==='function';
 const HAS_SUPABASE = () => !!(BACKEND.supabaseUrl && BACKEND.supabaseAnonKey);
 
 /* ---- Auth: anonymous sign-in so every request carries a real auth.uid() and RLS applies ---- */
@@ -1088,7 +1089,7 @@ const MAPS = [
     spawns:[[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] },
 ];
 
-const CLIENT_BUILD = 'live-20';
+const CLIENT_BUILD = 'live-24';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
@@ -1106,10 +1107,7 @@ function openSetup(){
    +'<div class="panel"><div class="eyebrow">Map</div><div class="optrow">'+mapRow+'</div></div>'
    +(setupSel.mode==='live'
       ? '<div class="panel"><div class="eyebrow">Live server</div>'
-        +'<input id="livesrv" type="text" value="'+esc(liveUrl())+'" '
-        +'style="width:100%;margin-top:8px;background:#0D1218;border:1px solid #2A3542;color:var(--ink);padding:9px 10px;font-family:inherit;font-size:13px" '
-        +'onchange="localStorage.setItem(\'gunforge_live_url\', this.value.trim())">'
-        +'<div class="note" style="margin-top:6px">ws://host:2567 — where your gunforge-server is running.</div></div>'
+        +'<div class="note" style="margin-top:6px">◆ Official GUNFORGE server — online play is automatic.</div></div>'
       : '')
    +'<div class="panel"><div class="eyebrow">Loadout check</div>'
    +'<div class="note" style="margin-top:6px">Deploying with <b style="color:var(--brass)">'+esc(L.base.name)+'</b> ('+esc(L.base.type)+')'
@@ -3130,7 +3128,7 @@ function abandonMatch(){
   toast('MATCH ABANDONED — NO REWARDS');
   renderMenu();
 }
-async function endMatch(campWin){
+function endMatch(campWin){
   if(!G || !G.running) return;
   G.running = false; paused = false; settingsOpen = false;
   $('#pauseov').classList.remove('on');
@@ -3153,46 +3151,55 @@ async function endMatch(campWin){
   const kills = me.kills, deaths = me.deaths, wave = G.wave;
   const mapName = G.map.name;
   const lvlBefore = P.level;
-  let xp, cr, drop;
 
+  // ---- 1) LOCAL reward computed instantly (never awaits anything) ----
+  const xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
+  const cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
+  const drop = rollDrop(kills, true);
+  P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+  if(win) P.stats.wins++;
+  grantXp(xp); P.credits += cr;
+  if(drop) P.inventory.push(drop);
+  saveProfile();               // local save, fire-and-forget
+  refreshChips();
+
+  // ---- 2) render results IMMEDIATELY — the UI never waits on the network ----
+  renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlBefore, drop);
+  G = null;
+
+  // ---- 3) sync to server in the BACKGROUND; update the panel if/when it returns ----
   if(ACCOUNT.online){
-    // SERVER grants and persists the reward (server rolls the drop, stamps it offline/bound).
-    // The client only reports the result; the server decides the numbers.
-    let sv = null;
-    try{
-      const r = await fetch(liveHttpUrl()+'/reward/offline', {
-        method:'POST',
-        headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
-        body: JSON.stringify({ kills, deaths, win, mode })
-      });
-      sv = await r.json();
-    }catch(e){ console.error('offline reward post failed', e); }
-    if(sv && sv.ok){
-      xp = sv.xp; cr = sv.credits; drop = sv.part || null;
-      // re-read the authoritative inventory/credits the server just wrote
-      try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; }catch(e){}
-      refreshChips();
-    } else {
-      // server unreachable/declined — fall back to a LOCAL grant so play isn't blocked
-      xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
-      cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
-      drop = rollDrop(kills, true);
-      P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
-      if(win) P.stats.wins++;
-      grantXp(xp); P.credits += cr; if(drop) P.inventory.push(drop);
-      await saveProfile();
-    }
-  } else {
-    // offline account: local grant
-    xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
-    cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
-    drop = rollDrop(kills, true);
-    P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
-    if(win) P.stats.wins++;
-    grantXp(xp); P.credits += cr; if(drop) P.inventory.push(drop);
-    await saveProfile();
+    (async () => {
+      try{
+        const ctrl = new AbortController();
+        const to = setTimeout(()=>ctrl.abort(), 6000); // hard cap: never hang
+        const r = await fetch(liveHttpUrl()+'/reward/offline', {
+          method:'POST', signal: ctrl.signal,
+          headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
+          body: JSON.stringify({ kills, deaths, win, mode })
+        });
+        clearTimeout(to);
+        const sv = await r.json();
+        if(sv && sv.ok){
+          // server persisted the authoritative reward — re-sync inventory quietly
+          const fresh = await loadCloudProfile();
+          if(fresh) P = fresh;
+          refreshChips();
+          const tag = document.getElementById('rewardsync');
+          if(tag) tag.textContent = '✓ saved to your account';
+        } else {
+          const tag = document.getElementById('rewardsync');
+          if(tag) tag.textContent = '⚠ saved locally (server declined)';
+        }
+      }catch(e){
+        const tag = document.getElementById('rewardsync');
+        if(tag) tag.textContent = '⚠ saved locally (offline)';
+      }
+    })();
   }
+}
 
+function renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlBefore, drop){
   $('#results').innerHTML =
    '<div class="panel" style="text-align:center;padding:28px">'
    +'<div class="eyebrow">'+MODES.find(m=>m.id===mode).name+' · '+esc(mapName)+'</div>'
@@ -3208,11 +3215,11 @@ async function endMatch(campWin){
    +(drop
      ? '<div class="eyebrow" style="margin-top:20px">◆ FIELD SALVAGE RECOVERED</div><div class="dropcard">'+partCard(drop)+'</div>'
      : '<div class="note" style="margin-top:20px">No salvage recovered this run. Drop odds rise with eliminations.</div>')
+   +(ACCOUNT.online ? '<div class="note" style="margin-top:12px;opacity:.6" id="rewardsync">syncing to your account…</div>' : '')
    +'<div class="btnrow" style="justify-content:center"><button class="btn primary" onclick="startMatch()">▸ REDEPLOY</button>'
    +'<button class="btn" onclick="renderInventory()">PARTS LOCKER</button>'
    +'<button class="btn" onclick="renderMenu()">COMMAND MENU</button></div>'
    +'</div>';
-  G = null;
   show('results');
   hydrateThumbs();
   if(drop) setTimeout(()=>playDropSound(drop.rarity), 320);
@@ -3254,7 +3261,7 @@ function playDropSound(rarity){
 ===================================================================== */
 function RCOL_CSS(r){ return '#' + RCOL[r].toString(16).padStart(6,'0'); }
 function liveUrl(){
-  try{ return localStorage.getItem('gunforge_live_url') || 'ws://localhost:2567'; }catch(e){ return 'ws://localhost:2567'; }
+  try{ return localStorage.getItem('gunforge_live_url') || 'ws://129.158.232.87:2567'; }catch(e){ return 'ws://129.158.232.87:2567'; }
 }
 // http(s) form of the server url, for REST calls like the offline reward grant
 function liveHttpUrl(){ return liveUrl().replace(/^ws:/,'http:').replace(/^wss:/,'https:'); }
