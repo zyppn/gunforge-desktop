@@ -328,13 +328,113 @@ if (typeof THREE === 'undefined') {
              2) Supabase online KV (fill in BACKEND below to enable the shared auction anywhere)
              3) localStorage (running as a local file / static host — persistence works, auction is this-browser-only) */
 const BACKEND = {
-  supabaseUrl: '',      // e.g. 'https://xxxx.supabase.co'  — see supabase-setup.sql
-  supabaseAnonKey: ''   // the project's anon public key
+  supabaseUrl: 'https://rrpqxsiqvjhwbryencpj.supabase.co',
+  supabaseAnonKey: 'sb_publishable_3orxbOE498Pys84J7Db66w_nx6MEgXn'
 };
 const HAS_ARTIFACT = typeof window!=='undefined' && window.storage && typeof window.storage.get==='function';
-const HAS_NATIVE = typeof window!=='undefined' && window.gunforgeNative && typeof window.gunforgeNative.get==='function';
 const HAS_SUPABASE = () => !!(BACKEND.supabaseUrl && BACKEND.supabaseAnonKey);
-function sbHeaders(){ return {'apikey':BACKEND.supabaseAnonKey, 'Authorization':'Bearer '+BACKEND.supabaseAnonKey, 'Content-Type':'application/json'}; }
+
+/* ---- Auth: anonymous sign-in so every request carries a real auth.uid() and RLS applies ---- */
+const AUTH = { token: null, refresh: null, uid: null, expires: 0 };
+function authToken(){ return AUTH.token || BACKEND.supabaseAnonKey; }
+// requests use the USER's JWT when signed in (RLS sees auth.uid()); anon key only pre-auth
+function sbHeaders(){ return {'apikey':BACKEND.supabaseAnonKey, 'Authorization':'Bearer '+authToken(), 'Content-Type':'application/json'}; }
+
+function authStore(){ try{ return JSON.parse(localStorage.getItem('gf_auth')||'null'); }catch(e){ return null; } }
+function authSave(){ try{ localStorage.setItem('gf_auth', JSON.stringify({token:AUTH.token, refresh:AUTH.refresh, uid:AUTH.uid, expires:AUTH.expires})); }catch(e){} }
+function authApply(session){
+  AUTH.token = session.access_token;
+  AUTH.refresh = session.refresh_token;
+  AUTH.uid = (session.user && session.user.id) || AUTH.uid;
+  AUTH.expires = Date.now() + ((session.expires_in||3600) * 1000) - 60000; // refresh 1min early
+  authSave();
+}
+async function authAnonymousSignIn(){
+  const r = await fetch(BACKEND.supabaseUrl+'/auth/v1/signup', {
+    method:'POST',
+    headers:{'apikey':BACKEND.supabaseAnonKey, 'Content-Type':'application/json'},
+    body: JSON.stringify({ data:{} })   // anonymous: no email/password
+  });
+  if(!r.ok) throw new Error('anon signup failed: '+r.status);
+  const s = await r.json();
+  authApply(s);
+  return s;
+}
+async function authRefresh(){
+  if(!AUTH.refresh) return false;
+  const r = await fetch(BACKEND.supabaseUrl+'/auth/v1/token?grant_type=refresh_token', {
+    method:'POST',
+    headers:{'apikey':BACKEND.supabaseAnonKey, 'Content-Type':'application/json'},
+    body: JSON.stringify({ refresh_token: AUTH.refresh })
+  });
+  if(!r.ok) return false;
+  authApply(await r.json());
+  return true;
+}
+// ensure a valid session before any authed call; returns uid or null
+async function ensureAuth(){
+  if(!HAS_SUPABASE()) return null;
+  const saved = authStore();
+  if(saved && saved.token){ Object.assign(AUTH, saved); }
+  if(AUTH.token && Date.now() < AUTH.expires) return AUTH.uid;
+  if(AUTH.refresh && await authRefresh()) return AUTH.uid;
+  try{ await authAnonymousSignIn(); return AUTH.uid; }
+  catch(e){ console.error('auth failed', e); return null; }
+}
+
+/* =====================================================================
+   ACCOUNT LAYER — cloud-backed profile & inventory (reads this session).
+   Security proven: RLS blocks players from writing credits/level/parts.
+   Reads come from Supabase; writes to economy tables happen server-side.
+   Local save remains a fallback so offline play never breaks.
+===================================================================== */
+let ACCOUNT = { online: false, uid: null };
+
+// map a DB parts row -> in-game part object
+function partFromRow(r){
+  return { uid: r.uid, weapon: r.weapon_id, slot: r.slot, rarity: r.rarity,
+           name: r.name, mods: r.mods || {}, ability: r.ability || null, set: r.set_id || null };
+}
+
+async function sbSelect(path){
+  const r = await fetch(BACKEND.supabaseUrl+'/rest/v1/'+path, { headers: sbHeaders() });
+  if(!r.ok) throw new Error('select '+path+' -> '+r.status);
+  return r.json();
+}
+
+// Load (or create) this account's cloud profile. Returns a profile object
+// in the same shape as newProfile(), or null if offline/unavailable.
+async function loadCloudProfile(){
+  const uid = await ensureAuth();
+  if(!uid) return null;
+  // find my player row
+  let rows = await sbSelect('players?select=*&auth_uid=eq.'+uid);
+  if(!rows.length){
+    // first launch for this account — create the row (RLS forces safe starting values)
+    const seedName = 'Operator-' + Math.floor(1000+Math.random()*9000);
+    const cr = await fetch(BACKEND.supabaseUrl+'/rest/v1/players', {
+      method:'POST', headers:Object.assign(sbHeaders(), {'Prefer':'return=representation'}),
+      body: JSON.stringify({ auth_uid: uid, callsign: seedName })
+    });
+    if(!cr.ok) throw new Error('create player row -> '+cr.status);
+    rows = await cr.json();
+  }
+  const row = rows[0];
+  // load my parts
+  const partRows = await sbSelect('parts?select=*&owner_id=eq.'+row.id);
+  const inventory = partRows.map(partFromRow);
+  // equipped map lives in the player row (jsonb) so a loadout survives across devices
+  const equipped = row.equipped || {};
+  ACCOUNT.online = true; ACCOUNT.uid = uid; ACCOUNT.playerId = row.id;
+  return {
+    id: row.id, name: row.callsign,
+    xp: row.xp, level: row.level, credits: row.credits,
+    equippedWeapon: row.equipped_weapon || 'm17',
+    equipped, inventory,
+    stats: row.stats || {kills:0,deaths:0,matches:0,wins:0},
+    v: 1, cloud: true
+  };
+}
 
 async function sGet(k, shared=false){
   try{
@@ -988,7 +1088,7 @@ const MAPS = [
     spawns:[[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] },
 ];
 
-const CLIENT_BUILD = 'live-17';
+const CLIENT_BUILD = 'live-20';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
@@ -3051,17 +3151,47 @@ async function endMatch(campWin){
     placeTxt = win ? 'ALL 8 WAVES CLEARED' : 'FELL ON WAVE '+Math.max(1,G.wave);
   }
   const kills = me.kills, deaths = me.deaths, wave = G.wave;
-  const xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
-  const cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
-  const drop = rollDrop(kills, true);
   const mapName = G.map.name;
-
-  P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
-  if(win) P.stats.wins++;
   const lvlBefore = P.level;
-  grantXp(xp); P.credits += cr;
-  if(drop) P.inventory.push(drop);
-  await saveProfile();
+  let xp, cr, drop;
+
+  if(ACCOUNT.online){
+    // SERVER grants and persists the reward (server rolls the drop, stamps it offline/bound).
+    // The client only reports the result; the server decides the numbers.
+    let sv = null;
+    try{
+      const r = await fetch(liveHttpUrl()+'/reward/offline', {
+        method:'POST',
+        headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
+        body: JSON.stringify({ kills, deaths, win, mode })
+      });
+      sv = await r.json();
+    }catch(e){ console.error('offline reward post failed', e); }
+    if(sv && sv.ok){
+      xp = sv.xp; cr = sv.credits; drop = sv.part || null;
+      // re-read the authoritative inventory/credits the server just wrote
+      try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; }catch(e){}
+      refreshChips();
+    } else {
+      // server unreachable/declined — fall back to a LOCAL grant so play isn't blocked
+      xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
+      cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
+      drop = rollDrop(kills, true);
+      P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+      if(win) P.stats.wins++;
+      grantXp(xp); P.credits += cr; if(drop) P.inventory.push(drop);
+      await saveProfile();
+    }
+  } else {
+    // offline account: local grant
+    xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
+    cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
+    drop = rollDrop(kills, true);
+    P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+    if(win) P.stats.wins++;
+    grantXp(xp); P.credits += cr; if(drop) P.inventory.push(drop);
+    await saveProfile();
+  }
 
   $('#results').innerHTML =
    '<div class="panel" style="text-align:center;padding:28px">'
@@ -3126,6 +3256,8 @@ function RCOL_CSS(r){ return '#' + RCOL[r].toString(16).padStart(6,'0'); }
 function liveUrl(){
   try{ return localStorage.getItem('gunforge_live_url') || 'ws://localhost:2567'; }catch(e){ return 'ws://localhost:2567'; }
 }
+// http(s) form of the server url, for REST calls like the offline reward grant
+function liveHttpUrl(){ return liveUrl().replace(/^ws:/,'http:').replace(/^wss:/,'https:'); }
 let live = null; // { room, myId, remotes: Map, sendT, lastHp }
 
 function startLiveMatch(){
@@ -3168,7 +3300,7 @@ function startLiveMatch(){
   const eqForServer = {};
   { const _eq = equippedParts(P.equippedWeapon);
     for(const s of SLOTS){ const pp = _eq[s]; eqForServer[s] = pp ? {slot:s, weapon:pp.weapon, rarity:pp.rarity, set:pp.set||undefined, ability:pp.ability||undefined, mods:pp.mods||{}} : null; } }
-  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map, equipped:eqForServer }).then(room => {
+  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map, equipped:eqForServer, token: (AUTH && AUTH.token) || null }).then(room => {
     if(!G || G.mode!=='live'){ try{ room.leave(); }catch(e){} return; }
     live.room = room; live.myId = room.sessionId;
     room.state.players.onAdd((p, id) => {
@@ -3191,6 +3323,7 @@ function startLiveMatch(){
       }
     });
     room.onMessage('rematch', () => feed('ARENA RESET — NEW ROUND', true));
+    room.onMessage('reward', m => { live.serverReward = m; });
     room.onMessage('presence', m => {
       feed(m.name + (m.on ? '  CONNECTED' : '  DISCONNECTED'), false);
     });
@@ -3386,19 +3519,34 @@ async function endLiveMatch(){
   let rewardHtml = '';
   if(!live.rewarded){
     live.rewarded = true;
-    const kills = G.me.kills, deaths = G.me.deaths;
-    const xp = 30 + kills*12 + (place===1 ? 40 : place===2 ? 20 : 0);
-    const cr = 40 + kills*10 + (place===1 ? 50 : place===2 ? 25 : 0);
-    const drop = rollDrop(kills, true);
-    P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
-    if(place===1) P.stats.wins++;
-    grantXp(xp); P.credits += cr;
-    if(drop) P.inventory.push(drop);
-    await saveProfile();
-    rewardHtml = '<div class="panel" style="margin-top:10px"><div class="eyebrow">Debrief rewards</div>'
-      +'<div style="margin-top:6px">+'+cr+' CR · +'+xp+' XP'
-      +(drop ? ' · <span style="color:'+RCOL_CSS(drop.rarity)+'">'+esc(drop.name)+' ['+drop.rarity.toUpperCase()+']</span>' : ' · no part recovered this drop')
-      +'</div></div>';
+    if(ACCOUNT.online){
+      // rewards are granted SERVER-SIDE and arrive via the 'reward' message.
+      // show whatever the server has told us so far, then re-sync from cloud.
+      const rw = live.serverReward;
+      rewardHtml = '<div class="panel" style="margin-top:10px"><div class="eyebrow">Debrief rewards · server-verified</div>'
+        + (rw ? '<div style="margin-top:6px">+'+rw.credits+' CR · +'+rw.xp+' XP'
+            + (rw.part ? ' · <span style="color:'+RCOL_CSS(rw.part.rarity)+'">'+esc(rw.part.name)+' ['+rw.part.rarity.toUpperCase()+']</span>' : '')
+            + '</div>'
+          : '<div style="margin-top:6px;opacity:.7">Tallying rewards…</div>')
+        + '</div>';
+      // pull the authoritative inventory/credits the server just wrote
+      try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
+    } else {
+      // offline fallback: local grant (no cloud account this session)
+      const kills = G.me.kills, deaths = G.me.deaths;
+      const xp = 30 + kills*12 + (place===1 ? 40 : place===2 ? 20 : 0);
+      const cr = 40 + kills*10 + (place===1 ? 50 : place===2 ? 25 : 0);
+      const drop = rollDrop(kills, true);
+      P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+      if(place===1) P.stats.wins++;
+      grantXp(xp); P.credits += cr;
+      if(drop) P.inventory.push(drop);
+      await saveProfile();
+      rewardHtml = '<div class="panel" style="margin-top:10px"><div class="eyebrow">Debrief rewards · local</div>'
+        +'<div style="margin-top:6px">+'+cr+' CR · +'+xp+' XP'
+        +(drop ? ' · <span style="color:'+RCOL_CSS(drop.rarity)+'">'+esc(drop.name)+' ['+drop.rarity.toUpperCase()+']</span>' : ' · no part recovered this drop')
+        +'</div></div>';
+    }
   }
 
   const board = rows.map((r,i)=>'<div class="rrow'+(r.name===P.name?' me':'')+'"><span>#'+(i+1)+' '+esc(r.name)+'</span><b>'+r.kills+' / '+r.deaths+'</b></div>').join('');
@@ -3482,10 +3630,18 @@ function liveExitToLobby(){
 /* ---------------- boot ---------------- */
 (async function boot(){
   try{
-    await loadProfile();
+    let cloud = null;
+    if(HAS_SUPABASE()){
+      $('#boot').innerHTML = '<div class="panel">ESTABLISHING UPLINK... AUTHENTICATING OPERATOR...</div>';
+      try{ cloud = await loadCloudProfile(); }
+      catch(e){ console.error('cloud profile failed, using local', e); }
+    }
+    if(cloud){ P = cloud; }
+    else { await loadProfile(); }  // offline / no backend -> local save
     await loadSettings();
     refreshChips();
     renderMenu();
+    if(cloud) toast('SIGNED IN — INVENTORY SYNCED FROM CLOUD');
   }catch(e){
     console.error(e);
     $('#boot').innerHTML = '<div class="panel">UPLINK ERROR — profile storage unavailable. Reload to retry.</div>';

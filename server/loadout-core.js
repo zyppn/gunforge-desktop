@@ -114,7 +114,48 @@
     return out;
   }
 
-  const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped };
+
+  /* ---- loot generation (server-authoritative drops) ---- */
+  const RAR = {
+    common:    { w:44, scale:1.0 },
+    uncommon:  { w:27, scale:1.6 },
+    rare:      { w:16, scale:2.3 },
+    epic:      { w:9,  scale:3.0 },
+    legendary: { w:4,  scale:4.0 },
+  };
+  const RKEYS = Object.keys(RAR);
+  const PART_POOL = {
+    frame:[{name:'Polymer Frame',mods:{speed:0.03}},{name:'Forged Frame',mods:{dmg:0.03}},{name:'Recon Frame',mods:{spread:-0.03,speed:0.015}},{name:'War Frame',mods:{dmg:0.02,mag:0.05}}],
+    barrel:[{name:'Ported Barrel',mods:{spread:-0.05}},{name:'Heavy Barrel',mods:{dmg:0.035,spread:0.015}},{name:'CQB Barrel',mods:{rof:0.03}},{name:'Match Barrel',mods:{dmg:0.025,spread:-0.02}}],
+    magazine:[{name:'Extended Mag',mods:{mag:0.10}},{name:'Quickload Mag',mods:{reload:-0.06}},{name:'Drum Feed',mods:{mag:0.14,reload:0.03}},{name:'Compact Mag',mods:{reload:-0.04,mag:-0.04,rof:0.02}}],
+    foregrip:[{name:'Vertical Grip',mods:{spread:-0.04}},{name:'Angled Grip',mods:{rof:0.025}},{name:'Skeleton Grip',mods:{speed:0.02}},{name:'Tactical Grip',mods:{spread:-0.025,rof:0.015}}],
+    stock:[{name:'Padded Stock',mods:{spread:-0.03}},{name:'Marksman Stock',mods:{dmg:0.02,spread:-0.015}},{name:'CQB Stock',mods:{speed:0.025}},{name:'Skeleton Stock',mods:{speed:0.02,rof:0.01}}],
+    optic:[{name:'Red Dot',mods:{spread:-0.035}},{name:'Holo Sight',mods:{spread:-0.025,rof:0.01}},{name:'ACOG-4',mods:{dmg:0.03}},{name:'Iron Ring',mods:{speed:0.015,spread:-0.015}}],
+  };
+  function rollRarity(){
+    const total = RKEYS.reduce((a,k)=>a+RAR[k].w,0);
+    let r = Math.random()*total;
+    for(const k of RKEYS){ r -= RAR[k].w; if(r<=0) return k; }
+    return 'common';
+  }
+  function scaleMods(mods, rarity){
+    const s = RAR[rarity].scale, out = {};
+    for(const k in mods) out[k] = +(mods[k]*s).toFixed(3);
+    return out;
+  }
+  // server-side drop: same odds as the client, but produced by the SERVER so
+  // the client can never fabricate a part. Returns a part object or null.
+  function rollServerDrop(kills){
+    const chance = 0.35 + Math.min((kills||0)*0.02, 0.25);
+    if(Math.random() > chance) return null;
+    const wid = WEAPONS[Math.floor(Math.random()*WEAPONS.length)].id;
+    const slot = SLOTS[Math.floor(Math.random()*SLOTS.length)];
+    const rarity = rollRarity();
+    const tpl = PART_POOL[slot][Math.floor(Math.random()*PART_POOL[slot].length)];
+    return { weapon:wid, slot, rarity, name:tpl.name, mods:scaleMods(tpl.mods, rarity), set:null };
+  }
+
+  const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped, rollServerDrop };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
   else root.LoadoutCore = api;                                              // browser
