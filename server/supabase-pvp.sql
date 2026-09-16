@@ -13,7 +13,10 @@ create table if not exists players (
   level         int  not null default 1,
   xp            int  not null default 0,
   credits       int  not null default 500 check (credits >= 0),
-  created_at    timestamptz not null default now()
+  created_at    timestamptz not null default now(),
+  equipped        jsonb not null default '{}',   -- {weaponId:{slot:partUid}} - loadout, survives devices
+  equipped_weapon text,                          -- currently selected weapon id
+  stats           jsonb not null default '{}'    -- {kills,deaths,matches,wins}, written by add_progress
 );
 
 -- ---- parts: server-authoritative inventory ----
@@ -27,6 +30,8 @@ create table if not exists parts (
   set_id        text,
   mods          jsonb not null default '{}',
   equipped      boolean not null default false,
+  source        text not null default 'pvp',      -- where the drop came from ('pvp', 'quest', ...)
+  bound         boolean not null default false,   -- soulbound: cannot be auctioned
   created_at    timestamptz not null default now()
 );
 create index if not exists parts_owner on parts(owner_id);
@@ -53,8 +58,8 @@ create or replace function list_part(p_part uuid, p_price int)
 returns uuid language plpgsql security definer as $$
 declare v_seller uuid; v_listing uuid;
 begin
-  select owner_id into v_seller from parts where uid = p_part and not equipped for update;
-  if v_seller is null then raise exception 'part not found or equipped'; end if;
+  select owner_id into v_seller from parts where uid = p_part and not equipped and not bound for update;
+  if v_seller is null then raise exception 'part not found, equipped, or soulbound'; end if;
   if v_seller <> (select id from players where auth_uid = auth.uid()) then
     raise exception 'not your part';
   end if;

@@ -66,6 +66,9 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
         }),
       });
       if (r.ok) { granted.credits = credits | 0; granted.xp = xp | 0; }
+      else {
+        console.error('[supabase] add_progress failed', r.status, await r.text().catch(() => ''));
+      }
     }
     // part: insert into the owner's inventory
     if (part) {
@@ -79,9 +82,13 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
         }),
       });
       if (r.ok) { const rows = await r.json(); granted.part = rows[0] || null; }
+      else {
+        console.error('[supabase] parts insert failed', r.status, await r.text().catch(() => ''));
+      }
     }
     return { ok: true, granted };
   } catch (e) {
+    console.error('[supabase] grantReward threw', e && e.message || e);
     return { ok: false, reason: String(e && e.message || e) };
   }
 }

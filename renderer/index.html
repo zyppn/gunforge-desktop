@@ -599,7 +599,49 @@ function newProfile(){
 }
 function xpNeeded(l){ return 100 + (l-1)*80; }
 
-async function saveProfile(){ await sSet('profile', P); refreshChips(); }
+/* ---- Cloud loadout persistence ----
+   The players row is the source of truth on launch (equipped / equipped_weapon),
+   but nothing used to write back to it, so every restart reset the loadout to
+   bare m17. Debounced so rapid equip clicks coalesce into one PATCH. ---- */
+let _loadoutTimer = null, _loadoutInFlight = false, _loadoutDirty = false;
+async function pushLoadoutCloud(){
+  if(!ACCOUNT.online || !ACCOUNT.playerId) return;     // offline: local save already handled it
+  if(_loadoutInFlight){ _loadoutDirty = true; return; } // coalesce: re-run after the current PATCH
+  _loadoutInFlight = true;
+  try{
+    const r = await fetch(BACKEND.supabaseUrl + '/rest/v1/players?id=eq.' + ACCOUNT.playerId, {
+      method: 'PATCH',
+      headers: Object.assign(sbHeaders(), {'Prefer':'return=minimal'}),
+      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17' })
+    });
+    if(!r.ok) console.error('[cloud] loadout PATCH failed', r.status, await r.text().catch(()=>''));
+  }catch(e){ console.error('[cloud] loadout PATCH threw', e && e.message || e); }
+  finally{
+    _loadoutInFlight = false;
+    if(_loadoutDirty){ _loadoutDirty = false; saveLoadoutCloud(); }
+  }
+}
+function saveLoadoutCloud(){
+  clearTimeout(_loadoutTimer);
+  _loadoutTimer = setTimeout(pushLoadoutCloud, 600);
+}
+// Quitting within the debounce window would drop the pending write, so flush on the
+// way out. keepalive lets the request outlive the page (sendBeacon can't set auth headers).
+function flushLoadoutCloud(){
+  if(!ACCOUNT.online || !ACCOUNT.playerId) return;
+  clearTimeout(_loadoutTimer);
+  try{
+    fetch(BACKEND.supabaseUrl + '/rest/v1/players?id=eq.' + ACCOUNT.playerId, {
+      method: 'PATCH', keepalive: true,
+      headers: Object.assign(sbHeaders(), {'Prefer':'return=minimal'}),
+      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17' })
+    });
+  }catch(e){}
+}
+window.addEventListener('beforeunload', flushLoadoutCloud);
+window.addEventListener('pagehide', flushLoadoutCloud);
+
+async function saveProfile(){ await sSet('profile', P); saveLoadoutCloud(); refreshChips(); }
 
 async function loadProfile(){
   let p = await sGet('profile');
