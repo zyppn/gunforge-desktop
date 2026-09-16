@@ -885,6 +885,32 @@ function partCard(p, actionsHtml, tag){
 }
 
 /* ---------------- MENU ---------------- */
+/* Queued matches are otherwise invisible outside the results screen. Surfacing
+   the count turns a dropped connection into "my rewards are stacking up"
+   instead of "I got nothing", and gives a stuck queue somewhere to show. */
+async function refreshPendingBadge(){
+  const el = document.getElementById('pendingsync');
+  if(!el) return;
+  let n = 0;
+  try{ n = await outboxCount(); }catch(e){ return; }
+  if(!n){ el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = '\u29D6 ' + n + ' match' + (n>1?'es':'') + ' pending sync \u2014 '
+    + 'rewards are held on the server side and will be credited automatically. '
+    + '<a href="#" onclick="retryPending();return false;" style="color:var(--brass)">Retry now</a>';
+}
+async function retryPending(){
+  const n = await outboxDrain();
+  if(n){
+    try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
+    toast(n+' QUEUED MATCH'+(n>1?'ES':'')+' CREDITED');
+    renderMenu();
+  } else {
+    toast('STILL UNREACHABLE — MATCHES REMAIN QUEUED');
+  }
+  refreshPendingBadge();
+}
+
 function renderMenu(){
   const need = xpNeeded(P.level), pct = Math.min(1, P.xp/need);
   const nextUnlock = WEAPONS.filter(w=>w.unlock>P.level).sort((a,b)=>a.unlock-b.unlock)[0];
@@ -896,6 +922,7 @@ function renderMenu(){
    +'<div style="max-width:340px;margin-top:14px"><div class="note">LVL '+P.level+' — '+P.xp+' / '+need+' XP'
    +(nextUnlock ? ' · next unlock: '+esc(nextUnlock.name)+' @ LVL '+nextUnlock.unlock : ' · all weapons unlocked')+'</div>'
    +'<div class="xpbar"><i style="transform:scaleX('+pct+')"></i></div></div>'
+   +'<div id="pendingsync" class="note" style="margin-top:10px;display:none"></div>'
    +'</div>'
    +'<div class="menutiles">'
    +'<div class="tile" onclick="openSetup()"><div class="t">▸ Deploy</div><div class="d">FFA · Team Deathmatch · Campaign. Three maps. Parts drop at match end.</div></div>'
@@ -914,6 +941,7 @@ function renderMenu(){
    +'<button class="btn sm" onclick="menuSettings()">SETTINGS</button></div>'
    +'</div>';
   show('menu');
+  refreshPendingBadge();
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'
