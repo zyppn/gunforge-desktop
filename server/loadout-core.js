@@ -21,13 +21,22 @@
 
   const SLOTS = ['frame','barrel','magazine','foregrip','stock','optic'];
 
+  // `pieces` and `rarity` mirror the client's SETS table so rollServerDrop can
+  // mint real set pieces. id / weapon / need / effect must stay identical to the
+  // client's copy in renderer/index.html or set bonuses will not line up.
   const SETS = [
-    {id:'saint',   weapon:'m17',      need:2, effect:'critheal'},
-    {id:'hornet',  weapon:'havoc9',   need:3, effect:'homing'},
-    {id:'dragon',  weapon:'vkraptor', need:2, effect:'fire_nova'},
-    {id:'bulwark', weapon:'warden',   need:3, effect:'killshield'},
-    {id:'ghost',   weapon:'ls1',      need:2, effect:'pierce_all'},
-    {id:'jugg',    weapon:'goliath',  need:4, effect:'firing_resist'},
+    {id:'saint',   weapon:'m17',      need:2, effect:'critheal',      rarity:'epic',
+     pieces:{barrel:"Saint's Whisper", optic:"Saint's Eye"}},
+    {id:'hornet',  weapon:'havoc9',   need:3, effect:'homing',        rarity:'epic',
+     pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'}},
+    {id:'dragon',  weapon:'vkraptor', need:2, effect:'fire_nova',     rarity:'epic',
+     pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'}},
+    {id:'bulwark', weapon:'warden',   need:3, effect:'killshield',    rarity:'epic',
+     pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Chassis', optic:'Bulwark Ward'}},
+    {id:'ghost',   weapon:'ls1',      need:2, effect:'pierce_all',    rarity:'legendary',
+     pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'}},
+    {id:'jugg',    weapon:'goliath',  need:4, effect:'firing_resist', rarity:'legendary',
+     pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'}},
   ];
 
   const weaponById = id => WEAPONS.find(w => w.id === id) || WEAPONS[0];
@@ -145,14 +154,45 @@
   }
   // server-side drop: same odds as the client, but produced by the SERVER so
   // the client can never fabricate a part. Returns a part object or null.
+  // Ability pool. minR is an index into RKEYS: 2=rare, 3=epic, 4=legendary.
+  // Mirrors ABILITIES in renderer/index.html — the client owns the display
+  // names and descriptions; the server only needs the ids and thresholds.
+  const ABILITY_MINR = {
+    incendiary:2, cryo:2, deadeye:2, swift:2,
+    pierce:3, ricochet:3,
+    vampiric:4, explosive:4,
+  };
+  function rollAbility(rarity){
+    const ri = RKEYS.indexOf(rarity);
+    if(ri < 2) return null;
+    const chance = ri===2 ? 0.55 : ri===3 ? 0.8 : 1.0;
+    if(Math.random() > chance) return null;
+    const pool = Object.keys(ABILITY_MINR).filter(a => ABILITY_MINR[a] <= ri);
+    return pool[Math.floor(Math.random()*pool.length)];
+  }
+
+  /* End-of-match drop, rolled SERVER-SIDE so a hacked client can't mint loot.
+     Mirrors the client's rollDrop(kills, true): same 0.35+kills curve, same
+     15% set-piece branch, same ability rolls. Offline callers stamp the result
+     bound:true, so bot-farmed set pieces are usable but not auctionable. */
   function rollServerDrop(kills){
     const chance = 0.35 + Math.min((kills||0)*0.02, 0.25);
     if(Math.random() > chance) return null;
+    // 15% of drops are set pieces
+    if(Math.random() < 0.15){
+      const set = SETS[Math.floor(Math.random()*SETS.length)];
+      const slots = Object.keys(set.pieces);
+      const slot = slots[Math.floor(Math.random()*slots.length)];
+      const base = PART_POOL[slot][Math.floor(Math.random()*PART_POOL[slot].length)];
+      return { weapon:set.weapon, slot, rarity:set.rarity, name:set.pieces[slot],
+               mods:scaleMods(base.mods, set.rarity), ability:null, set:set.id };
+    }
     const wid = WEAPONS[Math.floor(Math.random()*WEAPONS.length)].id;
     const slot = SLOTS[Math.floor(Math.random()*SLOTS.length)];
     const rarity = rollRarity();
     const tpl = PART_POOL[slot][Math.floor(Math.random()*PART_POOL[slot].length)];
-    return { weapon:wid, slot, rarity, name:tpl.name, mods:scaleMods(tpl.mods, rarity), set:null };
+    return { weapon:wid, slot, rarity, name:tpl.name,
+             mods:scaleMods(tpl.mods, rarity), ability:rollAbility(rarity), set:null };
   }
 
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped, rollServerDrop };

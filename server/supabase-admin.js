@@ -78,6 +78,7 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
           owner_id: playerId,
           weapon_id: part.weapon, slot: part.slot, rarity: part.rarity,
           name: part.name, mods: part.mods || {}, set_id: part.set || null,
+          ability: part.ability || null,
           source: part.source || 'pvp', bound: !!part.bound,
         }),
       });

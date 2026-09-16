@@ -11,7 +11,13 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "sync:core": "node -e \"require('fs').copyFileSync('server/loadout-core.js','renderer/vendor/loadout-core.js')\"",
+    "prestart": "npm run sync:core",
+    "predist": "npm run sync:core",
+    "predist:win": "npm run sync:core",
+    "predist:mac": "npm run sync:core",
+    "predist:linux": "npm run sync:core"
   },
   "devDependencies": {
     "electron": "^44.2.0",

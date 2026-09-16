@@ -3195,19 +3195,32 @@ function endMatch(campWin){
   const mapName = G.map.name;
   const lvlBefore = P.level;
 
-  // ---- 1) LOCAL reward computed instantly (never awaits anything) ----
-  const xp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
-  const cr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
-  const drop = rollDrop(kills, true);
-  P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
-  if(win) P.stats.wins++;
-  grantXp(xp); P.credits += cr;
-  if(drop) P.inventory.push(drop);
-  saveProfile();               // local save, fire-and-forget
-  refreshChips();
+  // ---- 1) LOCAL reward — used only when we are NOT signed in. ----
+  // When online the SERVER rolls the drop and computes xp/credits (see
+  // /reward/offline). Banking a local guess here meant the results screen
+  // showed one part while the account received a different one, so the local
+  // roll is now a fallback we only apply if the server never answers.
+  const localXp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
+  const localCr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
+  const online = !!ACCOUNT.online;
+
+  function bankLocalReward(){
+    const d = rollDrop(kills, true);
+    P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+    if(win) P.stats.wins++;
+    grantXp(localXp); P.credits += localCr;
+    if(d) P.inventory.push(d);
+    saveProfile();             // local save, fire-and-forget
+    refreshChips();
+    return d;
+  }
+
+  let drop = null;
+  if(!online) drop = bankLocalReward();
 
   // ---- 2) render results IMMEDIATELY — the UI never waits on the network ----
-  renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlBefore, drop);
+  // Online: reward rows render pending and are filled from the server's reply.
+  renderResults(mode, mapName, win, placeTxt, kills, deaths, localXp, localCr, lvlBefore, drop, online);
   G = null;
 
   // ---- 3) sync to server in the BACKGROUND; update the panel if/when it returns ----
@@ -3224,17 +3237,23 @@ function endMatch(campWin){
         clearTimeout(to);
         const sv = await r.json();
         if(sv && sv.ok){
-          // server persisted the authoritative reward — re-sync inventory quietly
+          // server persisted the authoritative reward — re-sync inventory quietly,
+          // then paint the REAL numbers and the REAL part over the pending rows
           const fresh = await loadCloudProfile();
           if(fresh) P = fresh;
           refreshChips();
+          paintServerReward(sv.xp, sv.credits, sv.part, lvlBefore);
           const tag = document.getElementById('rewardsync');
           if(tag) tag.textContent = '✓ saved to your account';
         } else {
+          const d = bankLocalReward();
+          paintServerReward(localXp, localCr, d, lvlBefore);
           const tag = document.getElementById('rewardsync');
           if(tag) tag.textContent = '⚠ saved locally (server declined)';
         }
       }catch(e){
+        const d = bankLocalReward();
+        paintServerReward(localXp, localCr, d, lvlBefore);
         const tag = document.getElementById('rewardsync');
         if(tag) tag.textContent = '⚠ saved locally (offline)';
       }
@@ -3242,7 +3261,28 @@ function endMatch(campWin){
   }
 }
 
-function renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlBefore, drop){
+/* Renders the post-match panel. When `pending` is true (i.e. we are signed in and
+   the server is still computing the authoritative reward) the XP / credits / salvage
+   rows render as placeholders and paintServerReward() fills them in on reply. */
+function dropBlockHtml(drop){
+  return drop
+    ? '<div class="eyebrow" style="margin-top:20px">◆ FIELD SALVAGE RECOVERED</div><div class="dropcard">'+partCard(drop)+'</div>'
+    : '<div class="note" style="margin-top:20px">No salvage recovered this run. Drop odds rise with eliminations.</div>';
+}
+function paintServerReward(xp, cr, drop, lvlBefore){
+  const x = document.getElementById('resxp'); if(x) x.textContent = '+'+(xp|0);
+  const c = document.getElementById('rescr'); if(c) c.textContent = '+'+(cr|0);
+  const line = document.getElementById('resrankline');
+  if(line && P.level > lvlBefore){
+    line.style.display = '';
+    const rb = document.getElementById('resrank');
+    if(rb) rb.textContent = 'LEVEL UP → ' + P.level;
+  }
+  const d = document.getElementById('resdrop');
+  if(d){ d.innerHTML = dropBlockHtml(drop); hydrateThumbs(); }
+  if(drop) setTimeout(()=>playDropSound(drop.rarity), 200);
+}
+function renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlBefore, drop, pending){
   $('#results').innerHTML =
    '<div class="panel" style="text-align:center;padding:28px">'
    +'<div class="eyebrow">'+MODES.find(m=>m.id===mode).name+' · '+esc(mapName)+'</div>'
@@ -3251,13 +3291,14 @@ function renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlB
    +'<div style="margin-top:14px">'
    +'<div class="resline"><span>Eliminations</span><b>'+kills+'</b></div>'
    +'<div class="resline"><span>Deaths</span><b>'+deaths+'</b></div>'
-   +'<div class="resline"><span>XP earned</span><b>+'+xp+'</b></div>'
-   +'<div class="resline"><span>Credits earned</span><b style="color:var(--brass)">+'+cr+'</b></div>'
-   +(P.level>lvlBefore ? '<div class="resline"><span>Rank</span><b style="color:var(--brass)">LEVEL UP → '+P.level+'</b></div>' : '')
+   +'<div class="resline"><span>XP earned</span><b id="resxp">'+(pending?'…':'+'+xp)+'</b></div>'
+   +'<div class="resline"><span>Credits earned</span><b id="rescr" style="color:var(--brass)">'+(pending?'…':'+'+cr)+'</b></div>'
+   +'<div class="resline" id="resrankline"'+((!pending && P.level>lvlBefore)?'':' style="display:none"')+'><span>Rank</span>'
+     +'<b id="resrank" style="color:var(--brass)">'+(P.level>lvlBefore?'LEVEL UP → '+P.level:'')+'</b></div>'
    +'</div>'
-   +(drop
-     ? '<div class="eyebrow" style="margin-top:20px">◆ FIELD SALVAGE RECOVERED</div><div class="dropcard">'+partCard(drop)+'</div>'
-     : '<div class="note" style="margin-top:20px">No salvage recovered this run. Drop odds rise with eliminations.</div>')
+   +'<div id="resdrop">'+(pending
+     ? '<div class="note" style="margin-top:20px;opacity:.65">◆ ASSESSING FIELD SALVAGE…</div>'
+     : dropBlockHtml(drop))+'</div>'
    +(ACCOUNT.online ? '<div class="note" style="margin-top:12px;opacity:.6" id="rewardsync">syncing to your account…</div>' : '')
    +'<div class="btnrow" style="justify-content:center"><button class="btn primary" onclick="startMatch()">▸ REDEPLOY</button>'
    +'<button class="btn" onclick="renderInventory()">PARTS LOCKER</button>'
@@ -3265,7 +3306,7 @@ function renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlB
    +'</div>';
   show('results');
   hydrateThumbs();
-  if(drop) setTimeout(()=>playDropSound(drop.rarity), 320);
+  if(!pending && drop) setTimeout(()=>playDropSound(drop.rarity), 320);
 }
 
 /* --- drop reveal fanfare: more notes and shimmer the rarer the part --- */

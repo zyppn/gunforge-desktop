@@ -33,6 +33,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Verify loadout-core copies are identical
+        run: node -e "const fs=require('fs'); if(fs.readFileSync('server/loadout-core.js','utf8')!==fs.readFileSync('renderer/vendor/loadout-core.js','utf8')){ console.error('loadout-core.js copies have diverged - run: npm run sync:core'); process.exit(1); }"
+
       - name: Build installer
         run: npx electron-builder ${{ matrix.args }} --publish never
 

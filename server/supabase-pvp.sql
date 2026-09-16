@@ -29,6 +29,7 @@ create table if not exists parts (
   name          text not null,
   set_id        text,
   mods          jsonb not null default '{}',
+  ability       text,                             -- rolled on rare+ drops, null otherwise
   equipped      boolean not null default false,
   source        text not null default 'pvp',      -- where the drop came from ('pvp', 'quest', ...)
   bound         boolean not null default false,   -- soulbound: cannot be auctioned
