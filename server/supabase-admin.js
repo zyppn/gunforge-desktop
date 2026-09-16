@@ -48,6 +48,33 @@ async function playerIdForUid(uid) {
   } catch (e) { return null; }
 }
 
+/* Claim a match id so a replayed reward can't be granted twice.
+   Returns true if this is the first time we've seen the id (caller should
+   grant), false if it was already processed (caller should skip).
+   Inserts with resolution=ignore-duplicates: PostgREST returns the new row on
+   success and an empty array when the id already existed. On any error we
+   return true — a rare double grant is a better failure than silently eating
+   a player's reward, and if Supabase is unreachable the grant will fail too. */
+async function claimMatch(mid, playerId){
+  if(!ENABLED || !mid || !playerId) return true;   // no id -> nothing to dedupe against
+  try{
+    const r = await fetch(SUPABASE_URL + '/rest/v1/processed_matches', {
+      method: 'POST',
+      headers: adminHeaders({ 'Prefer': 'resolution=ignore-duplicates,return=representation' }),
+      body: JSON.stringify({ mid: String(mid).slice(0, 64), player_id: playerId }),
+    });
+    if(!r.ok){
+      console.error('[supabase] claimMatch failed', r.status, await r.text().catch(() => ''));
+      return true;
+    }
+    const rows = await r.json().catch(() => []);
+    return rows.length > 0;        // [] => the id was already there => duplicate
+  }catch(e){
+    console.error('[supabase] claimMatch threw', e && e.message || e);
+    return true;
+  }
+}
+
 /* Grant a match reward to a verified account. Atomic-ish: credits via
    an RPC that adds (never sets), parts via insert. Returns what was granted. */
 async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDelta = null }) {
@@ -94,4 +121,4 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
   }
 }
 
-module.exports = { ENABLED, verifyUser, playerIdForUid, grantReward };
+module.exports = { ENABLED, verifyUser, playerIdForUid, claimMatch, grantReward };

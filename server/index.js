@@ -303,6 +303,13 @@ const server = http.createServer((req, res) => {
         if(!pid){ sendJson(res, 404, { ok:false, reason:'no-player' }); return; }
 
         const data = JSON.parse(body || '{}');
+        // Idempotency: the client may be replaying a queued match whose original
+        // response was lost. Claim the id first — a duplicate grants nothing.
+        const firstTime = await Admin.claimMatch(data.mid, pid);
+        if(!firstTime){
+          sendJson(res, 200, { ok:true, duplicate:true, credits:0, xp:0, part:null });
+          return;
+        }
         // SERVER decides the reward from reported result — client can't name credit amounts.
         // Clamp reported kills/mode to sane bounds so a forged report can't mint absurd rewards.
         const kills  = Math.max(0, Math.min(50, Number(data.kills) || 0));
