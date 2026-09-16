@@ -428,7 +428,7 @@ async function outboxDrain(){
   const uid_ = await ensureAuth();
   if(!uid_) return 0;                     // still no session — leave the queue intact
   const left = [];
-  let credited = 0;
+  const got = [];                          // what the server actually granted on replay
   for(const e of q){
     try{
       const ctrl = new AbortController();
@@ -440,7 +440,7 @@ async function outboxDrain(){
       });
       clearTimeout(to);
       const sv = await r.json().catch(()=>null);
-      if(sv && sv.ok){ credited++; continue; }        // delivered (or already known) -> drop it
+      if(sv && sv.ok){ got.push(sv); continue; }      // delivered (or already known) -> drop it
       console.error('[outbox] replay declined', r.status, sv && sv.reason);
       left.push(e);                                    // keep for the next attempt
     }catch(err){
@@ -448,7 +448,18 @@ async function outboxDrain(){
     }
   }
   await sSet(OUTBOX_KEY, left);
-  return credited;
+  return got;
+}
+// "2 MATCHES CREDITED · +330 CR · +490 XP · Ghost Bore [LEGENDARY]"
+function drainToast(got){
+  if(!got || !got.length) return '';
+  const cr = got.reduce((a,g)=>a+(g.credits|0), 0);
+  const xp = got.reduce((a,g)=>a+(g.xp|0), 0);
+  const parts = got.filter(g=>g.part).map(g=>g.part.name+' ['+String(g.part.rarity||'').toUpperCase()+']');
+  let t = got.length+' MATCH'+(got.length>1?'ES':'')+' CREDITED';
+  if(cr || xp) t += ' \u00B7 +'+cr+' CR \u00B7 +'+xp+' XP';
+  if(parts.length) t += ' \u00B7 '+parts.join(' \u00B7 ');
+  return t;
 }
 
 // Load (or create) this account's cloud profile. Returns a profile object
@@ -688,10 +699,11 @@ function flushLoadoutCloud(){
 }
 // Connectivity came back — try to clear the queue without waiting for a restart.
 window.addEventListener('online', () => {
-  outboxDrain().then(async n => {
-    if(!n) return;
+  outboxDrain().then(async got => {
+    if(!got.length) return;
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
-    toast(n+' QUEUED MATCH'+(n>1?'ES':'')+' CREDITED');
+    toast(drainToast(got));
+    refreshPendingBadge();
   }).catch(()=>{});
 });
 window.addEventListener('beforeunload', flushLoadoutCloud);
@@ -900,10 +912,10 @@ async function refreshPendingBadge(){
     + '<a href="#" onclick="retryPending();return false;" style="color:var(--brass)">Retry now</a>';
 }
 async function retryPending(){
-  const n = await outboxDrain();
-  if(n){
+  const got = await outboxDrain();
+  if(got.length){
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
-    toast(n+' QUEUED MATCH'+(n>1?'ES':'')+' CREDITED');
+    toast(drainToast(got));
     renderMenu();
   } else {
     toast('STILL UNREACHABLE — MATCHES REMAIN QUEUED');
@@ -1551,13 +1563,15 @@ function buildGunModel(wid, eqOpt){
   const bodyD = w.type==='Pistol'?0.26 : w.type==='SMG'?0.36 : w.type==='Sniper'?0.6 : w.type==='LMG'?0.55 : 0.48;
   const bodyH = w.type==='LMG'?0.13:0.11;
   const bodyZ = -0.28, frontZ = bodyZ - bodyD/2, rearZ = bodyZ + bodyD/2;
-  vmFrame(eq.frame, w, bodyD, bodyH, bodyZ);
+  const fr = vmFrame(eq.frame, w, bodyD, bodyH, bodyZ) || { topY: bodyH/2, bw: 0.045 };
   const setCount = {};
   for(const s of SLOTS){ const pp = eq[s]; if(pp && pp.set) setCount[pp.set] = (setCount[pp.set]||0)+1; }
   const act = SETS.filter(st => st.weapon===w.id && (setCount[st.id]||0) >= st.need);
   const accCol = act.length ? RCOL[act[0].rarity] : 0xE8A33D;
-  const accent = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.014, 0.07), mat(accCol, accCol, act.length?1.2:0.6));
-  accent.position.set(0, bodyH/2+0.006, bodyZ + bodyD*0.18);
+  // Side-mounted status strip. It used to sit dead-centre on the receiver top, where it
+  // read as a stray gold tab next to the optic; on the flank it's clearly a status light.
+  const accent = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.042, 0.07), mat(accCol, accCol, act.length?1.2:0.6));
+  accent.position.set(-(fr.bw + 0.007), 0, bodyZ + bodyD*0.18);
   accent.userData = { baseEI: act.length?1.2:0.6, baseCol: new THREE.Color(accCol) };
   VMT.userData.accent = accent;
   VMT.add(accent);
@@ -1567,7 +1581,7 @@ function buildGunModel(wid, eqOpt){
   vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH);
   vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH);
   vmStock(eq.stock, w, rearZ, bodyH);
-  vmOptic(eq.optic, w, bodyZ, bodyH, bodyD);
+  vmOptic(eq.optic, w, bodyZ, bodyH, bodyD, fr.topY);
 
   const g = VMT; VMT = null;
   return {group:g, tipZ, aim:VMT_AIM, ads:VMT_ADS};
@@ -1599,18 +1613,24 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
   const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
   let bw = 0.045; // half-width, drives side furniture placement
+  // topY = how high this frame ACTUALLY builds over the receiver centre. vmOptic used to
+  // assume bodyH/2, so frames with a raised rail punched straight through the scope tube.
+  let topY = bodyH/2;
   if(!p){ vmBox(m, 0.09, bodyH, bodyD, 0, 0, bodyZ); }
   else if(n.includes('Forged')){
     bw = 0.05;
+    topY = Math.max(bodyH*0.55, bodyH*0.66 + 0.014);   // raised body + top rail
     vmBox(m, 0.1, bodyH*1.1, bodyD, 0, 0, bodyZ);
     vmBox(m, 0.055, 0.028, bodyD*0.8, 0, bodyH*0.66, bodyZ);
     for(const dz of [-0.3, 0, 0.3]) vmBox(steel(), 0.012, 0.012, 0.005, bw+0.001, bodyH*0.2, bodyZ + bodyD*dz); // forge bolts
   } else if(n.includes('Polymer')){
     bw = 0.036;
+    topY = bodyH*0.44;
     vmBox(m, 0.072, bodyH*0.88, bodyD, 0, 0, bodyZ);
     vmBox(dark(), 0.074, bodyH*0.22, bodyD*0.45, 0, -bodyH*0.16, bodyZ + bodyD*0.1); // stipple band
   } else if(n.includes('Recon')){
     bw = 0.0425;
+    topY = Math.max(bodyH*0.5, bodyH*0.52 + 0.0025);   // upper shelf + rail teeth
     vmBox(m, 0.085, bodyH*0.52, bodyD, 0, bodyH*0.24, bodyZ);
     vmBox(m, 0.085, bodyH*0.3, bodyD*0.82, 0, -bodyH*0.27, bodyZ);
     for(let i=-2;i<=2;i++) vmBox(dark(), 0.06, 0.005, 0.012, 0, bodyH*0.52, bodyZ + i*bodyD*0.15); // rail teeth
@@ -1632,6 +1652,7 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
   vmBox(tone(0.72), 0.012, 0.004, 0.07, 0, -0.072, guardZ);                 // trigger guard bottom
   vmBox(tone(0.72), 0.012, 0.026, 0.004, 0, -0.058, guardZ - 0.034);        // guard front
   vmBox(steel(), 0.006, 0.022, 0.006, 0, -0.055, guardZ + 0.012);           // trigger
+  return { topY, bw };
 }
 function vmBarrel(p, w, frontZ){
   const m = partMat(p), n = p ? p.name : '';
@@ -1881,12 +1902,13 @@ function vmStock(p, w, rearZ, bodyH){
     vmBox(dark(), 0.072, 0.005, 0.122, 0, 0.024, rearZ + 0.06); // seam
   }
 }
-function vmOptic(p, w, bodyZ, bodyH, bodyD){
+function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
   /* Real, hollow optics the camera looks THROUGH. Tuning rule: the housing's rear
      rim must subtend less than the field of view, so the world stays visible
      AROUND the scope ring; reticles live at the FAR glass so they render hairline. */
   const m = partMat(p), n = p ? p.name : '';
-  const y = bodyH/2, z = bodyZ + bodyD*0.1;
+  // Mount off whatever the frame actually builds to, never the nominal receiver height.
+  const y = Math.max(bodyH/2, (typeof frameTop === 'number' ? frameTop : bodyH/2)), z = bodyZ + bodyD*0.1;
   const rc = p ? RCOL[p.rarity] : 0xC9D4DE;
   const glowM = (c, op) => new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:op, depthWrite:false, side:THREE.DoubleSide});
   const strip = (wd, ht, c, op, px, py, pz) => {
@@ -1905,6 +1927,19 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     }
   };
   const setAim = (ax, ay, az, dist, fovDrop) => { VMT_AIM = {x:ax, y:ay, z:az}; VMT_ADS = {dist, fovDrop}; };
+  /* Mount post. It must stop AT the optic's underside — the old fixed 0.03 height ran
+     past it and stuck up inside the bore, which reads as a block floating in the glass. */
+  /* Optic height is DERIVED, never hardcoded: frame top + a fixed standoff + this
+     optic's own underside radius. That makes the 4mm gap an invariant instead of a
+     coincidence, so a tall frame rail lifts the optic by exactly the rail height
+     rather than stacking an offset tuned for a bare receiver on top of it. */
+  const STANDOFF = 0.004;
+  const mountCy = under => y + STANDOFF + under;
+  const riser = (wd, dp, underside) => {
+    const h = underside - y;
+    if(h <= 0.002) return;   // the optic is already sitting on the frame; a post would only clip
+    vmBox(m, wd, h, dp, 0, y + h/2, z);
+  };
   // black inner lining: rarity color outside, black where the eye lands (matches the tubes)
   const lineBlack = (wd, ht, px, py, pz) => {
     const b = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.052), mat(0x0A0D10));
@@ -1920,7 +1955,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
   if(!p){
     if(w.type === 'Sniper'){
       // integral scope: wide short objective, eye relief keeps the world visible around the ring
-      const cy = y + 0.055;
+      const cy = mountCy(0.049);   // tube 0.043 + wall 0.006
       tube(0.043, 0.006, 0.10, z, cy, mat(0x2B3540));
       strip(0.078, 0.0006, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
       strip(0.0006, 0.078, 0x9FB2C2, 0.9, 0, cy, z - 0.038);
@@ -1937,17 +1972,17 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     return;
   }
   if(n.includes('Red Dot') || n.includes('Eye')){
-    const cy = y + 0.055;
+    const cy = mountCy(0.036);   // torus 0.03 + tube 0.006
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
     const c = n.includes('Eye') ? 0xFFE9A0 : 0xFF3B30;
     const win = new THREE.Mesh(new THREE.CircleGeometry(0.028, 16), glowM(rc, 0.15));
     win.position.set(0, cy, z + 0.001); glassPane(win, 0.15);
     strip(0.005, 0.005, c, 1, 0, cy, z - 0.003);
-    vmBox(m, 0.02, 0.03, 0.02, 0, y+0.012, z);
+    riser(0.02, 0.02, cy - 0.036);
     setAim(0, cy, z, 0.22, 24);
   } else if(n.includes('Holo')){
-    const cy = y + 0.052;
+    const cy = mountCy(0.0275);  // side plates run 0.055 tall, centred on cy
     vmBox(m, 0.06, 0.012, 0.05, 0, y+0.065, z);
     vmBox(m, 0.012, 0.055, 0.05, -0.028, cy, z);
     vmBox(m, 0.012, 0.055, 0.05, 0.028, cy, z);
@@ -1962,8 +1997,8 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     setAim(0, cy, z, 0.22, 24);
   } else if(n.includes('ACOG') || n.includes('Lens')){
     const long = n.includes('Lens');
-    const cy = y + 0.05, cz = z - (long?0.02:0);
     const r = long ? 0.041 : 0.028, len = long ? 0.10 : 0.08;
+    const cy = mountCy(r + 0.006), cz = z - (long?0.02:0);
     tube(r, 0.006, len, cz, cy, m); // shell wears the part's rarity color
     const glass = new THREE.Mesh(new THREE.CircleGeometry(r - 0.001, 16), glowM(long?0x9BE8FF:rc, 0.12));
     glass.position.set(0, cy, cz - len/2 - 0.001); glassPane(glass, 0.12);
@@ -1977,20 +2012,21 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
       const l2 = strip(0.012, 0.001, rc, 0.95, 0.004, cy - 0.002, cz - 0.028); l2.rotation.z = -0.85;
       strip(0.001, 0.016, rc, 0.95, 0, cy - 0.013, cz - 0.028);
     }
-    vmBox(m, 0.02, 0.03, 0.03, 0, y+0.015, z);
+    riser(0.02, 0.03, cy - (r + 0.006));
     setAim(0, cy, cz, long?0.28:0.22, long?52:34);
   } else if(n.includes('Iron')){
     // an actual hollow ring — nothing blocks the center anymore
-    const cy = y + 0.06;
+    const cy = mountCy(0.039);   // torus 0.034 + tube 0.005
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.005, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
     vmBox(m, 0.0035, 0.028, 0.0035, 0, cy - 0.016, z); // bead post from the ring's base
     strip(0.004, 0.004, rc, 1, 0, cy - 0.001, z - 0.004); // bead on top of its post
-    vmBox(m, 0.014, 0.03, 0.014, 0, y+0.014, z);  // riser
+    riser(0.014, 0.014, cy - 0.039);
     setAim(0, cy, z, 0.3, 24);
   } else if(n.includes('Ward')){
     // armored WINDOW: generous opening, thin bezel, chunky plates pushed outboard
-    const cy = y + 0.045, hw = 0.04, hh = 0.028, bz = 0.008;
+    const hw = 0.04, hh = 0.028, bz = 0.008;
+    const cy = mountCy(hh + bz);
     vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy+hh+bz/2, z);          // top bar
     vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy-hh-bz/2, z);          // bottom bar
     vmBox(m, bz, hh*2, 0.05, -(hw+bz/2), cy, z);              // side bezels
@@ -2006,7 +2042,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD){
     setAim(0, cy, z, 0.26, 24);
   } else {
     // unknown optics: hollow window frame, never a solid block in your face
-    const cy = y + 0.05;
+    const cy = mountCy(0.021);
     vmBox(m, 0.05, 0.006, 0.05, 0, cy+0.018, z);
     vmBox(m, 0.05, 0.006, 0.05, 0, cy-0.018, z);
     vmBox(m, 0.006, 0.03, 0.05, -0.025, cy, z);
@@ -3826,12 +3862,12 @@ function liveExitToLobby(){
       $('#boot').innerHTML = '<div class="panel">ESTABLISHING UPLINK... AUTHENTICATING OPERATOR...</div>';
       // Replay any match whose reward never reached the server, BEFORE pulling the
       // profile, so freshly granted parts are in the inventory we load.
-      let replayed = 0;
+      let replayed = [];
       try{ replayed = await outboxDrain(); }
       catch(e){ console.error('outbox drain failed', e); }
       try{ cloud = await loadCloudProfile(); }
       catch(e){ console.error('cloud profile failed, using local', e); }
-      if(replayed) setTimeout(()=>toast(replayed+' QUEUED MATCH'+(replayed>1?'ES':'')+' CREDITED'), 900);
+      if(replayed.length) setTimeout(()=>toast(drainToast(replayed)), 900);
     }
     if(cloud){ P = cloud; }
     else { await loadProfile(); }  // offline / no backend -> local save
