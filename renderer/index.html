@@ -397,6 +397,23 @@ function partFromRow(r){
            name: r.name, mods: r.mods || {}, ability: r.ability || null, set: r.set_id || null };
 }
 
+// Every economy mutation goes through a security-definer RPC now: the client
+// asks, Postgres decides, and the profile is reloaded from what actually happened.
+async function sbRpc(name, body){
+  const r = await fetch(BACKEND.supabaseUrl+'/rest/v1/rpc/'+name, {
+    method:'POST', headers: sbHeaders(), body: JSON.stringify(body || {})
+  });
+  if(!r.ok){
+    let msg = '';
+    try{ const j = await r.json(); msg = j.message || j.hint || j.details || ''; }catch(e){}
+    throw new Error(msg || ('rpc '+name+' -> '+r.status));
+  }
+  return r.json().catch(()=>null);
+}
+// Pull the authoritative profile after a mutation so the UI shows the DB, not a guess.
+async function resyncProfile(){
+  try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
+}
 async function sbSelect(path){
   const r = await fetch(BACKEND.supabaseUrl+'/rest/v1/'+path, { headers: sbHeaders() });
   if(!r.ok) throw new Error('select '+path+' -> '+r.status);
@@ -485,6 +502,13 @@ async function loadCloudProfile(){
   const inventory = partRows.map(partFromRow);
   // equipped map lives in the player row (jsonb) so a loadout survives across devices
   const equipped = row.equipped || {};
+  // Listed parts stay in the locker (escrowed, returnable) — tag them so the UI can
+  // show it and so equip/scrap/relist don't get attempted and bounced by the RPC.
+  let listedUids = [];
+  try{
+    const ls = await sbSelect('listings?select=part_uid&status=eq.active&seller_id=eq.'+row.id);
+    listedUids = ls.map(l => l.part_uid);
+  }catch(e){ console.error('listed lookup failed', e); }
   ACCOUNT.online = true; ACCOUNT.uid = uid; ACCOUNT.playerId = row.id;
   return {
     id: row.id, name: row.callsign,
@@ -492,6 +516,7 @@ async function loadCloudProfile(){
     equippedWeapon: row.equipped_weapon || 'm17',
     equipped, inventory,
     stats: row.stats || {kills:0,deaths:0,matches:0,wins:0},
+    listedUids,
     v: 1, cloud: true
   };
 }
@@ -671,9 +696,10 @@ async function pushLoadoutCloud(){
     const r = await fetch(BACKEND.supabaseUrl + '/rest/v1/players?id=eq.' + ACCOUNT.playerId, {
       method: 'PATCH',
       headers: Object.assign(sbHeaders(), {'Prefer':'return=minimal'}),
-      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17' })
+      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17',
+                             callsign: (P.name || 'OPERATOR').slice(0, 18) })
     });
-    if(!r.ok) console.error('[cloud] loadout PATCH failed', r.status, await r.text().catch(()=>''));
+    if(!r.ok) console.error('[cloud] profile PATCH failed', r.status, await r.text().catch(()=>''));
   }catch(e){ console.error('[cloud] loadout PATCH threw', e && e.message || e); }
   finally{
     _loadoutInFlight = false;
@@ -693,7 +719,8 @@ function flushLoadoutCloud(){
     fetch(BACKEND.supabaseUrl + '/rest/v1/players?id=eq.' + ACCOUNT.playerId, {
       method: 'PATCH', keepalive: true,
       headers: Object.assign(sbHeaders(), {'Prefer':'return=minimal'}),
-      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17' })
+      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17',
+                             callsign: (P.name || 'OPERATOR').slice(0, 18) })
     });
   }catch(e){}
 }
@@ -730,19 +757,9 @@ async function loadProfile(){
   await claimPayouts();
 }
 
-async function claimPayouts(){
-  try{
-    const pay = await sGet('auction:payouts', true);
-    if(pay && pay[P.id]){
-      const amt = pay[P.id];
-      P.credits += amt;
-      delete pay[P.id];
-      await sSet('auction:payouts', pay, true);
-      await saveProfile();
-      toast('AUCTION SALE CLEARED · +' + amt + ' CR');
-    }
-  }catch(e){}
-}
+// Obsolete: buy_listing pays the seller inside the same transaction as the sale,
+// so there is no ledger to settle at login. Kept as a no-op for existing callers.
+async function claimPayouts(){ /* sales settle atomically in buy_listing */ }
 
 /* ---------------- part generation ---------------- */
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -1076,14 +1093,26 @@ function renderInventory(filter){
   const eqAll = {};
   for(const wid in P.equipped) for(const s in P.equipped[wid]) eqAll[P.equipped[wid][s]] = true;
 
+  // A listed part is escrowed: still yours, still in the locker, but it can't be
+  // equipped, scrapped or relisted until the listing is cancelled or it sells.
+  const listed = {};
+  (P.listedUids || []).forEach(u => listed[u] = true);
+
   const cards = items.map(p=>{
     const isEq = !!eqAll[p.uid];
-    const acts =
-      (isEq ? '<button class="btn sm" onclick="invUnequip(\''+p.uid+'\')">UNEQUIP</button>'
-            : '<button class="btn sm primary" onclick="invEquip(\''+p.uid+'\')">EQUIP</button>')
-      +'<button class="btn sm" '+(isEq?'disabled':'')+' onclick="openList(\''+p.uid+'\')">AUCTION</button>'
-      +'<button class="btn sm danger" '+(isEq?'disabled':'')+' onclick="trashPart(\''+p.uid+'\')">SCRAP +'+RAR[p.rarity].scrap+'</button>';
-    return partCard(p, acts, isEq?'<span class="eqtag">● EQUIPPED</span>':'');
+    const isLs = !!listed[p.uid];
+    const lock = (isEq || isLs) ? 'disabled' : '';
+    const acts = isLs
+      ? '<button class="btn sm" onclick="renderAuction()">VIEW LISTING</button>'
+        +'<button class="btn sm" disabled>AUCTION</button>'
+        +'<button class="btn sm danger" disabled>SCRAP +'+RAR[p.rarity].scrap+'</button>'
+      : (isEq ? '<button class="btn sm" onclick="invUnequip(\''+p.uid+'\')">UNEQUIP</button>'
+              : '<button class="btn sm primary" onclick="invEquip(\''+p.uid+'\')">EQUIP</button>')
+        +'<button class="btn sm" '+lock+' onclick="openList(\''+p.uid+'\')">AUCTION</button>'
+        +'<button class="btn sm danger" '+lock+' onclick="trashPart(\''+p.uid+'\')">SCRAP +'+RAR[p.rarity].scrap+'</button>';
+    const tag = isLs ? '<span class="eqtag">\u29D6 LISTED</span>'
+              : isEq ? '<span class="eqtag">● EQUIPPED</span>' : '';
+    return partCard(p, acts, tag);
   }).join('');
 
   $('#inventory').innerHTML =
@@ -1115,13 +1144,45 @@ function trashPart(uidv){
 }
 async function doTrash(uidv){
   const p = getPart(uidv); if(!p){ closeModal(); return; }
-  P.credits += RAR[p.rarity].scrap;
-  P.inventory = P.inventory.filter(x=>x.uid!==uidv);
-  await saveProfile(); closeModal(); renderInventory();
+  if(!ACCOUNT.online){
+    // no cloud session: local-only economy, same as it ever was
+    P.credits += RAR[p.rarity].scrap;
+    P.inventory = P.inventory.filter(x=>x.uid!==uidv);
+    await saveProfile(); closeModal(); renderInventory(); return;
+  }
+  try{
+    const cr = await sbRpc('scrap_part', { p_part: uidv });
+    await resyncProfile();
+    toast('SCRAPPED \u00B7 +' + (cr|0) + ' CR');
+  }catch(e){ toast('SCRAP FAILED \u2014 ' + e.message); }
+  closeModal(); renderInventory();
 }
 
 /* ---------------- AUCTION HOUSE (shared across all players) ---------------- */
-async function getListings(){ return (await sGet('auction:listings', true)) || []; }
+/* Reads the real `listings` table. Three flat queries instead of a PostgREST
+   embed: no dependency on foreign-key constraint names, and each one is easy to
+   eyeball in the network tab when something looks wrong. */
+async function getListings(){
+  if(!HAS_SUPABASE()) return [];
+  try{
+    const rows = await sbSelect('listings?select=id,price,created_at,seller_id,part_uid'
+      + '&status=eq.active&order=created_at.desc&limit=120');
+    if(!rows.length) return [];
+    const partIds = [...new Set(rows.map(r=>r.part_uid))].join(',');
+    const sellerIds = [...new Set(rows.map(r=>r.seller_id))].join(',');
+    const [parts, sellers] = await Promise.all([
+      sbSelect('parts?select=*&uid=in.('+partIds+')'),
+      sbSelect('players?select=id,callsign&id=in.('+sellerIds+')'),
+    ]);
+    const pmap = {}; parts.forEach(x => pmap[x.uid] = x);
+    const smap = {}; sellers.forEach(x => smap[x.id] = x.callsign);
+    return rows.filter(r => pmap[r.part_uid]).map(r => ({
+      id: r.id, price: r.price, ts: Date.parse(r.created_at) || 0,
+      seller: r.seller_id, sellerName: smap[r.seller_id] || 'OPERATOR',
+      part: partFromRow(pmap[r.part_uid])
+    }));
+  }catch(e){ console.error('auction read failed', e); return []; }
+}
 
 function openList(uidv){
   const p = getPart(uidv); if(!p) return;
@@ -1136,15 +1197,14 @@ async function doList(uidv){
   const p = getPart(uidv); if(!p){ closeModal(); return; }
   const price = Math.max(1, Math.min(999999, Math.floor(+$('#pricein').value || 0)));
   if(!price){ toast('ENTER A PRICE'); return; }
-  const listings = await getListings();
-  listings.push({ id:uid(), seller:P.id, sellerName:P.name, part:p, price, ts:Date.now() });
-  while(listings.length > 120) listings.shift();
-  const ok = await sSet('auction:listings', listings, true);
-  if(!ok){ toast('AUCTION UPLINK FAILED — TRY AGAIN'); return; }
-  P.inventory = P.inventory.filter(x=>x.uid!==uidv);
-  await saveProfile();
-  closeModal(); toast('LISTED FOR '+price+' CR');
-  renderAuction();
+  if(!ACCOUNT.online){ toast('AUCTION NEEDS A CLOUD SESSION'); closeModal(); return; }
+  try{
+    // list_part enforces ownership, not-equipped, not-bound, no duplicate, max 3 active
+    await sbRpc('list_part', { p_part: uidv, p_price: price });
+    await resyncProfile();
+    toast('LISTED FOR ' + price + ' CR');
+  }catch(e){ toast('LISTING FAILED \u2014 ' + e.message); }
+  closeModal(); renderAuction();
 }
 async function renderAuction(){
   $('#auction').innerHTML = '<div class="panel">QUERYING AUCTION UPLINK...</div>';
@@ -1173,38 +1233,23 @@ async function renderAuction(){
   hydrateThumbs();
 }
 async function buyListing(id){
-  const listings = await getListings();
-  const i = listings.findIndex(l=>l.id===id);
-  if(i<0){ toast('ALREADY SOLD'); renderAuction(); return; }
-  const l = listings[i];
-  if(P.credits < l.price){ toast('NOT ENOUGH CREDITS'); return; }
-  listings.splice(i,1);
-  const ok = await sSet('auction:listings', listings, true);
-  if(!ok){ toast('AUCTION UPLINK FAILED'); return; }
-  // credit the seller's payout ledger
+  if(!ACCOUNT.online){ toast('AUCTION NEEDS A CLOUD SESSION'); return; }
   try{
-    const pay = (await sGet('auction:payouts', true)) || {};
-    pay[l.seller] = (pay[l.seller]||0) + l.price;
-    await sSet('auction:payouts', pay, true);
-  }catch(e){}
-  P.credits -= l.price;
-  l.part.uid = uid(); // fresh uid to avoid collisions
-  P.inventory.push(l.part);
-  await saveProfile();
-  toast('PURCHASED '+l.part.name.toUpperCase()+' · -'+l.price+' CR');
+    // buy_listing moves credits and ownership in one transaction, or neither.
+    // No payout ledger any more: the seller is paid on the spot.
+    await sbRpc('buy_listing', { p_listing: id });
+    await resyncProfile();
+    toast('PURCHASED');
+  }catch(e){ toast('PURCHASE FAILED \u2014 ' + e.message); }
   renderAuction();
 }
 async function cancelListing(id){
-  const listings = await getListings();
-  const i = listings.findIndex(l=>l.id===id && l.seller===P.id);
-  if(i<0){ toast('LISTING GONE'); renderAuction(); return; }
-  const l = listings[i];
-  listings.splice(i,1);
-  const ok = await sSet('auction:listings', listings, true);
-  if(!ok){ toast('AUCTION UPLINK FAILED'); return; }
-  P.inventory.push(l.part);
-  await saveProfile();
-  toast('DELISTED — PART RETURNED');
+  if(!ACCOUNT.online){ toast('AUCTION NEEDS A CLOUD SESSION'); return; }
+  try{
+    await sbRpc('cancel_listing', { p_listing: id });
+    await resyncProfile();
+    toast('DELISTED \u2014 PART RETURNED');
+  }catch(e){ toast('DELIST FAILED \u2014 ' + e.message); }
   renderAuction();
 }
 

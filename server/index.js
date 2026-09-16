@@ -323,7 +323,9 @@ const server = http.createServer((req, res) => {
         if(drop){ drop.source = 'offline'; drop.bound = true; }
         const statsDelta = { kills, deaths: Math.max(0,Math.min(50,Number(data.deaths)||0)), matches:1, wins: win?1:0 };
         const result = await Admin.grantReward(pid, { credits, xp, part: drop, statsDelta });
-        sendJson(res, 200, { ok: true, credits, xp, part: (result.granted && result.granted.part) ? drop : null });
+        sendJson(res, 200, { ok: true, credits, xp,
+          part: (result.granted && result.granted.part) ? drop : null,
+          lockerFull: !!(result.granted && result.granted.lockerFull) });
       } catch(e){ sendJson(res, 400, { ok:false, reason: String(e && e.message || e) }); }
     });
     return;

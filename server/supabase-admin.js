@@ -75,6 +75,30 @@ async function claimMatch(mid, playerId){
   }
 }
 
+/* How many parts this player is holding, excluding anything with an active
+   listing (escrowed, not occupying locker space). Returns null if we can't tell,
+   so callers can decide whether to grant rather than guessing a number. */
+async function partsHeld(playerId){
+  if(!ENABLED || !playerId) return null;
+  try{
+    const r = await fetch(SUPABASE_URL + '/rest/v1/rpc/parts_held', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ p_player: playerId }),
+    });
+    if(!r.ok){
+      console.error('[supabase] parts_held failed', r.status, await r.text().catch(() => ''));
+      return null;
+    }
+    const n = await r.json().catch(() => null);
+    return typeof n === 'number' ? n : null;
+  }catch(e){
+    console.error('[supabase] parts_held threw', e && e.message || e);
+    return null;
+  }
+}
+
+const PART_CAP = 200;   // keep in step with part_cap() in migration 004
+
 /* Grant a match reward to a verified account. Atomic-ish: credits via
    an RPC that adds (never sets), parts via insert. Returns what was granted. */
 async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDelta = null }) {
@@ -97,8 +121,15 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
         console.error('[supabase] add_progress failed', r.status, await r.text().catch(() => ''));
       }
     }
-    // part: insert into the owner's inventory
+    // part: insert into the owner's inventory, if the locker has room.
+    // A full locker forfeits the drop rather than silently failing the insert —
+    // the client says so on the results screen instead of showing nothing.
     if (part) {
+      const held = await partsHeld(playerId);
+      if(held !== null && held >= PART_CAP){
+        granted.lockerFull = true;
+        return { ok: true, granted };
+      }
       const r = await fetch(SUPABASE_URL + '/rest/v1/parts', {
         method: 'POST', headers: adminHeaders({ 'Prefer': 'return=representation' }),
         body: JSON.stringify({
@@ -121,4 +152,4 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
   }
 }
 
-module.exports = { ENABLED, verifyUser, playerIdForUid, claimMatch, grantReward };
+module.exports = { ENABLED, PART_CAP, verifyUser, playerIdForUid, claimMatch, partsHeld, grantReward };
