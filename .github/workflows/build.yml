@@ -9,24 +9,46 @@ permissions:
   contents: write
 
 jobs:
-  # Each platform builds and stashes its output. Nothing touches the GitHub
-  # Release here — three jobs racing to create and update the same release is
-  # what left v1.4.9 stranded as a draft with a partial asset list.
+  # Create the release ONCE, before any build runs.
+  #
+  # The original workflow let all three matrix jobs create-or-update the release
+  # themselves, and they collided over the draft -> published flip: v1.4.9 ended
+  # up a permanent draft with a partial asset list. Routing everything through
+  # upload-artifact fixed the race but tripled the bytes moved (250MB up per
+  # platform, 750MB down, 750MB up again) and took 20+ minutes.
+  #
+  # Doing it this way keeps the race fix AND the speed: one writer creates the
+  # release, then each runner uploads its own output directly, in parallel.
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create the release up front
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false      # one platform failing must not cancel the others
       matrix:
         include:
           - os: windows-latest
             args: --win
-            name: win
+            artifact: "*.exe"
           - os: macos-latest
             args: --mac
-            name: mac
+            artifact: "*.dmg"
           - os: ubuntu-latest
             args: --linux
-            name: linux
+            artifact: "*.AppImage"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -44,42 +66,18 @@ jobs:
       - name: Build installer
         run: npx electron-builder ${{ matrix.args }} --publish never
 
-      - name: Stash build output
-        uses: actions/upload-artifact@v4
+      # Filenames never collide across platforms (latest.yml / latest-mac.yml /
+      # latest-linux.yml, and each blockmap is platform-specific), so three
+      # concurrent uploads into one existing release don't fight.
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: dist-${{ matrix.name }}
-          retention-days: 1
-          if-no-files-found: error
-          path: |
-            dist/*.exe
-            dist/*.dmg
-            dist/*.AppImage
+          files: |
+            dist/${{ matrix.artifact }}
             dist/*.zip
             dist/*.blockmap
             dist/latest*.yml
-
-  # One job, one release, one upload — no race, no half-published draft.
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Collect every platform's output
-        uses: actions/download-artifact@v4
-        with:
-          path: staged
-          pattern: dist-*
-          merge-multiple: true
-
-      - name: Show what will be published
-        run: ls -la staged
-
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: staged/*
           token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
-          fail_on_unmatched_files: true
