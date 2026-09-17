@@ -114,6 +114,9 @@
       out[s] = {
         slot: s,
         weapon: weaponId,
+        // name drives which geometry the viewmodel builds (vmOptic branches on it),
+        // so remote avatars need it to render the right part, not a generic block
+        name: typeof p.name === 'string' ? p.name.slice(0, 40) : '',
         rarity: VALID_RARITY[p.rarity] ? p.rarity : 'common',
         set: typeof p.set === 'string' ? p.set.slice(0, 24) : undefined,
         ability: typeof p.ability === 'string' ? p.ability.slice(0, 24) : undefined,

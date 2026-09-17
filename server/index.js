@@ -15,7 +15,8 @@ const Admin = require('./supabase-admin.js');
 const TICK = 1000 / 30;           // 30 Hz simulation
 const AW = 60, AD = 40;           // arena size — mirrors the client maps
 const PLAYER_R = 0.5, EYE = 1.6;
-const SPEED = 6.2;
+const SPEED = 6.0;   // MUST match the client's baseSpeed (6.0 * speedMul) or
+                     // prediction and reconciliation fight each other forever
 
 /* one live session per callsign on this server — no parallel-room reward farming
    (interim identity until Supabase auth binds sessions to real accounts) */
@@ -41,11 +42,20 @@ function circleRect(cx, cz, r, w){
 }
 
 /* ---- synced state ---- */
+/* Cosmetic slice of an equipped part — just enough for another client to BUILD
+   the right geometry (vmOptic and friends branch on name) and colour it by
+   rarity. Stats stay server-side in this.loadouts; nothing here is trusted for
+   damage. Synced once per player per match, so the delta cost is negligible. */
+class PartState extends Schema {}
+defineTypes(PartState, {
+  name: 'string', rarity: 'string', set: 'string', ability: 'string',
+});
 class PlayerState extends Schema {}
 defineTypes(PlayerState, {
   name: 'string', x: 'number', z: 'number', yaw: 'number',
   hp: 'number', kills: 'number', deaths: 'number', dead: 'boolean',
-  wid: 'string', // weapon id for remote rendering
+  wid: 'string',              // weapon id for remote rendering
+  eq: { map: PartState },     // equipped parts by slot, for remote rendering
 });
 class ArenaState extends Schema {}
 defineTypes(ArenaState, {
@@ -59,6 +69,8 @@ defineTypes(ArenaState, {
 
 class ArenaRoom extends Room {
   onCreate(options){
+    this.maxClients = 8;   // matches the spawn table and the "#N OF 8" scoreboard;
+                           // a 9th player gets their own room instead of a shared spawn
     this.maxClients = 8;
     const state = new ArenaState();
     state.players = new MapSchema();
@@ -104,6 +116,18 @@ class ArenaRoom extends Room {
     p.wid = String(options.wid || 'm17').slice(0, 16);
     const cleanEq = LoadoutCore.sanitizeEquipped(p.wid, options.equipped);
     this.loadouts.set(client.sessionId, LoadoutCore.computeStats(p.wid, cleanEq));
+    // publish the cosmetic slice so other clients can draw this player's build
+    p.eq = new MapSchema();
+    for(const slot in cleanEq){
+      const cp = cleanEq[slot];
+      if(!cp) continue;
+      const ps = new PartState();
+      ps.name = cp.name || '';
+      ps.rarity = cp.rarity || 'common';
+      ps.set = cp.set || '';
+      ps.ability = cp.ability || '';
+      p.eq.set(slot, ps);
+    }
     // verify identity from the JWT the client sent — server trusts the token, not the name
     if(Admin.ENABLED && options.token){
       Admin.verifyUser(options.token).then(uid => uid && Admin.playerIdForUid(uid))
@@ -150,8 +174,14 @@ class ArenaRoom extends Room {
       // server-side movement with wall collision — the client cannot teleport
       const len = Math.hypot(inp.mx, inp.mz);
       if(len > 0.01){
-        const nx = p.x + (inp.mx/Math.max(1,len)) * SPEED * dt;
-        const nz = p.z + (inp.mz/Math.max(1,len)) * SPEED * dt;
+        // honour the loadout's speed modifier — it was being ignored, so +10% move
+        // speed parts did nothing in live PvP. Clamped so a bad part can't fly.
+        const pl = this.loadouts.get(id);
+        // the client slows to 60% while aiming; mirror it or ADS guarantees drift
+        const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
+        const spd = SPEED * Math.max(0.5, Math.min(1.6, (pl && pl.speedMul) || 1)) * (1 - ads * 0.4);
+        const nx = p.x + (inp.mx/Math.max(1,len)) * spd * dt;
+        const nz = p.z + (inp.mz/Math.max(1,len)) * spd * dt;
         if(!this.collides(nx, p.z)) p.x = clamp(nx, PLAYER_R, AW - PLAYER_R);
         if(!this.collides(p.x, nz)) p.z = clamp(nz, PLAYER_R, AD - PLAYER_R);
       }
@@ -337,5 +367,8 @@ const transport = new WebSocketTransport({ server });
 const game = new Server({ transport });
 // Nagle's algorithm batches small packets, adding 40-200ms to tiny realtime messages — disable it per socket
 transport.wss.on('connection', (ws) => { try{ ws._socket.setNoDelay(true); }catch(e){} });
-game.define('arena', ArenaRoom);
+// filterBy(['map']) so joinOrCreate only matches a room running the SAME map.
+// Without it every player landed in the first room created, rendering their own
+// choice while colliding against someone else's walls.
+game.define('arena', ArenaRoom).filterBy(['map']);
 server.listen(port, () => console.log('[gunforge-server] listening on :' + port));

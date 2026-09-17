@@ -2933,6 +2933,13 @@ function tick(now){
   if(paused){
     if(G.mode === 'live'){
       liveTick(dt); hud(); // the server plays on — sync and repaint under the menu
+      // advance local bullets too (no collision) so they don't hang frozen midair
+      for(let i = G.bullets.length - 1; i >= 0; i--){
+        const b = G.bullets[i];
+        if(b.mesh){ b.mesh.position.x += b.vx*dt; b.mesh.position.y += b.vy*dt; b.mesh.position.z += b.vz*dt; }
+        b.life -= dt;
+        if(b.life <= 0){ if(b.mesh) scene.remove(b.mesh); G.bullets.splice(i,1); }
+      }
       camera.rotation.order = 'YXZ';
       camera.position.set(G.me.x, EYE, G.me.z); // camera follows respawns even while menuing
       camera.rotation.y = yaw + G.kickYaw;
@@ -2985,7 +2992,10 @@ function tick(now){
   // entities
   for(const e of G.ents){
     if(e.dead){
-      if(!e.grunt && G.elapsed >= e.respawnT && G.mode!=='camp') respawn(e);
+      // In live matches the SERVER owns death and respawn. Reviving locally made
+      // the client flip dead->alive->dead against server state every cycle, which
+      // is what spammed the "DOWN — REDEPLOYING" banner.
+      if(!e.grunt && G.mode !== 'live' && G.elapsed >= e.respawnT && G.mode!=='camp') respawn(e);
       continue;
     }
     if(e.reloading && G.elapsed >= e.reloadT){ e.reloading=false; e.ammo=e.wep.mag; }
@@ -3570,7 +3580,7 @@ function startLiveMatch(){
   toast('CONNECTING TO LIVE ARENA…');
   const eqForServer = {};
   { const _eq = equippedParts(P.equippedWeapon);
-    for(const s of SLOTS){ const pp = _eq[s]; eqForServer[s] = pp ? {slot:s, weapon:pp.weapon, rarity:pp.rarity, set:pp.set||undefined, ability:pp.ability||undefined, mods:pp.mods||{}} : null; } }
+    for(const s of SLOTS){ const pp = _eq[s]; eqForServer[s] = pp ? {slot:s, weapon:pp.weapon, name:pp.name, rarity:pp.rarity, set:pp.set||undefined, ability:pp.ability||undefined, mods:pp.mods||{}} : null; } }
   client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map, equipped:eqForServer, token: (AUTH && AUTH.token) || null }).then(room => {
     if(!G || G.mode!=='live'){ try{ room.leave(); }catch(e){} return; }
     live.room = room; live.myId = room.sessionId;
@@ -3609,9 +3619,25 @@ function startLiveMatch(){
         r.mesh.userData.gunMuzzle.material.opacity = 0.9;
         r.mesh.userData.kick = 1;
       }
+      // Spawn a visible tracer. Previously remote fire was a muzzle flash and a
+      // sound with nothing travelling, so incoming rounds were invisible.
+      const w = WEAPONS.find(x => x.id === (r.p.wid || 'm17')) || WEAPONS[0];
+      const dx = Math.cos(m.yaw), dz = Math.sin(m.yaw);
+      // Cosmetic only: the SERVER already did hit registration for this shot, so
+      // these never enter G.bullets and can't damage anyone or need an owner.
+      live.tracers = live.tracers || [];
+      for(let i = 0; i < (w.pellets || 1); i++){
+        const sp = w.spread || 0;
+        const jx = dx + (Math.random()-0.5)*2*sp, jz = dz + (Math.random()-0.5)*2*sp;
+        const jl = Math.hypot(jx, jz) || 1;
+        const tm = new THREE.Mesh(bulletGeo, bMat(0xE8734A));
+        tm.position.set(m.x + (jx/jl)*0.6, 1.35, m.z + (jz/jl)*0.6);
+        scene.add(tm);
+        live.tracers.push({ mesh: tm, vx: (jx/jl)*w.bspd, vz: (jz/jl)*w.bspd, life: 1.1 });
+      }
       const d = Math.hypot(m.x - G.me.x, m.z - G.me.z);
       const range = 26;
-      if(d < range) gunSound('Assault Rifle', 0.8 * (1 - d/range));
+      if(d < range) gunSound(w.type, 0.8 * (1 - d/range));
     });
     room.onLeave(() => {
       if(G && G.running && G.mode==='live'){ toast('DISCONNECTED FROM ARENA'); abandonMatch(); }
@@ -3644,12 +3670,54 @@ function startLiveMatch(){
  }
 }
 
+/* Synced PartState map -> the {slot: part} object buildGunModel wants.
+   Only cosmetic fields exist here; mods are absent because remote geometry
+   never needs them (stats live on the server). */
+function remoteEq(p){
+  const out = {};
+  for(const s of SLOTS) out[s] = null;
+  if(!p.eq || typeof p.eq.forEach !== 'function') return out;
+  p.eq.forEach((v, slot) => {
+    out[slot] = { slot, weapon: p.wid || 'm17', name: v.name || '',
+                  rarity: v.rarity || 'common',
+                  set: v.set || null, ability: v.ability || null, mods: {} };
+  });
+  return out;
+}
+// Signature of everything that changes how a remote's gun LOOKS.
+function remoteGunSig(p){
+  let sig = (p.wid || 'm17');
+  if(p.eq && typeof p.eq.forEach === 'function'){
+    const bits = [];
+    p.eq.forEach((v, slot) => bits.push(slot+':'+(v.name||'')+':'+(v.rarity||'')+':'+(v.set||'')));
+    bits.sort();
+    sig += '|' + bits.join(',');
+  }
+  return sig;
+}
 function liveAddRemote(id, p){
-  const built = botMesh(0xE8734A, false, { wid: p.wid || 'm17', eq: {} });
+  const built = botMesh(0xE8734A, false, { wid: p.wid || 'm17', eq: remoteEq(p) });
   built.position.set(p.x, 0, p.z);
   scene.add(built);
-  const r = { p, mesh: built, cx:p.x, cz:p.z, cyaw:0, lastX:p.x, lastZ:p.z, phase:Math.random()*6.28 };
+  // builtSig remembers what we drew. Colyseus can deliver the entry before every
+  // field has decoded, so a remote could be built blank and stay a bare pistol
+  // forever — liveTick rebuilds whenever the synced loadout disagrees.
+  const r = { p, mesh: built, builtSig: remoteGunSig(p), cx:p.x, cz:p.z, cyaw:0,
+              lastX:p.x, lastZ:p.z, phase:Math.random()*6.28 };
   live.remotes.set(id, r);
+}
+// Swap a remote's body when their weapon changes (or finally arrives).
+function liveRebuildRemote(id, r){
+  const sig = remoteGunSig(r.p);
+  if(sig === r.builtSig) return;
+  const wasDead = !!r.wasDead;
+  if(r.mesh) scene.remove(r.mesh);
+  const built = botMesh(0xE8734A, false, { wid: r.p.wid || 'm17', eq: remoteEq(r.p) });
+  built.position.set(r.cx, 0, r.cz);
+  built.rotation.y = -r.p.yaw + Math.PI/2;
+  scene.add(built);
+  r.mesh = built; r.builtSig = sig;
+  if(wasDead && built.userData.hbGroup) built.userData.hbGroup.visible = false;
 }
 function liveRemoveRemote(id){
   const r = live.remotes.get(id);
@@ -3677,6 +3745,7 @@ function liveTick(dt){
     const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw);
     room.send('input', {
       mx, mz,
+      ads: adsT,                 // server mirrors the 40% ADS slowdown
       yaw: Math.atan2(fwdZ, fwdX),
       pitch,
       fire: (locked && !live.results && !paused) && mouseDown && !me.reloading && !me.dead
@@ -3690,8 +3759,16 @@ function liveTick(dt){
     }
     live.lastHp = sp.hp;
     me.hp = sp.hp;
-    if(sp.dead && !me.dead){ me.dead = true; toast('DOWN — RESPAWNING'); }
-    if(!sp.dead && me.dead){ me.dead = false; me.hp = sp.hp; me.x = sp.x; me.z = sp.z; live.lastHp = sp.hp; }
+    if(sp.dead && !me.dead){
+      me.dead = true;
+      // guard: only announce on the living->dead edge, and at most once per death,
+      // so a state re-sync can't re-fire it every patch
+      if(!live.deadAnnounced){ live.deadAnnounced = true; toast('DOWN — RESPAWNING'); }
+    }
+    if(!sp.dead && me.dead){
+      me.dead = false; me.hp = sp.hp; me.x = sp.x; me.z = sp.z; live.lastHp = sp.hp;
+      live.deadAnnounced = false;
+    }
     if(!me.dead){
       // reconciliation: soft pull for small drift, hard snap only for teleport-scale (respawn) jumps
       const dvx = sp.x - me.x, dvz = sp.z - me.z, dv = Math.hypot(dvx, dvz);
@@ -3702,7 +3779,8 @@ function liveTick(dt){
   }
 
   // ---- remotes: interpolate + walk ----
-  live.remotes.forEach(r => {
+  live.remotes.forEach((r, rid) => {
+    liveRebuildRemote(rid, r);
     const t = r.p;
     r.cx += (t.x - r.cx) * Math.min(1, dt*12);
     r.cz += (t.z - r.cz) * Math.min(1, dt*12);
@@ -3741,6 +3819,17 @@ function liveTick(dt){
     if(u.kick){ u.kick = Math.max(0, u.kick - dt*5); if(u.gun && u.gunBase) u.gun.position.z = u.gunBase.z - u.kick*0.07; }
   });
 
+  // ---- remote tracers (cosmetic) ----
+  if(live.tracers && live.tracers.length){
+    for(let i = live.tracers.length - 1; i >= 0; i--){
+      const t2 = live.tracers[i];
+      t2.mesh.position.x += t2.vx * dt;
+      t2.mesh.position.z += t2.vz * dt;
+      t2.life -= dt;
+      if(t2.life <= 0){ scene.remove(t2.mesh); live.tracers.splice(i, 1); }
+    }
+  }
+
   // ---- match clock + phase from the server ----
   G.time = room.state.timeLeft;
   if(room.state.phase === 'over' && !G.over){
@@ -3768,7 +3857,11 @@ function damageFlinchOnly(dmg){
 }
 
 function liveLeave(){
-  if(live){ if(live.pingTimer) clearInterval(live.pingTimer); if(live.room){ try{ live.room.leave(); }catch(e){} } }
+  if(live){
+    if(live.tracers){ live.tracers.forEach(t => scene.remove(t.mesh)); live.tracers = []; }
+    if(live.pingTimer) clearInterval(live.pingTimer);
+    if(live.room){ try{ live.room.leave(); }catch(e){} }
+  }
   const pt = document.getElementById('pingtag');
   if(pt) pt.style.display = 'none';
   live = null;
