@@ -66,18 +66,18 @@ jobs:
       - name: Build installer
         run: npx electron-builder ${{ matrix.args }} --publish never
 
-      # Filenames never collide across platforms (latest.yml / latest-mac.yml /
-      # latest-linux.yml, and each blockmap is platform-specific), so three
-      # concurrent uploads into one existing release don't fight.
+      # Uploaded with the gh CLI rather than softprops/action-gh-release.
+      # That action failed every single run on the macOS runner with
+      # "Error creating asset temp dir", ~70s in, before uploading a byte —
+      # Windows and Linux were fine. gh is preinstalled on all runners, does no
+      # temp-dir staging, and --clobber makes a retry idempotent.
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/${{ matrix.artifact }}
-            dist/*.zip
-            dist/*.blockmap
-            dist/latest*.yml
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(dist/*.dmg dist/*.exe dist/*.AppImage dist/*.zip dist/*.blockmap dist/latest*.yml)
+          if [ ${#files[@]} -eq 0 ]; then echo "no build output to upload"; exit 1; fi
+          printf 'uploading %s\n' "${files[@]}"
+          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber
