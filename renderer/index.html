@@ -430,6 +430,26 @@ async function sbSelect(path){
    that actually did land grants nothing instead of duplicating it.
    ===================================================================== */
 const OUTBOX_KEY = 'reward:outbox';
+/* A loadout/callsign PATCH that never landed. Without this, changing your gun
+   offline and quitting lost the change silently: the next cloud load overwrote
+   local with the stale server row. Replayed before the profile is read. */
+const LOADOUT_PENDING = 'loadout:pending';
+async function flushPendingLoadout(){
+  if(!HAS_SUPABASE() || !ACCOUNT.playerId) return false;
+  let pend = null;
+  try{ pend = await sGet(LOADOUT_PENDING); }catch(e){ return false; }
+  if(!pend) return false;
+  try{
+    const r = await fetch(BACKEND.supabaseUrl + '/rest/v1/players?id=eq.' + ACCOUNT.playerId, {
+      method: 'PATCH',
+      headers: Object.assign(sbHeaders(), {'Prefer':'return=minimal'}),
+      body: JSON.stringify(pend)
+    });
+    if(!r.ok){ console.error('[cloud] pending loadout replay failed', r.status); return false; }
+    await sSet(LOADOUT_PENDING, null);
+    return true;
+  }catch(e){ return false; }
+}
 async function outboxGet(){ try{ return (await sGet(OUTBOX_KEY)) || []; }catch(e){ return []; } }
 async function outboxAdd(entry){
   const q = await outboxGet();
@@ -692,15 +712,24 @@ async function pushLoadoutCloud(){
   if(!ACCOUNT.online || !ACCOUNT.playerId) return;     // offline: local save already handled it
   if(_loadoutInFlight){ _loadoutDirty = true; return; } // coalesce: re-run after the current PATCH
   _loadoutInFlight = true;
+  const payload = { equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17',
+                    callsign: (P.name || 'OPERATOR').slice(0, 18) };
   try{
     const r = await fetch(BACKEND.supabaseUrl + '/rest/v1/players?id=eq.' + ACCOUNT.playerId, {
       method: 'PATCH',
       headers: Object.assign(sbHeaders(), {'Prefer':'return=minimal'}),
-      body: JSON.stringify({ equipped: P.equipped || {}, equipped_weapon: P.equippedWeapon || 'm17',
-                             callsign: (P.name || 'OPERATOR').slice(0, 18) })
+      body: JSON.stringify(payload)
     });
-    if(!r.ok) console.error('[cloud] profile PATCH failed', r.status, await r.text().catch(()=>''));
-  }catch(e){ console.error('[cloud] loadout PATCH threw', e && e.message || e); }
+    if(r.ok){
+      await sSet(LOADOUT_PENDING, null);          // landed — nothing owed
+    } else {
+      console.error('[cloud] profile PATCH failed', r.status, await r.text().catch(()=>''));
+      await sSet(LOADOUT_PENDING, payload);       // owed; boot/reconnect will retry
+    }
+  }catch(e){
+    console.error('[cloud] loadout PATCH threw', e && e.message || e);
+    try{ await sSet(LOADOUT_PENDING, payload); }catch(e2){}
+  }
   finally{
     _loadoutInFlight = false;
     if(_loadoutDirty){ _loadoutDirty = false; saveLoadoutCloud(); }
@@ -1151,10 +1180,17 @@ async function doTrash(uidv){
     await saveProfile(); closeModal(); renderInventory(); return;
   }
   try{
+    // The RPC already committed. Apply the delta locally instead of refetching the
+    // whole inventory — a 200-part locker is ~70 KB per refetch on a 5 GB/mo tier.
     const cr = await sbRpc('scrap_part', { p_part: uidv });
-    await resyncProfile();
+    P.credits += (cr|0);
+    P.inventory = P.inventory.filter(x => x.uid !== uidv);
+    refreshChips();
     toast('SCRAPPED \u00B7 +' + (cr|0) + ' CR');
-  }catch(e){ toast('SCRAP FAILED \u2014 ' + e.message); }
+  }catch(e){
+    toast('SCRAP FAILED \u2014 ' + e.message);
+    await resyncProfile();   // unknown state -> reread the truth
+  }
   closeModal(); renderInventory();
 }
 
@@ -1201,9 +1237,13 @@ async function doList(uidv){
   try{
     // list_part enforces ownership, not-equipped, not-bound, no duplicate, max 3 active
     await sbRpc('list_part', { p_part: uidv, p_price: price });
-    await resyncProfile();
+    P.listedUids = (P.listedUids || []).concat([uidv]);
+    refreshChips();
     toast('LISTED FOR ' + price + ' CR');
-  }catch(e){ toast('LISTING FAILED \u2014 ' + e.message); }
+  }catch(e){
+    toast('LISTING FAILED \u2014 ' + e.message);
+    await resyncProfile();
+  }
   closeModal(); renderAuction();
 }
 async function renderAuction(){
@@ -1237,19 +1277,33 @@ async function buyListing(id){
   try{
     // buy_listing moves credits and ownership in one transaction, or neither.
     // No payout ledger any more: the seller is paid on the spot.
-    await sbRpc('buy_listing', { p_listing: id });
+    const res = await sbRpc('buy_listing', { p_listing: id });
+    if(res && res.part){
+      P.credits -= (res.price|0);
+      P.inventory.push(partFromRow(res.part));
+      refreshChips();
+      toast('PURCHASED \u00B7 ' + esc(res.part.name || 'PART') + ' \u00B7 -' + (res.price|0) + ' CR');
+    } else {
+      await resyncProfile();          // older server without 007 -> fall back
+      toast('PURCHASED');
+    }
+  }catch(e){
+    toast('PURCHASE FAILED \u2014 ' + e.message);
     await resyncProfile();
-    toast('PURCHASED');
-  }catch(e){ toast('PURCHASE FAILED \u2014 ' + e.message); }
+  }
   renderAuction();
 }
 async function cancelListing(id){
   if(!ACCOUNT.online){ toast('AUCTION NEEDS A CLOUD SESSION'); return; }
   try{
-    await sbRpc('cancel_listing', { p_listing: id });
-    await resyncProfile();
+    const freed = await sbRpc('cancel_listing', { p_listing: id });
+    if(freed) P.listedUids = (P.listedUids || []).filter(u => u !== freed);
+    refreshChips();
     toast('DELISTED \u2014 PART RETURNED');
-  }catch(e){ toast('DELIST FAILED \u2014 ' + e.message); }
+  }catch(e){
+    toast('DELIST FAILED \u2014 ' + e.message);
+    await resyncProfile();
+  }
   renderAuction();
 }
 
@@ -4003,11 +4057,24 @@ function liveExitToLobby(){
       let replayed = [];
       try{ replayed = await outboxDrain(); }
       catch(e){ console.error('outbox drain failed', e); }
+      // A loadout saved while offline must reach the server BEFORE we read the
+      // profile back, or the stale row would overwrite it. ACCOUNT.playerId is
+      // only known after a load, so this runs on the second pass below too.
+      try{ await flushPendingLoadout(); }catch(e){}
       try{ cloud = await loadCloudProfile(); }
       catch(e){ console.error('cloud profile failed, using local', e); }
       if(replayed.length) setTimeout(()=>toast(drainToast(replayed)), 900);
     }
-    if(cloud){ P = cloud; }
+    if(cloud){
+      P = cloud;
+      // now that ACCOUNT.playerId is known, a queued loadout can finally be sent
+      try{
+        if(await flushPendingLoadout()){
+          const again = await loadCloudProfile();
+          if(again) P = again;
+        }
+      }catch(e){}
+    }
     else { await loadProfile(); }  // offline / no backend -> local save
     await loadSettings();
     refreshChips();
