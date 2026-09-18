@@ -18,6 +18,27 @@ const PLAYER_R = 0.5, EYE = 1.6;
 const SPEED = 6.0;   // MUST match the client's baseSpeed (6.0 * speedMul) or
                      // prediction and reconciliation fight each other forever
 
+/* PvP ability tuning — deliberately its own table rather than reusing the
+   client's offline numbers. Values that feel fine against bots (lifesteal above
+   all) are oppressive in a duel where both players run the same build. */
+const PVP = {
+  burnDps:        4,     // incendiary damage per second
+  burnDur:        3,     // and how long it lasts (refreshes, never stacks)
+  slowDur:        1.5,   // cryo
+  slowMul:        0.65,  // movement multiplier while chilled
+  critChance:     0.12,  // deadeye
+  critMul:        2,
+  vampFrac:       0.08,  // 12% offline; toned down for PvP
+  explDmg:        10,    // explosive splash
+  explRadius:     2.2,
+  critHeal:       6,     // Saint set
+  killShield:     25,    // Bulwark set
+  novaRadius:     4,     // Dragon set: ignite around a corpse
+  homingCorridor: 1.5,   // "bullets curve toward enemies", done as hit forgiveness
+  baseCorridor:   0.6,   // normal hit tolerance
+  maxRange:       60,
+};
+
 /* one live session per callsign on this server — no parallel-room reward farming
    (interim identity until Supabase auth binds sessions to real accounts) */
 const activeCallsigns = new Map(); // NAME -> sessionId
@@ -56,6 +77,9 @@ defineTypes(PlayerState, {
   hp: 'number', kills: 'number', deaths: 'number', dead: 'boolean',
   wid: 'string',              // weapon id for remote rendering
   eq: { map: PartState },     // equipped parts by slot, for remote rendering
+  burnT: 'number',            // seconds of incendiary burn remaining
+  slowT: 'number',            // seconds of cryo slow remaining
+  shield: 'number',           // Bulwark set: absorbs damage before HP
 });
 class ArenaState extends Schema {}
 defineTypes(ArenaState, {
@@ -86,6 +110,7 @@ class ArenaRoom extends Room {
     this.fireT = new Map();    // sessionId -> next allowed fire time
     this.loadouts = new Map(); // sessionId -> computed weapon stats (server-authoritative)
     this.playerIds = new Map(); // sessionId -> supabase players.id (verified)
+    this.burnSrc = new Map();   // sessionId -> who set them alight (for kill credit)
     this.rewarded = false;      // guard: rewards granted once per round
 
     this.onMessage('ping', (client, msg) => {
@@ -98,6 +123,7 @@ class ArenaRoom extends Room {
       this.inputs.set(client.sessionId, {
         mx: clampN(msg.mx), mz: clampN(msg.mz),
         yaw: num(msg.yaw), pitch: clamp(num(msg.pitch), -1.4, 1.4),
+        ads: clamp(num(msg.ads), 0, 1),   // whitelisted, or the ADS speed match never arrives
         fire: !!msg.fire,
       });
     });
@@ -137,6 +163,7 @@ class ArenaRoom extends Room {
     const s = this.spawns[this.clients.length % this.spawns.length];
     p.x = s[0]; p.z = s[1]; p.yaw = 0;
     p.hp = 100; p.kills = 0; p.deaths = 0; p.dead = false;
+    p.burnT = 0; p.slowT = 0; p.shield = 0;
     this.state.players.set(client.sessionId, p);
     this.broadcast('presence', { name: p.name, on: true }, { except: client });
     if(this.clients.length >= 2 && this.state.phase === 'waiting') this.state.phase = 'live';
@@ -166,6 +193,29 @@ class ArenaRoom extends Room {
       this.state.rematchIn = Math.max(0, this.state.rematchIn - dt);
       if(this.state.rematchIn <= 0) this.resetMatch();
     }
+    // ---- status effects: burn ticks, timers expire ----
+    if(this.state.phase === 'live'){
+      this.state.players.forEach((p, id) => {
+        if(p.dead) return;
+        if(p.slowT > 0) p.slowT = Math.max(0, p.slowT - dt);
+        if(p.burnT > 0){
+          p.burnT = Math.max(0, p.burnT - dt);
+          p.hp -= PVP.burnDps * dt;          // burn bypasses shields, like the offline game
+          if(p.hp <= 0){
+            const srcId = this.burnSrc.get(id);
+            const src = srcId && this.state.players.get(srcId);
+            if(src && !src.dead && srcId !== id){
+              this.killPlayer(srcId, src, p, id, this.loadouts.get(srcId) || {});
+            } else {
+              p.dead = true; p.deaths++; p.burnT = 0; p.slowT = 0; p.shield = 0;
+              this.broadcast('kill', { killer: 'THE FIRE', victim: p.name });
+              this.clock.setTimeout(() => this.respawn(id), 2500);
+            }
+          }
+        }
+      });
+    }
+
     this.state.players.forEach((p, id) => {
       if(p.dead) return;
       const inp = this.inputs.get(id);
@@ -179,7 +229,8 @@ class ArenaRoom extends Room {
         const pl = this.loadouts.get(id);
         // the client slows to 60% while aiming; mirror it or ADS guarantees drift
         const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
-        const spd = SPEED * Math.max(0.5, Math.min(1.6, (pl && pl.speedMul) || 1)) * (1 - ads * 0.4);
+        const chill = p.slowT > 0 ? PVP.slowMul : 1;   // cryo
+        const spd = SPEED * Math.max(0.5, Math.min(1.6, (pl && pl.speedMul) || 1)) * (1 - ads * 0.4) * chill;
         const nx = p.x + (inp.mx/Math.max(1,len)) * spd * dt;
         const nz = p.z + (inp.mz/Math.max(1,len)) * spd * dt;
         if(!this.collides(nx, p.z)) p.x = clamp(nx, PLAYER_R, AW - PLAYER_R);
@@ -229,6 +280,7 @@ class ArenaRoom extends Room {
     let i = 0;
     this.state.players.forEach(p => {
       p.kills = 0; p.deaths = 0; p.hp = 100; p.dead = false;
+      p.burnT = 0; p.slowT = 0; p.shield = 0;
       const s = this.spawns[i++ % this.spawns.length];
       p.x = s[0]; p.z = s[1];
     });
@@ -238,41 +290,173 @@ class ArenaRoom extends Room {
     this.broadcast('rematch', {});
   }
 
+  /* ------------------------------------------------------------------
+     Hit registration.
+
+     Was: one ray down a fixed 0.6m corridor, damage = dmg * pellets. That made
+     the Warden an 8x-damage perfect-accuracy sniper at 60m and made every
+     spread part inert. Now each pellet is its own jittered ray, so spread and
+     pellet count both mean what they say.
+
+     Abilities are implemented as EFFECTS rather than physics — homing widens
+     the hit corridor, ricochet reflects the ray off one wall — so none of this
+     needs a projectile system. See PVP for the tuning values.
+     ------------------------------------------------------------------ */
   tryFire(id, p, inp){
     if(this.state.phase !== 'live') return; // no damage during waiting or results
     const now = Date.now();
-    const ld = this.loadouts.get(id) || { rof: 140, dmg: 12, pellets: 1, abilities: [] };
+    const ld = this.loadouts.get(id) || { rof:140, dmg:12, pellets:1, spread:0.05, abilities:[] };
     if((this.fireT.get(id) || 0) > now) return;
-    this.fireT.set(id, now + ld.rof); // real fire-rate from the verified loadout
+    this.fireT.set(id, now + ld.rof);
     this.broadcast('shot', { id, x: p.x, z: p.z, yaw: inp.yaw }, { except: this.clients.find(c => c.sessionId === id) });
-    // instant-trace hit registration on the server
-    const dx = Math.cos(inp.yaw), dz = Math.sin(inp.yaw);
-    let best = null, bestD = 60;
-    this.state.players.forEach((t, tid) => {
-      if(tid === id || t.dead) return;
-      // project target onto the ray
-      const rx = t.x - p.x, rz = t.z - p.z;
-      const along = rx*dx + rz*dz;
-      if(along < 0 || along > bestD) return;
-      const perp = Math.abs(rx*dz - rz*dx);
-      if(perp < 0.6 && this.losClear(p.x, p.z, t.x, t.z)){
-        best = { t, tid }; bestD = along;
+
+    const ab = ld.abilities || [];
+    const has = k => ab.indexOf(k) >= 0;
+    const corridor = has('homing') ? PVP.homingCorridor : PVP.baseCorridor;
+    const pierce = has('pierce_all') ? 99 : (has('pierce') ? 1 : 0);
+    const bounces = has('ricochet') ? 1 : 0;
+    const spread = Math.max(0, Number(ld.spread) || 0);
+    const pellets = Math.max(1, ld.pellets || 1);
+
+    for(let i = 0; i < pellets; i++){
+      // per-pellet jitter: this is what finally makes spread mods matter
+      const a = inp.yaw + (Math.random() - 0.5) * 2 * spread;
+      this.castPellet(id, p, Math.cos(a), Math.sin(a), ld, corridor, pierce, bounces);
+    }
+  }
+
+  /* One pellet. Walks the ray, damaging up to `pierce`+1 targets, and on
+     ricochet reflects off the first wall it would have stopped at. */
+  castPellet(id, p, dx, dz, ld, corridor, pierce, bounces){
+    let ox = p.x, oz = p.z, hitsLeft = pierce + 1;
+    const alreadyHit = new Set();
+
+    for(let leg = 0; leg <= bounces && hitsLeft > 0; leg++){
+      const targets = [];
+      this.state.players.forEach((t, tid) => {
+        if(tid === id || t.dead || alreadyHit.has(tid)) return;
+        const rx = t.x - ox, rz = t.z - oz;
+        const along = rx*dx + rz*dz;
+        if(along < 0 || along > PVP.maxRange) return;
+        const perp = Math.abs(rx*dz - rz*dx);
+        if(perp < corridor && this.losClear(ox, oz, t.x, t.z)) targets.push({ t, tid, along });
+      });
+      targets.sort((a, b) => a.along - b.along);
+
+      for(const hit of targets){
+        if(hitsLeft <= 0) break;
+        hitsLeft--; alreadyHit.add(hit.tid);
+        this.applyHit(id, p, hit.t, hit.tid, ld);
       }
-    });
-    if(best){
-      const tld = this.loadouts.get(best.tid);
-      let dmg = ld.dmg * (ld.pellets || 1);
-      const tInp = this.inputs.get(best.tid);
-      if(tld && tld.abilities && tld.abilities.indexOf('firing_resist') >= 0 && tInp && tInp.fire) dmg *= 0.7;
-      best.t.hp -= dmg;
-      if(best.t.hp <= 0){
-        best.t.dead = true; best.t.deaths++;
-        p.kills++;
-        this.broadcast('kill', { killer: p.name, victim: best.t.name });
-        if(p.kills >= this.state.target) this.endRound();
-        this.clock.setTimeout(() => this.respawn(best.tid), 2500);
+
+      if(leg < bounces && hitsLeft > 0){
+        const r = this.reflect(ox, oz, dx, dz);
+        if(!r) break;
+        ox = r.x; oz = r.z; dx = r.dx; dz = r.dz;
       }
     }
+  }
+
+  /* Ricochet: march until a wall, then mirror the direction on the face we
+     crossed. Geometry, not simulation — no bullet ever exists. */
+  reflect(ox, oz, dx, dz){
+    const step = 0.4;
+    let x = ox, z = oz;
+    for(let d = 0; d < PVP.maxRange; d += step){
+      const nx = x + dx*step, nz = z + dz*step;
+      for(const w of this.walls){
+        const inNow = nx > w.x && nx < w.x+w.w && nz > w.z && nz < w.z+w.d;
+        if(!inNow) continue;
+        // which face did we cross? test each axis independently
+        const hitX = !(x > w.x && x < w.x+w.w);
+        return { x, z, dx: hitX ? -dx : dx, dz: hitX ? dz : -dz };
+      }
+      if(nx < 0 || nx > AW || nz < 0 || nz > AD){
+        const outX = (nx < 0 || nx > AW);
+        return { x, z, dx: outX ? -dx : dx, dz: outX ? dz : -dz };
+      }
+      x = nx; z = nz;
+    }
+    return null;
+  }
+
+  /* Damage one target, then every on-hit ability. */
+  applyHit(id, p, t, tid, ld){
+    const ab = ld.abilities || [];
+    const has = k => ab.indexOf(k) >= 0;
+    const tld = this.loadouts.get(tid);
+    const tAb = (tld && tld.abilities) || [];
+
+    let dmg = ld.dmg;   // per pellet now, NOT multiplied by pellet count
+    const crit = has('deadeye') && Math.random() < PVP.critChance;
+    if(crit) dmg *= PVP.critMul;
+
+    // Juggernaut: 30% reduction while the target is firing
+    const tInp = this.inputs.get(tid);
+    if(tAb.indexOf('firing_resist') >= 0 && tInp && tInp.fire) dmg *= 0.7;
+
+    dmg = this.damage(t, dmg);
+
+    if(has('incendiary')){ t.burnT = Math.max(t.burnT, PVP.burnDur); this.burnSrc.set(tid, id); }
+    if(has('cryo'))       t.slowT = Math.max(t.slowT, PVP.slowDur);
+    if(has('vampiric'))   this.heal(p, dmg * PVP.vampFrac);
+    if(crit && has('critheal')) this.heal(p, PVP.critHeal);   // Saint set
+
+    if(has('explosive')){
+      this.state.players.forEach((o, oid) => {
+        if(oid === tid || oid === id || o.dead) return;
+        if(Math.hypot(o.x - t.x, o.z - t.z) <= PVP.explRadius) this.damage(o, PVP.explDmg);
+      });
+      this.checkDeaths(id, p);
+    }
+
+    if(t.hp <= 0) this.killPlayer(id, p, t, tid, ld);
+  }
+
+  /* Shield soaks first. Returns the damage actually dealt, so lifesteal can't
+     be farmed off overkill. */
+  damage(t, amount){
+    let left = amount;
+    if(t.shield > 0){
+      const absorbed = Math.min(t.shield, left);
+      t.shield -= absorbed; left -= absorbed;
+    }
+    t.hp -= left;
+    return amount;
+  }
+
+  heal(p, amount){
+    if(!p || p.dead || amount <= 0) return;
+    p.hp = Math.min(100, p.hp + amount);
+  }
+
+  // splash can drop someone who wasn't the primary target
+  checkDeaths(killerId, killer){
+    this.state.players.forEach((o, oid) => {
+      if(!o.dead && o.hp <= 0) this.killPlayer(killerId, killer, o, oid, this.loadouts.get(killerId) || {});
+    });
+  }
+
+  killPlayer(id, p, t, tid, ld){
+    if(t.dead) return;
+    const ab = ld.abilities || [];
+    t.dead = true; t.deaths++; t.burnT = 0; t.slowT = 0; t.shield = 0;
+    p.kills++;
+
+    if(ab.indexOf('killshield') >= 0) p.shield = Math.min(50, p.shield + PVP.killShield);  // Bulwark
+    if(ab.indexOf('fire_nova') >= 0){                                                      // Dragon
+      this.state.players.forEach((o, oid) => {
+        if(oid === tid || oid === id || o.dead) return;
+        if(Math.hypot(o.x - t.x, o.z - t.z) <= PVP.novaRadius){
+          o.burnT = Math.max(o.burnT, PVP.burnDur);
+          this.burnSrc.set(oid, id);
+        }
+      });
+    }
+
+    this.broadcast('kill', { killer: p.name, victim: t.name });
+    if(p.kills >= this.state.target) this.endRound();
+    this.clock.setTimeout(() => this.respawn(tid), 2500);
   }
 
   losClear(x1, z1, x2, z2){
@@ -296,6 +480,8 @@ class ArenaRoom extends Room {
       if(d > bd){ bd = d; best = s; }
     }
     p.x = best[0]; p.z = best[1]; p.hp = 100; p.dead = false;
+    p.burnT = 0; p.slowT = 0; p.shield = 0;
+    this.burnSrc.delete(id);
   }
 }
 

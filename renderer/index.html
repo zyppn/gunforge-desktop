@@ -837,6 +837,15 @@ function rollDrop(kills, completedMatch){
 
 /* ---------------- loadout math ---------------- */
 function getPart(u){ return P.inventory.find(p=>p.uid===u) || null; }
+// Mirrors part_cap() / parts_held() in 004_auction_limits.sql. A part with an active
+// listing is escrowed: still owned, still returnable, but it does NOT occupy a slot,
+// so this must skip listedUids exactly the way the SQL skips active listings.
+const PART_CAP = 200;
+function partsHeld(){
+  const listed = {};
+  (P.listedUids || []).forEach(u => listed[u] = true);
+  return P.inventory.reduce((n, p) => n + (listed[p.uid] ? 0 : 1), 0);
+}
 
 function equippedParts(wid){
   const eq = P.equipped[wid] || {};
@@ -985,7 +994,7 @@ function renderMenu(){
    +'<div class="menutiles">'
    +'<div class="tile" onclick="openSetup()"><div class="t">▸ Deploy</div><div class="d">FFA · Team Deathmatch · Campaign. Three maps. Parts drop at match end.</div></div>'
    +'<div class="tile" onclick="renderLoadout()"><div class="t">Armory</div><div class="d">Equip one weapon, fit its five part slots, track set bonuses.</div></div>'
-   +'<div class="tile" onclick="renderInventory()"><div class="t">Parts Locker</div><div class="d">'+P.inventory.length+' part(s) held. Equip, scrap for credits, or send to auction.</div></div>'
+   +'<div class="tile" onclick="renderInventory()"><div class="t">Parts Locker</div><div class="d">'+partsHeld()+' / '+PART_CAP+' parts held. Equip, scrap for credits, or send to auction.</div></div>'
    +'<div class="tile" onclick="renderAuction()"><div class="t">Auction House</div><div class="d">Live listings shared across all operators. Parts only — weapons are yours forever.</div></div>'
    +'</div>'
    +'<div class="panel" style="margin-top:14px"><div class="eyebrow">Service Record</div>'
@@ -1127,6 +1136,9 @@ function renderInventory(filter){
   const listed = {};
   (P.listedUids || []).forEach(u => listed[u] = true);
 
+  const held = partsHeld();
+  const capColor = held >= PART_CAP ? '#E05A4E' : (held >= PART_CAP*0.9 ? '#E8A33A' : 'inherit');
+
   const cards = items.map(p=>{
     const isEq = !!eqAll[p.uid];
     const isLs = !!listed[p.uid];
@@ -1145,8 +1157,9 @@ function renderInventory(filter){
   }).join('');
 
   $('#inventory').innerHTML =
-   '<div class="eyebrow">Parts Locker</div><h2>Inventory — '+items.length+' part(s)</h2>'
-   +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning.</p>'
+   '<div class="eyebrow">Parts Locker</div><h2>Inventory — <span style="color:'+capColor+'">'+held+' / '+PART_CAP+'</span> parts'+(invFilter==='all' ? '' : ' · showing '+items.length)+'</h2>'
+   +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning. Parts on the auction block are escrowed and don\'t count against your '+PART_CAP+'.</p>'
+   +(held >= PART_CAP ? '<p class="note" style="color:#E05A4E">Locker full — drops and auction buys will be refused until you scrap or list something.</p>' : '')
    +'<div class="filters">'+fbs+'</div>'
    +(cards ? '<div class="partgrid">'+cards+'</div>' : '<div class="panel" style="margin-top:12px">Locker\'s empty for this filter. Finish matches to roll for drops, or check the auction house.</div>')
    +'<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
@@ -3053,8 +3066,12 @@ function tick(now){
       continue;
     }
     if(e.reloading && G.elapsed >= e.reloadT){ e.reloading=false; e.ammo=e.wep.mag; }
+    // In live matches the SERVER owns burn and cryo: it ticks the timers and applies
+    // the DOT, then liveTick copies burnT/slowT back onto us. Ticking them here too
+    // would double the damage and let a local death fire against server state.
+    const svStatus = (G.mode === 'live');
     if(e.burnT > 0){
-      e.burnT -= dt; damageOverTime(e, 4*dt);
+      if(!svStatus){ e.burnT -= dt; damageOverTime(e, 4*dt); }
       if(!e.isPlayer){
         e.flameT -= dt;
         if(e.flameT <= 0){
@@ -3064,7 +3081,7 @@ function tick(now){
       }
     }
     if(e.slowT > 0){
-      e.slowT -= dt;
+      if(!svStatus) e.slowT -= dt;
       if(!e.isPlayer){
         e.frostT -= dt;
         if(e.frostT <= 0){
@@ -3480,7 +3497,7 @@ function endMatch(campWin){
           const fresh = await loadCloudProfile();
           if(fresh) P = fresh;
           refreshChips();
-          paintServerReward(sv.xp, sv.credits, sv.part, lvlBefore);
+          paintServerReward(sv.xp, sv.credits, sv.part, lvlBefore, sv.lockerFull);
           const tag = document.getElementById('rewardsync');
           if(tag) tag.textContent = '✓ saved to your account';
         } else {
@@ -3497,12 +3514,16 @@ function endMatch(campWin){
 /* Renders the post-match panel. When `pending` is true (i.e. we are signed in and
    the server is still computing the authoritative reward) the XP / credits / salvage
    rows render as placeholders and paintServerReward() fills them in on reply. */
-function dropBlockHtml(drop){
-  return drop
-    ? '<div class="eyebrow" style="margin-top:20px">◆ FIELD SALVAGE RECOVERED</div><div class="dropcard">'+partCard(drop)+'</div>'
-    : '<div class="note" style="margin-top:20px">No salvage recovered this run. Drop odds rise with eliminations.</div>';
+function dropBlockHtml(drop, lockerFull){
+  if(drop) return '<div class="eyebrow" style="margin-top:20px">◆ FIELD SALVAGE RECOVERED</div><div class="dropcard">'+partCard(drop)+'</div>';
+  // A forfeited drop is NOT the same as no drop. Saying "no salvage" when the locker
+  // was full reads as bad luck and hides the one thing the player can act on.
+  if(lockerFull) return '<div class="note" style="margin-top:20px;color:#E05A4E">'
+    + '◆ SALVAGE FORFEITED — your locker is full at '+PART_CAP+' parts. '
+    + 'Scrap or auction something and the next drop will land.</div>';
+  return '<div class="note" style="margin-top:20px">No salvage recovered this run. Drop odds rise with eliminations.</div>';
 }
-function paintServerReward(xp, cr, drop, lvlBefore){
+function paintServerReward(xp, cr, drop, lvlBefore, lockerFull){
   const x = document.getElementById('resxp'); if(x) x.textContent = '+'+(xp|0);
   const c = document.getElementById('rescr'); if(c) c.textContent = '+'+(cr|0);
   const line = document.getElementById('resrankline');
@@ -3512,7 +3533,7 @@ function paintServerReward(xp, cr, drop, lvlBefore){
     if(rb) rb.textContent = 'LEVEL UP → ' + P.level;
   }
   const d = document.getElementById('resdrop');
-  if(d){ d.innerHTML = dropBlockHtml(drop); hydrateThumbs(); }
+  if(d){ d.innerHTML = dropBlockHtml(drop, lockerFull); hydrateThumbs(); }
   if(drop) setTimeout(()=>playDropSound(drop.rarity), 200);
 }
 // Shown when the reward couldn't be synced: no numbers, no part, no promises.
@@ -3830,6 +3851,18 @@ function liveTick(dt){
       else if(dv > 0.35){ me.x += dvx * Math.min(1, dt*6); me.z += dvz * Math.min(1, dt*6); }
     }
     me.kills = sp.kills; me.deaths = sp.deaths;
+    // status is server-owned in live play. slowT feeds the same 0.65 multiplier the
+    // prediction step uses, so mirroring it keeps us from sprinting into a snap-back.
+    me.burnT  = sp.burnT  || 0;
+    me.slowT  = sp.slowT  || 0;
+    me.shield = sp.shield || 0;
+    if(me.burnT > 0 && !me.dead){
+      me.flameT = (me.flameT || 0) - dt;
+      if(me.flameT <= 0){
+        me.flameT = 0.07;
+        spawnFlame(me.x + (Math.random()-0.5)*0.7, 0.3 + Math.random()*1.2, me.z + (Math.random()-0.5)*0.7);
+      }
+    }
   }
 
   // ---- remotes: interpolate + walk ----
@@ -3858,11 +3891,29 @@ function liveTick(dt){
     if(t.dead) return;
     r.mesh.position.set(r.cx, 0, r.cz);
     r.mesh.rotation.y = -t.yaw + Math.PI/2;
+    // burning / frozen remotes read the same as burning bots do offline
+    if(t.burnT > 0){
+      r.flameT = (r.flameT || 0) - dt;
+      if(r.flameT <= 0){
+        r.flameT = 0.07;
+        spawnFlame(r.cx + (Math.random()-0.5)*0.7, 0.3 + Math.random()*1.2, r.cz + (Math.random()-0.5)*0.7);
+      }
+    }
+    if(t.slowT > 0){
+      r.frostT = (r.frostT || 0) - dt;
+      if(r.frostT <= 0){
+        r.frostT = 0.09;
+        spawnFrost(r.cx + (Math.random()-0.5)*0.8, 0.4 + Math.random()*1.5, r.cz + (Math.random()-0.5)*0.8);
+      }
+    }
     if(u.hbFg){
       const pct = Math.max(0, t.hp/100);
       u.hbFg.scale.x = Math.max(0.001, pct);
       u.hbFg.position.x = -(1-pct)*0.45;
       u.hbFg.material.color.setHex(pct>0.4 ? 0x5FBF6E : 0xE05A4E);
+      // a shielded target reads blue, so you know why your shots aren't landing
+      if((t.shield || 0) > 0) u.hbFg.material.color.setHex(0x6FA8DC);
+      else if(t.burnT > 0)    u.hbFg.material.color.setHex(0xE8843A);
       r.mesh.getWorldQuaternion(TMPQ);
       u.hbGroup.quaternion.copy(TMPQ.invert().multiply(camera.quaternion)); // billboard: bar always faces you
     }

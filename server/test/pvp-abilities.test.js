@@ -1,0 +1,102 @@
+/* Smoke-run every ability through tryFire + a few ticks, so none of them throw
+   and each one leaves the mark it is supposed to leave. */
+const path = require('path'), Module = require('module');
+const SRV = path.join(__dirname, '..');
+let Captured = null;
+class FakeRoom {
+  constructor(){ this.clients = []; this._t = []; }
+  setState(s){ this.state = s; } onMessage(){} setSimulationInterval(){}
+  broadcast(type, msg){ (this.bcast || (this.bcast = [])).push({type, msg}); }
+  get clock(){ return { setTimeout: (fn, ms) => this._t.push({fn, ms}) }; }
+}
+const stubs = {
+  '@colyseus/core': { Room: FakeRoom, Server: class { define(n,k){ Captured = k; return { filterBy(){ return this; } }; } } },
+  '@colyseus/ws-transport': { WebSocketTransport: class { constructor(){ this.wss = { on(){} }; } } },
+};
+const orig = Module._load;
+Module._load = function(req){ if(stubs[req]) return stubs[req];
+  if(req === './supabase-admin.js') return { ENABLED:false, verifyUser:async()=>null, playerIdForUid:async()=>null, grantMatchRewards:async()=>({}) };
+  return orig.apply(this, arguments); };
+process.env.PORT = '0';
+require(path.join(SRV, 'index.js'));
+Module._load = orig;
+
+let CS = 0, fails = 0;
+function scenario(ability, wid, extra){
+  const r = new Captured(); r.onCreate({ map:'foundry' });
+  const eq = { barrel: { slot:'barrel', weapon:wid, name:'Test Barrel', rarity:'legendary', ability, mods:{} } };
+  const mk = (sid, e, w) => { const c = { sessionId:sid, send(){} }; r.clients.push(c);
+    r.onJoin(c, { name:'OP' + (++CS), wid:w, equipped:e }); return r.state.players.get(sid); };
+  const a = mk('A', eq, wid), b = mk('B', {}, 'm17'), c = mk('C', {}, 'm17');
+  a.x = 10; a.z = 10; b.x = 14; b.z = 10; c.x = 15.5; c.z = 10;   // c sits inside splash range of b
+  r.state.phase = 'live';
+  r.inputs.set('A', { mx:0, mz:0, yaw:0, pitch:0, ads:0, fire:true });
+  r.inputs.set('B', { mx:0, mz:0, yaw:0, pitch:0, ads:0, fire:!!(extra && extra.bFiring) });
+  r.inputs.set('C', { mx:0, mz:0, yaw:0, pitch:0, ads:0, fire:false });
+  r.fireT.set('A', -1);
+  const ld = r.loadouts.get('A');
+  return { r, a, b, c, ld, abilities: ld.abilities.slice().sort() };
+}
+function check(label, ok, detail){
+  console.log((ok ? '  PASS  ' : '  FAIL  ') + label + (detail ? '   [' + detail + ']' : ''));
+  if(!ok) fails++;
+}
+
+const ABIL = ['incendiary','cryo','vampiric','deadeye','explosive','pierce','homing','ricochet'];
+console.log('per-ability smoke run (no throws, ability actually reaches the loadout):');
+for(const ab of ABIL){
+  const s = scenario(ab, 'm17');
+  let threw = null;
+  try { s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0); for(let i=0;i<10;i++) s.r.tick(); }
+  catch(e){ threw = e.message; }
+  check(ab.padEnd(11) + ' resolves', !threw && s.abilities.indexOf(ab) >= 0,
+        (threw || 'abilities=' + JSON.stringify(s.abilities)));
+}
+
+console.log('\nspecific effects:');
+{ const s = scenario('explosive', 'm17');
+  s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0);
+  check('explosive splashes a bystander', s.c.hp < 100, 'bystander hp=' + s.c.hp.toFixed(1));
+  check('the direct hit still takes more than the splash', (100 - s.b.hp) > (100 - s.c.hp)); }
+{ const s = scenario('deadeye', 'm17');   // no firing_resist on the target
+  let plain = 0; for(let i = 0; i < 400; i++){ const x = scenario(null, 'm17');
+    x.r.tryFire('A', x.a, x.r.inputs.get('A'), 0); plain += 100 - x.b.hp; }
+  let resist = 0; for(let i = 0; i < 400; i++){ const x = scenario(null, 'm17', {bFiring:true});
+    x.b.hp = 100;
+    // give B the jugg effect by hand: it is a SET bonus, not a part ability
+    x.r.loadouts.get('B').abilities.push('firing_resist');
+    x.r.tryFire('A', x.a, x.r.inputs.get('A'), 0); resist += 100 - x.b.hp; }
+  console.log('    plain ' + (plain/400).toFixed(2) + ' vs vs-a-firing-juggernaut ' + (resist/400).toFixed(2));
+  check('firing_resist cuts incoming damage 30% while the target shoots',
+        Math.abs((resist/400) / (plain/400) - 0.7) < 0.02, (resist/plain).toFixed(3)); }
+{ const s = scenario(null, 'm17');
+  s.r.loadouts.get('A').abilities.push('killshield');
+  s.b.hp = 5; s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0);
+  check('killshield grants a shield on the kill', s.b.dead && s.a.shield === 25, 'shield=' + s.a.shield); }
+{ const s = scenario(null, 'm17');
+  s.r.loadouts.get('A').abilities.push('fire_nova');
+  s.b.hp = 5; s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0);
+  check('fire_nova ignites bystanders around the corpse', s.b.dead && s.c.burnT > 0, 'c.burnT=' + s.c.burnT); }
+{ const s = scenario('deadeye', 'm17');
+  s.r.loadouts.get('A').abilities.push('critheal');
+  s.a.hp = 50;
+  let healed = false;
+  for(let i = 0; i < 200 && !healed; i++){ const x = scenario('deadeye', 'm17');
+    x.r.loadouts.get('A').abilities.push('critheal'); x.a.hp = 50;
+    x.r.tryFire('A', x.a, x.r.inputs.get('A'), 0);
+    if(x.a.hp >= 56) healed = true; }
+  check('critheal tops the shooter up on a crit', healed); }
+{ const s = scenario('homing', 'm17'), t = scenario(null, 'm17');
+  // a target offset sideways: the wide corridor should forgive what a normal shot misses
+  let hHits = 0, nHits = 0;
+  for(let i = 0; i < 200; i++){
+    const h = scenario('homing', 'm17'); h.b.z = 11.2; h.c.x = 99;
+    h.r.tryFire('A', h.a, h.r.inputs.get('A'), 0); if(h.b.hp < 100) hHits++;
+    const n = scenario(null, 'm17'); n.b.z = 11.2; n.c.x = 99;
+    n.r.tryFire('A', n.a, n.r.inputs.get('A'), 0); if(n.b.hp < 100) nHits++;
+  }
+  console.log('    off-axis target: homing hit ' + hHits + '/200, plain hit ' + nHits + '/200');
+  check('homing forgives shots a plain round misses', hHits > nHits); }
+
+console.log('\n' + (fails ? fails + ' CHECK(S) FAILED' : 'ALL CHECKS PASSED'));
+process.exit(fails ? 1 : 0);
