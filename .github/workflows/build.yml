@@ -66,18 +66,65 @@ jobs:
       - name: Build installer
         run: npx electron-builder ${{ matrix.args }} --publish never
 
-      # Uploaded with the gh CLI rather than softprops/action-gh-release.
-      # That action failed every single run on the macOS runner with
-      # "Error creating asset temp dir", ~70s in, before uploading a byte —
-      # Windows and Linux were fine. gh is preinstalled on all runners, does no
-      # temp-dir staging, and --clobber makes a retry idempotent.
+      # Uploaded with the gh CLI rather than softprops/action-gh-release, which
+      # failed every run on the macOS runner with "Error creating asset temp dir"
+      # before uploading a byte. gh does no temp-dir staging.
+      #
+      # One file at a time, with retries. A single `gh release upload A B C
+      # --clobber` gives up on the first failure, and v1.4.17 died with a 404 from
+      # uploads.github.com on file 2 of 5 — leaving the release with the dmg but
+      # no zip and no latest-mac.yml, which is exactly the pair electron-updater
+      # needs on macOS. --clobber also deletes an existing asset and re-uploads
+      # the same name in one shot, and that delete is not immediately consistent,
+      # so a re-run of the same tag can 404 on its own leftovers. Deleting first
+      # as a separate step, then retrying, survives both.
       - name: Upload to GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
+          set -uo pipefail
           shopt -s nullglob
           files=(dist/*.dmg dist/*.exe dist/*.AppImage dist/*.zip dist/*.blockmap dist/latest*.yml)
-          if [ ${#files[@]} -eq 0 ]; then echo "no build output to upload"; exit 1; fi
-          printf 'uploading %s\n' "${files[@]}"
-          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::no build output to upload"; exit 1; fi
+
+          # Fail loudly here rather than 404ing per asset further down.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG does not exist"; exit 1
+          fi
+
+          failed=()
+          for f in "${files[@]}"; do
+            name=$(basename "$f")
+            ok=0
+            for attempt in 1 2 3; do
+              # Clear any leftover of this name from an earlier run, as its own
+              # step, so the upload below is a clean create rather than a
+              # delete-and-recreate against an eventually-consistent API.
+              gh release delete-asset "$TAG" "$name" --yes >/dev/null 2>&1 || true
+              sleep $(( attempt * 2 ))
+              if gh release upload "$TAG" "$f" >/dev/null 2>&1; then
+                echo "uploaded $name (attempt $attempt)"; ok=1; break
+              fi
+              echo "::warning::upload of $name failed, attempt $attempt of 3"
+            done
+            [ $ok -eq 1 ] || failed+=("$name")
+          done
+
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::failed to upload: ${failed[*]}"; exit 1
+          fi
+
+          # A green job that quietly shipped a release missing its updater files
+          # is worse than a red one. Confirm every file is actually there.
+          echo "--- verifying ---"
+          have=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          missing=()
+          for f in "${files[@]}"; do
+            grep -qxF "$(basename "$f")" <<< "$have" || missing+=("$(basename "$f")")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::release is missing after upload: ${missing[*]}"; exit 1
+          fi
+          echo "all ${#files[@]} assets present on $TAG"
