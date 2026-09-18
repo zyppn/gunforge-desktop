@@ -3700,7 +3700,10 @@ function startLiveMatch(){
       }
     });
     room.onMessage('rematch', () => feed('ARENA RESET — NEW ROUND', true));
-    room.onMessage('reward', m => { live.serverReward = m; });
+    room.onMessage('reward', m => {
+      live.serverReward = m;
+      paintLiveReward();   // the panel is usually already on screen when this lands
+    });
     room.onMessage('presence', m => {
       feed(m.name + (m.on ? '  CONNECTED' : '  DISCONNECTED'), false);
     });
@@ -3825,6 +3828,33 @@ function liveRemoveRemote(id){
    whatever was left in the mag when you died, mid-reload and all. The server has no
    ammo model at all, so this is the client's to do — and both places a live player
    comes back (respawn, rematch) call it, so they can't drift apart again. */
+/* One place that turns live.serverReward into the debrief line, so the results
+   panel and the late-arriving 'reward' message can't disagree. */
+function liveRewardBody(){
+  const rw = live && live.serverReward;
+  if(!rw) return '<span style="opacity:.7">Tallying rewards\u2026</span>';
+  if(rw.reason === 'not-signed-in')
+    return '<span style="opacity:.8">Not signed in \u2014 this match earned nothing. '
+         + 'Sign in from the menu and future matches will bank to your account.</span>';
+  if(rw.reason === 'no-economy')
+    return '<span style="opacity:.8">The arena server has no economy configured, so nothing was banked.</span>';
+  if(rw.reason === 'grant-failed' || rw.reason === 'timeout')
+    return '<span style="color:#E8A33A">Reward could not be confirmed \u2014 nothing was banked for this match. '
+         + 'Nothing was double-spent either; the server grants once or not at all.</span>';
+  let h = '+'+(rw.credits|0)+' CR \u00b7 +'+(rw.xp|0)+' XP';
+  if(rw.part) h += ' \u00b7 <span style="color:'+RCOL_CSS(rw.part.rarity)+'">'+esc(rw.part.name)+' ['+rw.part.rarity.toUpperCase()+']</span>';
+  else if(rw.lockerFull) h += ' \u00b7 <span style="color:#E05A4E">salvage forfeited \u2014 locker full at '+PART_CAP+'</span>';
+  return h;
+}
+function paintLiveReward(){
+  const el = document.getElementById('livereward');
+  if(el) el.innerHTML = liveRewardBody();
+  // the grant also moved credits/parts server-side: pull the real numbers back
+  if(live && live.serverReward && !live.serverReward.reason){
+    loadCloudProfile().then(fresh => { if(fresh){ P = fresh; refreshChips(); } }).catch(()=>{});
+  }
+}
+
 function liveResetWeapon(){
   if(!G || !G.me) return;
   const me = G.me;
@@ -4000,6 +4030,7 @@ function damageFlinchOnly(dmg){
 
 function liveLeave(){
   if(live){
+    if(live.rewardTO) clearTimeout(live.rewardTO);
     if(live.tracers){ live.tracers.forEach(t => scene.remove(t.mesh)); live.tracers = []; }
     if(live.pingTimer) clearInterval(live.pingTimer);
     if(live.room){ try{ live.room.leave(); }catch(e){} }
@@ -4029,13 +4060,18 @@ async function endLiveMatch(){
     if(ACCOUNT.online){
       // rewards are granted SERVER-SIDE and arrive via the 'reward' message.
       // show whatever the server has told us so far, then re-sync from cloud.
-      const rw = live.serverReward;
       rewardHtml = '<div class="panel" style="margin-top:10px"><div class="eyebrow">Debrief rewards · server-verified</div>'
-        + (rw ? '<div style="margin-top:6px">+'+rw.credits+' CR · +'+rw.xp+' XP'
-            + (rw.part ? ' · <span style="color:'+RCOL_CSS(rw.part.rarity)+'">'+esc(rw.part.name)+' ['+rw.part.rarity.toUpperCase()+']</span>' : '')
-            + '</div>'
-          : '<div style="margin-top:6px;opacity:.7">Tallying rewards…</div>')
-        + '</div>';
+        + '<div id="livereward" style="margin-top:6px">' + liveRewardBody() + '</div></div>';
+      // The server grants asynchronously (Supabase round-trip), so the message
+      // almost always lands AFTER this panel is built. Nothing repainted it, so it
+      // read "Tallying rewards..." forever. Arm a fallback too: a dead economy or a
+      // dropped socket must not leave the player staring at a spinner.
+      clearTimeout(live.rewardTO);
+      live.rewardTO = setTimeout(() => {
+        if(!live || live.serverReward) return;
+        live.serverReward = { credits:0, xp:0, part:null, reason:'timeout' };
+        paintLiveReward();
+      }, 12000);
       // pull the authoritative inventory/credits the server just wrote
       try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
     } else {

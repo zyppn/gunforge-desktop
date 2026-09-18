@@ -251,16 +251,34 @@ class ArenaRoom extends Room {
     this.grantRewards();
   }
 
+  /* Every client that finished the round MUST get exactly one 'reward' message,
+     even when there is nothing to grant. The results screen paints itself from
+     this message; with no message it sat on "Tallying rewards..." forever, which
+     is what a dead economy, an unverified account and a failed write all looked
+     like from the player's side. */
+  rewardMsg(sid, msg){
+    const client = this.clients.find(c => c.sessionId === sid);
+    if(client) client.send('reward', msg);
+  }
+
   grantRewards(){
-    if(this.rewarded || !Admin.ENABLED) return;
+    if(this.rewarded) return;
     this.rewarded = true;
+    if(!Admin.ENABLED){
+      this.state.players.forEach((pl, sid) =>
+        this.rewardMsg(sid, { credits:0, xp:0, part:null, reason:'no-economy' }));
+      return;
+    }
     // rank players by kills for placement bonuses
     const rows = [];
     this.state.players.forEach((pl, sid) => rows.push({ sid, kills: pl.kills, deaths: pl.deaths }));
     rows.sort((a,b) => b.kills - a.kills);
     rows.forEach((r, idx) => {
       const pid = this.playerIds.get(r.sid);
-      if(!pid) return; // unverified / offline account — no persisted reward
+      if(!pid){   // unverified / offline account — no persisted reward, but say so
+        this.rewardMsg(r.sid, { credits:0, xp:0, part:null, reason:'not-signed-in' });
+        return;
+      }
       const place = idx + 1;
       const credits = 40 + r.kills*10 + (place===1?50:place===2?25:0);
       const xp = 30 + r.kills*12 + (place===1?40:place===2?20:0);
@@ -269,9 +287,17 @@ class ArenaRoom extends Room {
       const statsDelta = { kills:r.kills, deaths:r.deaths, matches:1, wins: place===1?1:0 };
       Admin.grantReward(pid, { credits, xp, part, statsDelta })
         .then(res => {
-          const client = this.clients.find(c => c.sessionId === r.sid);
-          if(client) client.send('reward', { credits, xp, part: res.granted && res.granted.part ? part : null });
-        }).catch(()=>{});
+          const g = res && res.granted;
+          this.rewardMsg(r.sid, {
+            credits, xp,
+            part: (g && g.part) ? part : null,
+            lockerFull: !!(g && g.lockerFull),   // a forfeited drop is not "no drop"
+          });
+        })
+        .catch(e => {
+          console.error('[gunforge-server] reward grant failed', e && e.message || e);
+          this.rewardMsg(r.sid, { credits:0, xp:0, part:null, reason:'grant-failed' });
+        });
     });
   }
 
