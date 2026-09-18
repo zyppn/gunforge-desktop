@@ -96,7 +96,8 @@
 
   /* ---------- parts ---------- */
   .partgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:12px}
-  .part{border:1px solid var(--line);border-left:4px solid var(--r-common);background:var(--panel2);padding:11px 12px;font-size:12px}
+  .part{border:1px solid var(--line);border-left:4px solid var(--r-common);background:var(--panel2);padding:11px 12px;font-size:12px;
+    display:flex;flex-direction:column}
   .part .phead{display:flex;gap:10px;align-items:flex-start}
   .part .pmain{flex:1;min-width:0}
   .part .pimg{flex:none;width:64px;height:64px;border:1px solid var(--line);background:radial-gradient(circle at 50% 35%, #1E2833, #10151C);object-fit:contain}
@@ -114,7 +115,11 @@
   .part .mods{color:var(--ink);line-height:1.5}
   .part .abil{color:var(--brass);margin-top:4px;line-height:1.4}
   .part .setn{color:var(--r-epic);margin-top:4px}
-  .part .acts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+  /* margin-top:auto pins the action row to the bottom of a stretched card, so
+     buttons sit on one baseline across a row instead of floating under whatever
+     text each card happened to have. Must live HERE: an earlier rule with the
+     same specificity loses to this one. */
+  .part .acts{display:flex;gap:6px;margin-top:auto;padding-top:9px;flex-wrap:wrap}
   .part .eqtag{color:var(--green);font-size:10.5px;letter-spacing:1px}
   .filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .fbtn{font-size:11px;padding:4px 9px;border:1px solid var(--line);color:var(--dim);cursor:pointer;background:var(--panel2)}
@@ -123,6 +128,12 @@
   .pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:14px;
     padding-top:12px;border-top:1px solid var(--line)}
   .soldout{opacity:.45;filter:saturate(.4)}
+  /* The store is exactly eight slots in rarity order, so it wants an even 4 x 2 -
+     not the locker's auto-fill, which reflows to 3 or 5 and scrambles the reading
+     order the rarity tiers depend on. */
+  .storegrid{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:1100px){ .storegrid{grid-template-columns:repeat(2,1fr)} }
+  @media(max-width:560px){ .storegrid{grid-template-columns:1fr} }
 
   /* ---------- auction ---------- */
   .lst{display:flex;align-items:center;gap:12px;border:1px solid var(--line);background:var(--panel2);padding:10px 12px;margin-top:8px;font-size:12px;flex-wrap:wrap}
@@ -954,10 +965,14 @@ function modText(mods){
     return '<span style="color:'+(good?'var(--green)':'var(--red)')+'">'+sign+Math.round(v*100)+'% '+MODNAMES[k]+'</span>';
   }).join(' · ');
 }
-function partCard(p, actionsHtml, tag){
+function partCard(p, actionsHtml, tag, extraClass){
   const set = p.set ? SETS.find(s=>s.id===p.set) : null;
   const w = WEAPONS.find(x=>x.id===p.weapon);
-  return '<div class="part" data-r="'+p.rarity+'">'
+  // extraClass goes on .part itself. Wrapping a card in another div breaks the
+  // grid: the WRAPPER becomes the grid item and stretches to the row, while the
+  // card inside keeps its natural height - which is exactly why the store looked
+  // ragged next to the locker.
+  return '<div class="part'+(extraClass ? ' '+extraClass : '')+'" data-r="'+p.rarity+'">'
     + '<div class="phead"><div class="pmain">'
     + '<div class="pn">'+esc(p.name)+'</div>'
     + '<div class="rw"><span class="rr">'+RAR[p.rarity].n+'</span><span class="ww">'+esc(w.name)+' · '+SLOTN[p.slot]+'</span>'+(tag||'')+'</div>'
@@ -1066,14 +1081,14 @@ function renderStore(){
         + ' onclick="storeBuy('+it.idx+')">'+(afford ? 'BUY ' + it.price.toLocaleString() + ' CR'
                                                     : it.price.toLocaleString()+' CR') + '</button>';
     const tag = owned ? '<span class="eqtag">✓ PURCHASED</span>' : '';
-    return '<div class="'+(owned?'soldout':'')+'">' + partCard(it, acts, tag) + '</div>';
+    return partCard(it, acts, tag, owned ? 'soldout' : '');
   }).join('');
 
   $('#store').innerHTML = head
    + '<p class="note">Eight parts, generated for you alone — no two operators see the same shop. '
    + 'Set pieces are never sold here; those stay earned. Rotates at 7:00 PM Central: '
    + '<b id="storetick2" style="color:var(--brass)">'+storeCountdown(STORE.refreshAt)+'</b></p>'
-   + '<div class="partgrid">'+cards+'</div>'
+   + '<div class="partgrid storegrid">'+cards+'</div>'
    + '<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
   show('store');
   hydrateThumbs();
@@ -1140,8 +1155,8 @@ function renderMenu(){
    +'<div class="tile" onclick="openSetup()"><div class="t">▸ Deploy</div><div class="d">FFA · Team Deathmatch · Campaign. Three maps. Parts drop at match end.</div></div>'
    +'<div class="tile" onclick="renderLoadout()"><div class="t">Armory</div><div class="d">Equip one weapon, fit its six part slots, track set bonuses.</div></div>'
    +'<div class="tile" onclick="renderInventory()"><div class="t">Parts Locker</div><div class="d">'+partsHeld()+' / '+PART_CAP+' parts held. Equip, scrap for credits, or send to auction.</div></div>'
-   +'<div class="tile" onclick="renderAuction()"><div class="t">Auction House</div><div class="d">Live listings shared across all operators. Parts only — weapons are yours forever.</div></div>'
    +'<div class="tile" onclick="renderStore()"><div class="t">Daily Store</div><div class="d">Eight parts, yours alone, for credits. Rotates 7PM CT — <span id="storetick">loading…</span></div></div>'
+   +'<div class="tile" onclick="renderAuction()"><div class="t">Auction House</div><div class="d">Live listings shared across all operators. Parts only — weapons are yours forever.</div></div>'
    +'</div>'
    +'<div class="panel" style="margin-top:14px"><div class="eyebrow">Service Record</div>'
    +'<div class="grid g3" style="margin-top:6px">'
