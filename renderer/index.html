@@ -206,8 +206,12 @@
   #setov{position:absolute;inset:0;background:rgba(6,9,12,.85);display:none;align-items:center;justify-content:center;z-index:6;pointer-events:auto}
   #setov.on{display:flex}
   .spanel{background:var(--panel);border:1px solid var(--brass);padding:22px 26px;width:min(440px,92%);pointer-events:auto}
-  .ctl{display:flex;justify-content:space-between;border-bottom:1px dotted #22303E;padding:5px 0;font-size:12px}
+  .ctl{display:flex;justify-content:space-between;align-items:center;border-bottom:1px dotted #22303E;padding:5px 0;font-size:12px}
   .ctl b{color:#EDF1F5}
+  .bindbtn{font:inherit;font-size:11px;letter-spacing:.06em;color:#EDF1F5;background:#151D26;
+    border:1px solid #2B3A49;border-radius:3px;padding:3px 10px;min-width:76px;cursor:pointer}
+  .bindbtn:hover{border-color:var(--brass);color:var(--brass)}
+  .bindbtn.listening{border-color:var(--brass);color:#0B0F14;background:var(--brass)}
   .sldrow{margin-top:14px}
   .sldrow label{display:flex;justify-content:space-between;font-size:11px;letter-spacing:1px;color:var(--dim);text-transform:uppercase}
   .sldrow label span{color:var(--brass)}
@@ -273,14 +277,7 @@
           <div class="spanel">
             <div class="eyebrow">Settings</div>
             <h2>Settings</h2>
-            <div style="margin-top:8px">
-              <div class="ctl"><span>Move</span><b>W A S D</b></div>
-              <div class="ctl"><span>Aim</span><b>MOUSE</b></div>
-              <div class="ctl"><span>Fire</span><b>HOLD LMB</b></div>
-              <div class="ctl"><span>Aim down sights</span><b>HOLD RMB</b></div>
-              <div class="ctl"><span>Reload</span><b>R</b></div>
-              <div class="ctl"><span>Pause</span><b>ESC</b></div>
-            </div>
+            <div style="margin-top:8px" id="ctlhost"></div>
             <div class="sldrow"><label>Master volume <span id="volval">80%</span></label>
               <input type="range" id="volsl" min="0" max="100" value="80"></div>
             <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
@@ -293,7 +290,7 @@
         </div>
       </div>
     </div>
-    <p class="note" style="margin-top:8px">CLICK TO LOCK AIM · MOVE <span class="kbd">W A S D</span> · FIRE <span class="kbd">HOLD LMB</span> · ADS <span class="kbd">HOLD RMB</span> · RELOAD <span class="kbd">R</span> · PAUSE <span class="kbd">ESC</span> — desktop + mouse required</p>
+    <p class="note" style="margin-top:8px" id="ctlhint">CLICK TO LOCK AIM · MOVE <span class="kbd">W A S D</span> · FIRE <span class="kbd">HOLD LMB</span> · ADS <span class="kbd">HOLD RMB</span> · RELOAD <span class="kbd">R</span> · PAUSE <span class="kbd">ESC</span></p>
   </div>
 
   <div id="results" class="screen"></div>
@@ -1023,13 +1020,96 @@ async function doRename(){
 }
 function menuSettings(){
   modal('<div class="eyebrow">Settings</div><h2>Settings</h2>'
-   +'<div class="sldrow"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
+   +'<div class="eyebrow" style="margin-top:10px">Controls</div>'
+   +'<div id="ctlhost">'+controlsHtml()+'</div>'
+   +'<div class="sldrow" style="margin-top:12px"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
    +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.volume*100)+'" oninput="setVolPct(this.value, \'mvolval\')"></div>'
    +'<div class="sldrow"><label>Mouse sensitivity <span id="msensval">'+SETTINGS.sens.toFixed(2)+'x</span></label>'
    +'<input type="range" min="20" max="250" value="'+Math.round(SETTINGS.sens*100)+'" oninput="setSensPct(this.value, \'msensval\')"></div>'
    +'<div class="btnrow"><button class="btn sm" onclick="resetSettingsAll()">RESET TO DEFAULT</button>'
-   +'<button class="btn sm primary" onclick="closeModal()">DONE</button></div>');
+   +'<button class="btn sm primary" onclick="cancelBind();closeModal()">DONE</button></div>');
 }
+/* ---- the controls panel ------------------------------------------------
+   One renderer, used by the pause overlay and the main-menu modal, so the two
+   can never drift. Click a row, press anything, it binds. */
+function controlsHtml(){
+  return BIND_ORDER.map(([a, label]) =>
+      '<div class="ctl"><span>'+label+'</span>'
+    + '<button class="bindbtn" id="bind-'+a+'" onclick="startBind(\''+a+'\')">'+bindLabel(BINDS[a])+'</button></div>'
+    ).join('')
+  + '<div class="ctl"><span>Aim</span><b>MOUSE</b></div>'
+  + '<div class="ctl"><span>Scoreboard</span><b>TAB</b></div>'
+  + '<div class="ctl"><span>Pause</span><b>ESC</b></div>'
+  + '<p class="note" id="bindnote" style="margin-top:6px">Click a control to rebind it. '
+  + 'Mouse buttons and keys both work \u2014 on a trackpad, put Aim down sights on a key.</p>';
+}
+function repaintBinds(){
+  for(const [a] of BIND_ORDER){
+    const el = document.getElementById('bind-' + a);
+    if(el){ el.textContent = bindLabel(BINDS[a]); el.classList.remove('listening'); }
+  }
+  const host = document.getElementById('ctlhost');
+  if(host && !document.getElementById('bind-fire')) host.innerHTML = controlsHtml();
+  syncHintLine();
+}
+function startBind(action){
+  if(bindCapture) cancelBind();
+  const el = document.getElementById('bind-' + action);
+  if(el){ el.textContent = 'PRESS ANY KEY'; el.classList.add('listening'); }
+  const note = document.getElementById('bindnote');
+  if(note) note.textContent = 'Listening\u2026 press a key or mouse button. ESC cancels.';
+
+  bindCapture = (code, ev) => {
+    if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+    if(code === 'Escape'){ cancelBind(); return; }
+    // Tab is the scoreboard and Escape is pause; neither can be handed away or
+    // the player loses the only way out of a locked pointer.
+    if(code === 'Tab'){
+      const n = document.getElementById('bindnote');
+      if(n) n.textContent = 'TAB and ESC are reserved. Pick something else.';
+      return;
+    }
+    // If this code is already used, SWAP the two rather than silently stealing
+    // it — that way no action is ever left unbound.
+    const prev = BINDS[action];
+    for(const k in BINDS) if(k !== action && BINDS[k] === code) BINDS[k] = prev;
+    BINDS[action] = code;
+    SETTINGS.binds = BINDS;
+    saveSettings();
+    keys[code] = false;         // don't carry the binding press into the game
+    bindCapture = null;
+    repaintBinds();
+    const n = document.getElementById('bindnote');
+    if(n) n.textContent = 'Bound ' + bindLabel(code) + '. Click another to change it.';
+    sfx('hit');
+  };
+  // a mouse button can be a binding too, so capture those at the window level
+  bindCapture.mouse = true;
+}
+function cancelBind(){
+  bindCapture = null;
+  repaintBinds();
+  const n = document.getElementById('bindnote');
+  if(n) n.textContent = 'Click a control to rebind it. Mouse buttons and keys both work.';
+}
+function resetBinds(){
+  BINDS = Object.assign({}, DEFAULT_BINDS);
+  SETTINGS.binds = BINDS;
+  saveSettings(); repaintBinds(); sfx('reload');
+}
+/* Keep the hint under the arena honest about what is actually bound. */
+function syncHintLine(){
+  const el = document.getElementById('ctlhint');
+  if(!el) return;
+  const k = t => '<span class="kbd">'+t+'</span>';
+  el.innerHTML = 'CLICK TO LOCK AIM \u00b7 MOVE '
+    + k(bindLabel(BINDS.forward)+' '+bindLabel(BINDS.left)+' '+bindLabel(BINDS.back)+' '+bindLabel(BINDS.right))
+    + ' \u00b7 FIRE ' + k('HOLD ' + bindLabel(BINDS.fire))
+    + ' \u00b7 ADS '  + k('HOLD ' + bindLabel(BINDS.ads))
+    + ' \u00b7 RELOAD ' + k(bindLabel(BINDS.reload))
+    + ' \u00b7 PAUSE ' + k('ESC');
+}
+
 function setVolPct(v, labelId){
   SETTINGS.volume = (+v)/100;
   if(masterG) masterG.gain.value = SETTINGS.volume;
@@ -1042,11 +1122,14 @@ function setSensPct(v, labelId){
   saveSettings();
 }
 function resetSettingsAll(){
-  SETTINGS = {volume:0.8, sens:1.0};
+  bindCapture = null;
+  BINDS = Object.assign({}, DEFAULT_BINDS);
+  SETTINGS = { volume:0.8, sens:1.0, binds: BINDS };   // RESET TO DEFAULT restores the keys too
   if(masterG) masterG.gain.value = 0.8;
   saveSettings(); sfx('reload');
   if(document.getElementById('mvolval')) menuSettings();
   if(document.getElementById('volsl')) try{ syncSettingsUI(); }catch(e){}
+  repaintBinds();
 }
 
 /* ---------------- ARMORY ---------------- */
@@ -1374,17 +1457,69 @@ let renderer = null, scene = null, camera = null, vm = null, muzzle = null, muzz
 let gameFS = false;
 let G = null, paused = false, locked = false;
 const keys = {};
-let mouseDown = false, yaw = 0, pitch = 0;
+let yaw = 0, pitch = 0;
 let aiming = false, adsT = 0, adsLook = 1;
+
+/* ---- rebindable controls ----------------------------------------------
+   Bindings are KeyboardEvent.code ('KeyW', 'Space', 'ShiftLeft') or a mouse
+   button as 'Mouse0'/'Mouse2'. Using .code rather than .key means a binding
+   survives a different keyboard layout, and it lets keys and mouse buttons
+   live in one table — which is the point: on a trackpad, holding right-click
+   to aim while strafing is miserable, so ADS has to be movable onto a key. */
+const DEFAULT_BINDS = {
+  forward:'KeyW', back:'KeyS', left:'KeyA', right:'KeyD',
+  fire:'Mouse0', ads:'Mouse2', reload:'KeyR',
+};
+const BIND_ORDER = [
+  ['forward','Move forward'], ['back','Move back'],
+  ['left','Strafe left'],     ['right','Strafe right'],
+  ['fire','Fire'],            ['ads','Aim down sights'], ['reload','Reload'],
+];
+let BINDS = Object.assign({}, DEFAULT_BINDS);
+
+// 'KeyW' -> 'W', 'Mouse2' -> 'RMB' — what the player should see on the panel
+function bindLabel(code){
+  if(!code) return '—';
+  const MOUSE = { Mouse0:'LMB', Mouse1:'MMB', Mouse2:'RMB', Mouse3:'MOUSE 4', Mouse4:'MOUSE 5' };
+  if(MOUSE[code]) return MOUSE[code];
+  if(/^Key[A-Z]$/.test(code))    return code.slice(3);
+  if(/^Digit[0-9]$/.test(code))  return code.slice(5);
+  if(/^Numpad/.test(code))       return 'NUM ' + code.slice(6).toUpperCase();
+  if(/^Arrow/.test(code))        return { ArrowUp:'\u2191', ArrowDown:'\u2193', ArrowLeft:'\u2190', ArrowRight:'\u2192' }[code];
+  const NAMED = { Space:'SPACE', ShiftLeft:'L SHIFT', ShiftRight:'R SHIFT', ControlLeft:'L CTRL',
+                  ControlRight:'R CTRL', AltLeft:'L ALT', AltRight:'R ALT', Enter:'ENTER',
+                  Backquote:'`', Minus:'-', Equal:'=', BracketLeft:'[', BracketRight:']',
+                  Semicolon:';', Quote:"'", Comma:',', Period:'.', Slash:'/', Backslash:'\\',
+                  CapsLock:'CAPS', Backspace:'BKSP' };
+  return NAMED[code] || code.toUpperCase();
+}
+// `keys` is keyed by the same code space, so one lookup answers both
+function isHeld(code){ return !!code && !!keys[code]; }
+function act(a){ return isHeld(BINDS[a]); }
+function sanitizeBinds(b){
+  const out = Object.assign({}, DEFAULT_BINDS);
+  if(b && typeof b === 'object'){
+    for(const k in DEFAULT_BINDS){
+      const v = b[k];
+      // a binding must be a plausible code, or we fall back — a corrupt save
+      // must never leave someone unable to move
+      if(typeof v === 'string' && v.length && v.length < 24 && /^[A-Za-z0-9]+$/.test(v)) out[k] = v;
+    }
+  }
+  return out;
+}
 const EYE = 1.6, PR = 0.5;
 
 /* --- settings (persisted) --- */
-let SETTINGS = { volume: 0.8, sens: 1.0 };
+let SETTINGS = { volume: 0.8, sens: 1.0, binds: Object.assign({}, DEFAULT_BINDS) };
+let bindCapture = null;   // set while the settings panel is waiting for a key
 async function loadSettings(){
   const s = await sGet('settings');
   if(s){
     SETTINGS.volume = (typeof s.volume === 'number' && isFinite(s.volume)) ? Math.min(1, Math.max(0, s.volume)) : 0.8;
     SETTINGS.sens   = (typeof s.sens === 'number' && isFinite(s.sens)) ? Math.min(2.5, Math.max(0.2, s.sens)) : 1.0;
+    SETTINGS.binds  = sanitizeBinds(s.binds);
+    BINDS = SETTINGS.binds;
   }
 }
 function saveSettings(){ sSet('settings', SETTINGS); }
@@ -1493,7 +1628,8 @@ function sfx(kind, vol){
 
 /* --- input --- */
 window.addEventListener('keydown', e=>{
-  keys[e.key.toLowerCase()] = true;
+  keys[e.code] = true;
+  if(bindCapture){ bindCapture(e.code, e); return; }   // settings is waiting for a key
   if(e.key === 'Tab'){
     // Tab never drives browser focus in a game shell — no focus ring hopping between buttons
     const tg = e.target;
@@ -1522,21 +1658,28 @@ window.addEventListener('keyup', e=>{
   if(e.key === 'Tab'){ const sb = document.getElementById('livescore'); if(sb) sb.style.display = 'none'; }
 });
 window.addEventListener('blur', ()=>{
-  for(const k in keys) keys[k] = false; mouseDown = false;
+  for(const k in keys) keys[k] = false;   // mouse buttons live in here too now
   try{ document.exitPointerLock(); }catch(e){} // owning the pointer while unfocused yanks macOS Spaces back
 });
-window.addEventListener('keyup',   e=>{ keys[e.key.toLowerCase()] = false; });
+window.addEventListener('keyup',   e=>{ keys[e.code] = false; });
 cv.addEventListener('mousedown', e=>{
-  if(e.button === 2){ if(G && G.running && locked) aiming = true; return; }
-  if(e.button!==0) return;
+  keys['Mouse' + e.button] = true;
   au();
-  if(G && G.running && !locked){ if(!settingsOpen && !G.connecting) enterGameScreen(); return; }
-  mouseDown = true;
+  // Left click still grabs the pointer whatever it is bound to, or someone who
+  // rebinds Fire onto a key can never get back into the game after a pause.
+  if(e.button === 0 && G && G.running && !locked){
+    if(!settingsOpen && !G.connecting) enterGameScreen();
+  }
 });
-window.addEventListener('mouseup', e=>{
-  if(e.button === 2){ aiming = false; return; }
-  mouseDown = false;
-});
+window.addEventListener('mouseup', e=>{ keys['Mouse' + e.button] = false; });
+// Binding capture has to see buttons pressed anywhere, not just on the canvas —
+// the settings panel is a DOM overlay, so clicks there never reach cv.
+window.addEventListener('mousedown', e=>{
+  if(!bindCapture) return;
+  const el = e.target && e.target.closest && e.target.closest('.bindbtn');
+  if(el) return;                      // clicking another row re-targets instead
+  bindCapture('Mouse' + e.button, e);
+}, true);
 document.addEventListener('pointerlockchange', ()=>{
   locked = document.pointerLockElement === cv;
   if(!locked) aiming = false;
@@ -1568,6 +1711,9 @@ function syncSettingsUI(){
   $('#volval').textContent = Math.round(SETTINGS.volume*100)+'%';
   $('#senssl').value = Math.round(SETTINGS.sens*100);
   $('#sensval').textContent = SETTINGS.sens.toFixed(2)+'x';
+  const host = document.getElementById('ctlhost');
+  if(host) host.innerHTML = controlsHtml();
+  syncHintLine();
 }
 function openSettings(){
   settingsOpen = true; paused = true;
@@ -1577,6 +1723,7 @@ function openSettings(){
 }
 function closeSettings(resume){
   settingsOpen = false;
+  bindCapture = null;          // don't carry a listening row back into the match
   $('#setov').classList.remove('on');
   if(resume && G && G.running){ au(); enterGameScreen(); }
 }
@@ -1595,7 +1742,11 @@ $('#senssl').addEventListener('input', e=>{
   saveSettings();
 });
 $('#setreset').addEventListener('click', ()=>{
-  SETTINGS = {volume:0.8, sens:1.0};
+  // same reset the menu uses, so the two panels can't disagree about what
+  // "default" means — and it restores the key bindings, not just the sliders
+  bindCapture = null;
+  BINDS = Object.assign({}, DEFAULT_BINDS);
+  SETTINGS = { volume:0.8, sens:1.0, binds: BINDS };
   if(masterG) masterG.gain.value = SETTINGS.volume;
   syncSettingsUI(); saveSettings(); sfx('reload');
 });
@@ -2908,8 +3059,8 @@ function startMatch(){
   au();
   if(G && G.running) return; // a match is already up — ignore double deploys
   if(setupSel.mode === 'live'){ startLiveMatch(); return; }
-  for(const k in keys) keys[k] = false;   // no phantom held keys from the menus
-  mouseDown = false; aiming = false; adsT = 0; adsLook = 1;
+  for(const k in keys) keys[k] = false;   // no phantom held keys or buttons from the menus
+  aiming = false; adsT = 0; adsLook = 1;
   initRenderer();
   const L = computeLoadout();
   const map = MAPS.find(m=>m.id===setupSel.map);
@@ -3112,12 +3263,16 @@ function tick(now){
     }
   }
 
+  // ADS is whatever the ads binding is held on this frame — key or button.
+  // It used to be set by the RMB handler, which made it unbindable.
+  aiming = locked && act('ads');
+
   // player
   const me = G.me;
   if(!me.dead){
     G.deadShown = false;
     let f=0, r=0;
-    if(keys['w'])f++; if(keys['s'])f--; if(keys['d'])r++; if(keys['a'])r--;
+    if(act('forward'))f++; if(act('back'))f--; if(act('right'))r++; if(act('left'))r--;
     if(f||r){
       const sp = me.baseSpeed * (me.slowT>0?0.65:1) * (1 - adsT*0.4);
       let dx = (-Math.sin(yaw))*f + Math.cos(yaw)*r;
@@ -3125,8 +3280,8 @@ function tick(now){
       const ml = Math.hypot(dx,dz)||1;
       moveEnt(me, dx/ml*sp*dt, dz/ml*sp*dt);
     }
-    if(keys['r']) startReload(me);
-    if(mouseDown && locked){
+    if(act('reload')) startReload(me);
+    if(act('fire') && locked){
       V3.set(0,0,-1).applyQuaternion(camera.quaternion);
       fire(me, V3);
     }
@@ -3346,7 +3501,7 @@ function tick(now){
   G.kickPitch *= Math.max(0, 1 - 9*dt);   // the barrel settles
   G.kickYaw   *= Math.max(0, 1 - 9*dt);
   G.shake     *= Math.max(0, 1 - 7*dt);
-  updateViewmodelPose(dt, me, !me.dead && (keys['w']||keys['a']||keys['s']||keys['d']));
+  updateViewmodelPose(dt, me, !me.dead && (act('forward')||act('left')||act('back')||act('right')));
 
   // win checks
   if(G.mode==='ffa'){
@@ -3642,7 +3797,7 @@ function startLiveMatch(){
     toast('LIVE ARENA UNAVAILABLE — colyseus client failed to load'); return;
   }
   for(const k in keys) keys[k] = false;
-  mouseDown = false; aiming = false; adsT = 0; adsLook = 1;
+  aiming = false; adsT = 0; adsLook = 1;
   initRenderer();
   const L = computeLoadout();
   const map = MAPS.find(m=>m.id===setupSel.map);
@@ -3873,8 +4028,8 @@ function liveTick(dt){
   if(live.sendT <= 0){
     live.sendT = 0.033;
     const canAct = locked && !live.results && !paused;
-    const f = canAct ? (keys['w']?1:0) - (keys['s']?1:0) : 0;
-    const r2 = canAct ? (keys['d']?1:0) - (keys['a']?1:0) : 0;
+    const f  = canAct ? (act('forward')?1:0) - (act('back')?1:0) : 0;
+    const r2 = canAct ? (act('right')?1:0)   - (act('left')?1:0) : 0;
     let mx = 0, mz = 0;
     if(f || r2){
       mx = (-Math.sin(yaw))*f + Math.cos(yaw)*r2;
@@ -3888,7 +4043,7 @@ function liveTick(dt){
                                  // player is not aiming, and shouldn't be taxed for it
       yaw: Math.atan2(fwdZ, fwdX),
       pitch,
-      fire: (locked && !live.results && !paused) && mouseDown && !me.reloading && !me.dead
+      fire: (locked && !live.results && !paused) && act('fire') && !me.reloading && !me.dead
     });
   }
 
@@ -4214,6 +4369,7 @@ function liveExitToLobby(){
     }
     else { await loadProfile(); }  // offline / no backend -> local save
     await loadSettings();
+    syncHintLine();   // must run AFTER the saved bindings load, or it shows defaults
     refreshChips();
     renderMenu();
     if(cloud) toast('SIGNED IN — INVENTORY SYNCED FROM CLOUD');
