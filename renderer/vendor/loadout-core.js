@@ -39,6 +39,29 @@
      pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'}},
   ];
 
+  /* ---- ability stacking --------------------------------------------------
+     Abilities used to live in a Set, so a second Deadeye part was worth exactly
+     nothing and nothing in the UI said so. The two abilities that are pure numbers
+     now stack on a diminishing curve with a hard cap: the duplicate is worth
+     finding, but six of them don't make a 72% crit build.
+       Deadeye      12% for the first, +6% each extra, cap 30%
+       Featherweight +10% for the first, +5% each extra, cap 25%
+     The effect abilities (incendiary, cryo, pierce, ricochet, vampiric, explosive)
+     stay non-stacking: they are on/off states, not quantities. */
+  const STACK = {
+    deadeye: { first:0.12, extra:0.06, cap:0.30 },
+    swift:   { first:0.10, extra:0.05, cap:0.25 },
+  };
+  function stackValue(kind, n){
+    if(!n) return 0;
+    const s = STACK[kind];
+    return Math.min(s.cap, s.first + s.extra * (n - 1));
+  }
+  // Sidearm Saint's Absolution now carries its own crit chance. It used to only
+  // heal ON a crit while granting no crit chance of its own, so the set did
+  // literally nothing unless you ALSO spent a slot on a Deadeye part.
+  const SAINT_CRIT = 0.15;
+
   const weaponById = id => WEAPONS.find(w => w.id === id) || WEAPONS[0];
 
   // Which sets are active given the equipped parts for a weapon.
@@ -59,6 +82,7 @@
     const w = weaponById(weaponId);
     const m = { dmg:1, rof:1, mag:1, reload:1, spread:1, speed:1 };
     const abilities = new Set();
+    const count = {};                 // how many parts carry each ability
 
     for (const s of SLOTS) {
       const p = equipped && equipped[s];
@@ -67,7 +91,7 @@
       if (p.weapon && p.weapon !== weaponId) continue;
       if (p.slot && p.slot !== s) continue;
       if (p.mods) for (const k in p.mods) if (k in m) m[k] += p.mods[k];
-      if (p.ability) abilities.add(p.ability);
+      if (p.ability) { abilities.add(p.ability); count[p.ability] = (count[p.ability] || 0) + 1; }
     }
     const sets = activeSets(weaponId, equipped);
     for (const st of sets) abilities.add(st.effect);
@@ -82,9 +106,11 @@
       spread: Math.max(w.spread * 0.25, w.spread * m.spread),
       bspd:   w.bspd,
       pellets:w.pellets,
-      speedMul: m.speed + (abilities.has('swift') ? 0.10 : 0),
-      crit:   abilities.has('deadeye') ? 0.12 : 0,
+      speedMul: m.speed + stackValue('swift', count.swift || 0),
+      crit:   Math.min(0.5, stackValue('deadeye', count.deadeye || 0)
+                          + (abilities.has('critheal') ? SAINT_CRIT : 0)),
       abilities: Array.from(abilities),
+      stacks: { deadeye: count.deadeye || 0, swift: count.swift || 0 },
     };
   }
 

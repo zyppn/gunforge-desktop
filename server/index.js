@@ -26,12 +26,12 @@ const PVP = {
   burnDur:        3,     // and how long it lasts (refreshes, never stacks)
   slowDur:        1.5,   // cryo
   slowMul:        0.65,  // movement multiplier while chilled
-  critChance:     0.12,  // deadeye
+  critChance:     0.12,  // deadeye, first copy (loadout-core stacks it and adds Saint's +15%)
   critMul:        2,
   vampFrac:       0.08,  // 12% offline; toned down for PvP
   explDmg:        10,    // explosive splash  (matches PvE)
   explRadius:     3,     //                    (matches PvE)
-  critHeal:       6,     // Saint set
+  critHeal:       10,    // Saint set — Absolution, reworked to carry its own crit chance
   killShield:     25,    // Bulwark set
   novaRadius:     4,     // Dragon set: ignite around a corpse
   novaDmg:        14,    // PvE deals damage here too, PvP was only igniting
@@ -54,7 +54,7 @@ const MAPS = {
   foundry: { walls: [B(9,6,13,1.5),B(38,6,13,1.5),B(9,29.5,13,1.5),B(38,29.5,13,1.5),B(28,14,4,9,4.2),B(15,16.5,1.5,6),B(43.5,16.5,1.5,6),B(24,4,1.5,6),B(34.5,27,1.5,6)],
     spawns: [[4,4],[56,4],[4,36],[56,36],[30,4],[30,36],[4,20],[56,20]] },
   dustrelay: { walls: [B(12,10,7,7,2.4),B(41,10,7,7,2.4),B(12,23,7,7,2.4),B(41,23,7,7,2.4),B(28,5,4,4),B(28,31,4,4),B(4,17,6,1.5),B(50,17,6,1.5)],
-    spawns: [[4,4],[56,4],[4,36],[56,36],[30,18.5],[15,34],[45,4],[30,6]] },
+    spawns: [[4,4],[56,4],[4,36],[56,36],[30,18.5],[15,34],[45,4],[30,2]] },   // [30,6] was INSIDE B(28,5,4,4)
   blacksite: { walls: [B(0,12,17,1.5),B(43,12,17,1.5),B(0,23.5,17,1.5),B(43,23.5,17,1.5),B(25,0,1.5,10),B(33.5,0,1.5,10),B(25,30,1.5,10),B(33.5,30,1.5,10),B(28,16.5,4,4,4.6)],
     spawns: [[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] }
 };
@@ -380,7 +380,7 @@ class ArenaRoom extends Room {
         pierce: has('pierce_all') ? 99 : (has('pierce') ? 1 : 0),
         bounce: has('ricochet') ? 1 : 0,
         homing: has('homing'),
-        crit: has('deadeye') && Math.random() < PVP.critChance,
+        crit: Math.random() < (Number(ld.crit) || 0),   // build-dependent: stacked Deadeye + Saint
         hit: new Set(),
       };
       this.bullets.push(b);
@@ -489,7 +489,7 @@ class ArenaRoom extends Room {
     let dmg = ld.dmg;   // per pellet, NOT multiplied by pellet count
     // Crit is decided when the round leaves the barrel, exactly as PvE does it
     // (b.crit), so one pellet's luck can't be re-rolled per target it pierces.
-    const crit = b ? !!b.crit : (has('deadeye') && Math.random() < PVP.critChance);
+    const crit = b ? !!b.crit : (Math.random() < (Number(ld.crit) || 0));
     if(crit) dmg *= PVP.critMul;
 
     // Juggernaut: 30% reduction while the target is firing

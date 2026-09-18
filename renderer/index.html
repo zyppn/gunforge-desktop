@@ -119,6 +119,9 @@
   .filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .fbtn{font-size:11px;padding:4px 9px;border:1px solid var(--line);color:var(--dim);cursor:pointer;background:var(--panel2)}
   .fbtn.on{border-color:var(--brass);color:var(--brass)}
+  .sortlbl{font-size:10px;letter-spacing:.14em;color:var(--dim);align-self:center;margin-right:2px}
+  .pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:14px;
+    padding-top:12px;border-top:1px solid var(--line)}
 
   /* ---------- auction ---------- */
   .lst{display:flex;align-items:center;gap:12px;border:1px solid var(--line);background:var(--panel2);padding:10px 12px;margin-top:8px;font-size:12px;flex-wrap:wrap}
@@ -651,8 +654,8 @@ const PART_POOL = {
 const ABILITIES = {
   incendiary:{n:'Incendiary Rounds', d:'Hits ignite the target: 12 burn damage over 3s.', minR:2},
   cryo:      {n:'Cryo Rounds',       d:'Hits slow the target 35% for 1.5s.',              minR:2},
-  deadeye:   {n:'Deadeye',           d:'+12% critical chance (crits deal 2x damage).',    minR:2},
-  swift:     {n:'Featherweight',     d:'+10% move speed while equipped.',                 minR:2},
+  deadeye:   {n:'Deadeye',           d:'+12% crit chance (crits deal 2x). Stacks +6% each extra, cap 30%.', minR:2},
+  swift:     {n:'Featherweight',     d:'+10% move speed. Stacks +5% each extra, cap 25%.', minR:2},
   pierce:    {n:'AP Rounds',         d:'Shots pierce through one enemy.',                 minR:3},
   ricochet:  {n:'Ricochet Coating',  d:'Shots bounce off walls once.',                    minR:3},
   vampiric:  {n:'Vampiric Coating',  d:'Heal for 12% of damage dealt.',                   minR:4},
@@ -662,7 +665,7 @@ const ABILITIES = {
 const SETS = [
   {id:'saint',   weapon:'m17',      name:'Sidearm Saint', need:2, rarity:'epic',
    pieces:{barrel:"Saint's Whisper", optic:"Saint's Eye"},
-   bonus:'SET · ABSOLUTION — critical hits restore 6 HP.', effect:'critheal'},
+   bonus:'SET · ABSOLUTION — +15% critical chance, and critical hits restore 10 HP.', effect:'critheal'},
   {id:'hornet',  weapon:'havoc9',   name:'Hornet Swarm',  need:3, rarity:'epic',
    pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'},
    bonus:'SET · SEEKER SWARM — bullets curve toward nearby enemies.', effect:'homing'},
@@ -863,15 +866,29 @@ function setProgress(wid){
   for(const s of SLOTS){ if(eq[s] && eq[s].set) count[eq[s].set] = (count[eq[s].set]||0)+1; }
   return SETS.filter(s=>s.weapon===wid).map(st => ({set:st, have:count[st.id]||0}));
 }
+/* Mirrors STACK / SAINT_CRIT in loadout-core.js. If these drift, the armory
+   shows one crit chance and the server rolls another. */
+const STACK = {
+  deadeye: { first:0.12, extra:0.06, cap:0.30 },
+  swift:   { first:0.10, extra:0.05, cap:0.25 },
+};
+function stackValue(kind, n){
+  if(!n) return 0;
+  const st = STACK[kind];
+  return Math.min(st.cap, st.first + st.extra * (n - 1));
+}
+const SAINT_CRIT = 0.15;
+
 function computeLoadout(){
   const w = WEAPONS.find(x=>x.id===P.equippedWeapon) || WEAPONS[0];
   const eq = equippedParts(w.id);
   const m = {dmg:1, rof:1, mag:1, reload:1, spread:1, speed:1};
   const abilities = new Set();
+  const count = {};                      // duplicates matter now, for the two stat abilities
   for(const s of SLOTS){
     const p = eq[s]; if(!p) continue;
     for(const k in p.mods) m[k] += p.mods[k];
-    if(p.ability) abilities.add(p.ability);
+    if(p.ability){ abilities.add(p.ability); count[p.ability] = (count[p.ability]||0) + 1; }
   }
   const sets = activeSets(w.id);
   for(const st of sets) abilities.add(st.effect);
@@ -883,9 +900,11 @@ function computeLoadout(){
     reload: Math.max(400, w.reload * m.reload),
     spread: Math.max(w.spread*0.25, w.spread * m.spread),
     bspd: w.bspd, pellets: w.pellets,
-    speedMul: m.speed + (abilities.has('swift') ? 0.10 : 0),
-    crit: abilities.has('deadeye') ? 0.12 : 0,
-    abilities
+    speedMul: m.speed + stackValue('swift', count.swift || 0),
+    crit: Math.min(0.5, stackValue('deadeye', count.deadeye || 0)
+                      + (abilities.has('critheal') ? SAINT_CRIT : 0)),
+    abilities,
+    stacks: { deadeye: count.deadeye || 0, swift: count.swift || 0 }
   };
 }
 
@@ -990,7 +1009,7 @@ function renderMenu(){
    +'</div>'
    +'<div class="menutiles">'
    +'<div class="tile" onclick="openSetup()"><div class="t">▸ Deploy</div><div class="d">FFA · Team Deathmatch · Campaign. Three maps. Parts drop at match end.</div></div>'
-   +'<div class="tile" onclick="renderLoadout()"><div class="t">Armory</div><div class="d">Equip one weapon, fit its five part slots, track set bonuses.</div></div>'
+   +'<div class="tile" onclick="renderLoadout()"><div class="t">Armory</div><div class="d">Equip one weapon, fit its six part slots, track set bonuses.</div></div>'
    +'<div class="tile" onclick="renderInventory()"><div class="t">Parts Locker</div><div class="d">'+partsHeld()+' / '+PART_CAP+' parts held. Equip, scrap for credits, or send to auction.</div></div>'
    +'<div class="tile" onclick="renderAuction()"><div class="t">Auction House</div><div class="d">Live listings shared across all operators. Parts only — weapons are yours forever.</div></div>'
    +'</div>'
@@ -1203,13 +1222,61 @@ async function unequipSlot(wid, slot){
 
 /* ---------------- PARTS LOCKER ---------------- */
 let invFilter = 'all';
+/* A 200-part locker rendered as one wall of cards is unusable, and each card
+   carries a 128px WebGL thumbnail, so the page was also doing 200 renders.
+   20 per page means at most 10 pages at the cap, and at most 20 thumbnails. */
+const INV_PAGE_SIZE = 20;
+let invPage = 0;
+let invSort = 'obtained';
+const INV_SORTS = [
+  ['obtained','NEWEST'], ['name','NAME'], ['rarity','RARITY'], ['type','TYPE'],
+];
+function invSorted(items){
+  // `obtained` has no timestamp to sort on - parts are appended as they arrive,
+  // so position in the array IS the acquisition order. Newest first.
+  const idx = new Map(P.inventory.map((p, i) => [p.uid, i]));
+  const rank = p => RKEYS.indexOf(p.rarity);           // common 0 -> legendary 4
+  const slotRank = p => SLOTS.indexOf(p.slot);
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  const out = items.slice();
+  if(invSort === 'name')        out.sort((a,b) => byName(a,b) || rank(b) - rank(a));
+  else if(invSort === 'rarity') out.sort((a,b) => rank(b) - rank(a) || byName(a,b));
+  else if(invSort === 'type')   out.sort((a,b) => slotRank(a) - slotRank(b) || rank(b) - rank(a) || byName(a,b));
+  else                          out.sort((a,b) => idx.get(b.uid) - idx.get(a.uid));
+  return out;
+}
+function pagerHtml(total, pages){
+  if(total <= INV_PAGE_SIZE) return '';   // one page needs no controls
+  const from = invPage * INV_PAGE_SIZE + 1;
+  const to = Math.min(total, (invPage + 1) * INV_PAGE_SIZE);
+  let pips = '';
+  for(let i = 0; i < pages; i++)
+    pips += '<div class="fbtn '+(i===invPage?'on':'')+'" onclick="invGoPage('+i+')">'+(i+1)+'</div>';
+  return '<div class="pager">'
+    + '<button class="btn sm" '+(invPage<=0?'disabled':'')+' onclick="invGoPage('+(invPage-1)+')">‹ PREV</button>'
+    + pips
+    + '<button class="btn sm" '+(invPage>=pages-1?'disabled':'')+' onclick="invGoPage('+(invPage+1)+')">NEXT ›</button>'
+    + '<span class="sortlbl" style="margin-left:auto">'+from+'–'+to+' of '+total+'</span>'
+    + '</div>';
+}
+function invSetSort(k){ invSort = k; invPage = 0; SETTINGS.invSort = k; saveSettings(); renderInventory(); }
+function invGoPage(n){ invPage = n; renderInventory(); }
 function renderInventory(filter){
-  if(filter !== undefined && filter !== null && typeof filter === 'string') invFilter = filter;
+  if(filter !== undefined && filter !== null && typeof filter === 'string'){
+    if(filter !== invFilter) invPage = 0;   // a new filter starts at page 1
+    invFilter = filter;
+  }
   const fbs = ['all', ...WEAPONS.map(w=>w.id)].map(f=>{
     const label = f==='all' ? 'ALL' : WEAPONS.find(w=>w.id===f).name.toUpperCase();
     return '<div class="fbtn '+(invFilter===f?'on':'')+'" onclick="renderInventory(\''+f+'\')">'+label+'</div>';
   }).join('');
-  const items = P.inventory.filter(p => invFilter==='all' || p.weapon===invFilter);
+  const all = invSorted(P.inventory.filter(p => invFilter==='all' || p.weapon===invFilter));
+  const pages = Math.max(1, Math.ceil(all.length / INV_PAGE_SIZE));
+  // scrapping or selling can shrink the list under your feet - never strand the
+  // player on a page that no longer exists
+  if(invPage > pages - 1) invPage = pages - 1;
+  if(invPage < 0) invPage = 0;
+  const items = all.slice(invPage * INV_PAGE_SIZE, (invPage + 1) * INV_PAGE_SIZE);
   const eqAll = {};
   for(const wid in P.equipped) for(const s in P.equipped[wid]) eqAll[P.equipped[wid][s]] = true;
 
@@ -1243,7 +1310,13 @@ function renderInventory(filter){
    +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning. Parts on the auction block are escrowed and don\'t count against your '+PART_CAP+'.</p>'
    +(held >= PART_CAP ? '<p class="note" style="color:#E05A4E">Locker full — drops and auction buys will be refused until you scrap or list something.</p>' : '')
    +'<div class="filters">'+fbs+'</div>'
+   +'<div class="filters" style="margin-top:6px"><span class="sortlbl">SORT</span>'
+     + INV_SORTS.map(function(sd){
+         return '<div class="fbtn '+(invSort===sd[0]?'on':'')+'" onclick="invSetSort(\''+sd[0]+'\')">'+sd[1]+'</div>';
+       }).join('')
+   +'</div>'
    +(cards ? '<div class="partgrid">'+cards+'</div>' : '<div class="panel" style="margin-top:12px">Locker\'s empty for this filter. Finish matches to roll for drops, or check the auction house.</div>')
+   +pagerHtml(all.length, pages)
    +'<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
   show('inventory');
   hydrateThumbs();
@@ -1413,7 +1486,7 @@ const MAPS = [
   { id:'dustrelay', name:'DUST RELAY', floor:0x1B1810, wall:0x4A4030, fog:0x141109, accent:0xD8B36A, fogd:60,
     walls:[ B(12,10,7,7,2.4), B(41,10,7,7,2.4), B(12,23,7,7,2.4), B(41,23,7,7,2.4),
             B(28,5,4,4), B(28,31,4,4), B(4,17,6,1.5), B(50,17,6,1.5) ],
-    spawns:[[4,4],[56,4],[4,36],[56,36],[30,18.5],[15,34],[45,4],[30,6]] },
+    spawns:[[4,4],[56,4],[4,36],[56,36],[30,18.5],[15,34],[45,4],[30,2]] },
   { id:'blacksite', name:'BLACKSITE', floor:0x101418, wall:0x233042, fog:0x07090C, accent:0x4C9BE8, fogd:52,
     walls:[ B(0,12,17,1.5), B(43,12,17,1.5), B(0,23.5,17,1.5), B(43,23.5,17,1.5),
             B(25,0,1.5,10), B(33.5,0,1.5,10), B(25,30,1.5,10), B(33.5,30,1.5,10),
@@ -1520,6 +1593,9 @@ async function loadSettings(){
     SETTINGS.sens   = (typeof s.sens === 'number' && isFinite(s.sens)) ? Math.min(2.5, Math.max(0.2, s.sens)) : 1.0;
     SETTINGS.binds  = sanitizeBinds(s.binds);
     BINDS = SETTINGS.binds;
+    if(typeof s.invSort === 'string' && INV_SORTS.some(function(d){ return d[0] === s.invSort; })){
+      SETTINGS.invSort = s.invSort; invSort = s.invSort;
+    }
   }
 }
 function saveSettings(){ sSet('settings', SETTINGS); }
@@ -2137,10 +2213,18 @@ function vmStock(p, w, rearZ, bodyH){
   }
   coupler();
   if(n.includes('Padded')){
-    vmBox(m, 0.07, 0.095, 0.13, 0, -0.01, rearZ + 0.065);
-    vmBox(mat(0x0D1117), 0.075, 0.1, 0.025, 0, -0.01, rearZ + 0.14);
-    vmBox(dark(), 0.072, 0.005, 0.132, 0, 0.028, rearZ + 0.065); // cheek seam
-    vmCyl(steel(), 0.006, 0.012, rearZ + 0.12, -0.062); // sling stud
+    // This used to be one slab plus a butt pad coloured 0x0D1117 - which is exactly
+    // --bg, so the pad vanished against the card and the part read as an empty box.
+    // Every other stock breaks its silhouette with something (a riser, a buffer tube,
+    // an open frame); this one now does too.
+    vmBox(m, 0.068, 0.088, 0.115, 0, -0.012, rearZ + 0.058);            // body
+    vmBox(tone(0.92), 0.052, 0.026, 0.10, 0, 0.038, rearZ + 0.062);     // raised comb / cheek rest
+    vmBox(dark(), 0.054, 0.004, 0.102, 0, 0.052, rearZ + 0.062);        // stitched seam along the comb
+    vmBox(voidM(), 0.076, 0.104, 0.022, 0, -0.012, rearZ + 0.126);      // recoil pad, deep shade of its OWN hue
+    for(const dy of [0.022, -0.012, -0.046])                            // ribs: what reads as rubber at 128px
+      vmBox(tone(0.5), 0.078, 0.006, 0.026, 0, dy, rearZ + 0.128);
+    vmBox(steel(), 0.010, 0.018, 0.012, 0, -0.056, rearZ + 0.100);      // sling loop under the toe
+    vmCyl(steel(), 0.006, 0.012, rearZ + 0.100, -0.066);
   } else if(n.includes('Marksman') || n.includes('Spine')){
     vmBox(m, 0.06, 0.08, 0.18, 0, -0.015, rearZ + 0.09);
     vmBox(m, 0.05, 0.03, 0.09, 0, 0.04, rearZ + 0.1); // riser sits ON the body now
@@ -2744,7 +2828,7 @@ function damage(t, amount, src, isCrit){
   }
   if(src){
     if(src.wep && src.wep.abilities.has('vampiric') && src!==t) src.hp = Math.min(src.maxhp, src.hp + (amount*(isCrit?2:1))*0.12);
-    if(isCrit && src.wep && src.wep.abilities.has('critheal')) src.hp = Math.min(src.maxhp, src.hp + 6);
+    if(isCrit && src.wep && src.wep.abilities.has('critheal')) src.hp = Math.min(src.maxhp, src.hp + 10);
   }
   if(t.hp <= 0) kill(t, src);
 }
