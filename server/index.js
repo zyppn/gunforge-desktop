@@ -641,6 +641,63 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /* ---- daily store ------------------------------------------------------
+     The shop is a pure function of (player id, store day), so there is nothing
+     stored to fetch — the server just derives it. It does that itself rather
+     than trusting the client's copy, which is what makes the purchase safe: you
+     can only buy the item the server independently computed for slot N. */
+  if(req.url === '/store' && req.method === 'POST'){
+    let body = '';
+    req.on('data', c => { body += c; if(body.length > 4096) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        if(!Admin.ENABLED){ sendJson(res, 200, { ok:false, reason:'no-economy' }); return; }
+        const jwt = (req.headers.authorization || '').replace(/^Bearer /,'');
+        const uid = await Admin.verifyUser(jwt);
+        if(!uid){ sendJson(res, 401, { ok:false, reason:'bad-token' }); return; }
+        const pid = await Admin.playerIdForUid(uid);
+        if(!pid){ sendJson(res, 404, { ok:false, reason:'no-player' }); return; }
+        const win = LoadoutCore.storeWindow(Date.now());
+        const items = LoadoutCore.rollDailyStore(pid, win.key);
+        const bought = await Admin.storePurchases(pid, win.key);
+        sendJson(res, 200, { ok:true, day:win.key, opens:win.start, refreshAt:win.next, items, bought });
+      } catch(e){ sendJson(res, 400, { ok:false, reason:String(e && e.message || e) }); }
+    });
+    return;
+  }
+
+  if(req.url === '/store/buy' && req.method === 'POST'){
+    let body = '';
+    req.on('data', c => { body += c; if(body.length > 4096) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        if(!Admin.ENABLED){ sendJson(res, 200, { ok:false, reason:'no-economy' }); return; }
+        const jwt = (req.headers.authorization || '').replace(/^Bearer /,'');
+        const uid = await Admin.verifyUser(jwt);
+        if(!uid){ sendJson(res, 401, { ok:false, reason:'bad-token' }); return; }
+        const pid = await Admin.playerIdForUid(uid);
+        if(!pid){ sendJson(res, 404, { ok:false, reason:'no-player' }); return; }
+
+        const data = JSON.parse(body || '{}');
+        const idx = Number(data.idx);
+        if(!Number.isInteger(idx) || idx < 0 || idx > 7){
+          sendJson(res, 400, { ok:false, reason:'bad-slot' }); return;
+        }
+        // Re-derive rather than trust: the client sends only WHICH slot, never what
+        // is in it. A forged price or a legendary in slot 0 cannot survive this.
+        const win = LoadoutCore.storeWindow(Date.now());
+        const item = LoadoutCore.rollDailyStore(pid, win.key)[idx];
+        if(!item){ sendJson(res, 400, { ok:false, reason:'bad-slot' }); return; }
+
+        const r = await Admin.buyStorePart(pid, win.key, idx, item.price, item);
+        if(!r || !r.ok){ sendJson(res, 200, { ok:false, reason:(r && r.reason) || 'failed' }); return; }
+        sendJson(res, 200, { ok:true, idx, price:item.price, part:r.part, credits:r.credits,
+                             refreshAt:win.next });
+      } catch(e){ sendJson(res, 400, { ok:false, reason:String(e && e.message || e) }); }
+    });
+    return;
+  }
+
   res.writeHead(404); res.end();
 });
 const transport = new WebSocketTransport({ server });

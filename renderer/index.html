@@ -122,6 +122,7 @@
   .sortlbl{font-size:10px;letter-spacing:.14em;color:var(--dim);align-self:center;margin-right:2px}
   .pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:14px;
     padding-top:12px;border-top:1px solid var(--line)}
+  .soldout{opacity:.45;filter:saturate(.4)}
 
   /* ---------- auction ---------- */
   .lst{display:flex;align-items:center;gap:12px;border:1px solid var(--line);background:var(--panel2);padding:10px 12px;margin-top:8px;font-size:12px;flex-wrap:wrap}
@@ -244,6 +245,7 @@
   <div id="loadout" class="screen"></div>
   <div id="inventory" class="screen"></div>
   <div id="auction" class="screen"></div>
+  <div id="store" class="screen"></div>
   <div id="setup" class="screen"></div>
 
   <div id="game" class="screen">
@@ -994,6 +996,133 @@ async function retryPending(){
   refreshPendingBadge();
 }
 
+/* ---------------- DAILY STORE ---------------- */
+/* The shop is derived, never stored: the server computes the same eight parts
+   from (player id, store day) that we do, so reloading can't reroll it and a
+   purchase names only WHICH slot — never what is in it or what it costs. */
+let STORE = null;             // {day, refreshAt, items[], bought[]}
+let storeTimer = null;
+
+function storeCountdown(ms){
+  const left = Math.max(0, ms - Date.now());
+  const h = Math.floor(left / 3600000);
+  const m = Math.floor(left % 3600000 / 60000);
+  const sec = Math.floor(left % 60000 / 1000);
+  return h + 'h ' + String(m).padStart(2,'0') + 'm ' + String(sec).padStart(2,'0') + 's';
+}
+function storeTickAll(){
+  if(!STORE) return;
+  const txt = storeCountdown(STORE.refreshAt);
+  for(const id of ['storetick','storetick2']){
+    const el = document.getElementById(id);
+    if(el) el.textContent = txt;
+  }
+  if(Date.now() >= STORE.refreshAt){ STORE = null; loadStore().then(()=>{ if(document.getElementById('storetick2')) renderStore(); }); }
+}
+setInterval(storeTickAll, 1000);
+
+async function loadStore(){
+  if(!ACCOUNT.online || !AUTH || !AUTH.token) return null;
+  try{
+    const ctl = new AbortController();
+    const to = setTimeout(()=>ctl.abort(), 8000);
+    const r = await fetch(liveHttpUrl()+'/store', {
+      method:'POST', signal:ctl.signal,
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+AUTH.token},
+      body:'{}'
+    });
+    clearTimeout(to);
+    const j = await r.json();
+    if(j && j.ok){ STORE = j; storeTickAll(); return j; }
+    STORE = null; return null;
+  }catch(e){ STORE = null; return null; }
+}
+
+function renderStore(){
+  const head = '<div class="eyebrow">Daily Store</div>'
+    + '<h2>Daily Store</h2>';
+  if(!ACCOUNT.online){
+    $('#store').innerHTML = head
+      + '<div class="panel" style="margin-top:12px">The store needs a signed-in account — your shop is generated per operator. '
+      + 'Sign in from the menu and it will appear here.</div>'
+      + '<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
+    show('store'); return;
+  }
+  if(!STORE){
+    $('#store').innerHTML = head
+      + '<div class="panel" style="margin-top:12px">Contacting the quartermaster…</div>'
+      + '<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
+    show('store');
+    loadStore().then(j => { if(j) renderStore(); else storeOffline(); });
+    return;
+  }
+  const bought = {}; (STORE.bought||[]).forEach(i => bought[i] = true);
+  const cards = STORE.items.map(it => {
+    const owned = !!bought[it.idx];
+    const afford = P.credits >= it.price;
+    const acts = owned
+      ? '<button class="btn sm" disabled>PURCHASED</button>'
+      : '<button class="btn sm '+(afford?'primary':'')+'" '+(afford?'':'disabled')
+        + ' onclick="storeBuy('+it.idx+')">'+(afford ? 'BUY ' + it.price.toLocaleString() + ' CR'
+                                                    : it.price.toLocaleString()+' CR') + '</button>';
+    const tag = owned ? '<span class="eqtag">✓ PURCHASED</span>' : '';
+    return '<div class="'+(owned?'soldout':'')+'">' + partCard(it, acts, tag) + '</div>';
+  }).join('');
+
+  $('#store').innerHTML = head
+   + '<p class="note">Eight parts, generated for you alone — no two operators see the same shop. '
+   + 'Set pieces are never sold here; those stay earned. Rotates at 7:00 PM Central: '
+   + '<b id="storetick2" style="color:var(--brass)">'+storeCountdown(STORE.refreshAt)+'</b></p>'
+   + '<div class="partgrid">'+cards+'</div>'
+   + '<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
+  show('store');
+  hydrateThumbs();
+}
+function storeOffline(){
+  $('#store').innerHTML = '<div class="eyebrow">Daily Store</div><h2>Daily Store</h2>'
+    + '<div class="panel" style="margin-top:12px">Couldn\'t reach the store server. Your credits and parts are safe — '
+    + 'nothing was charged. Try again in a moment.</div>'
+    + '<div class="btnrow"><button class="btn" onclick="renderStore()">RETRY</button>'
+    + '<button class="btn" onclick="renderMenu()">← BACK</button></div>';
+  show('store');
+}
+
+async function storeBuy(idx){
+  if(!STORE || !AUTH || !AUTH.token) return;
+  const it = STORE.items.find(x => x.idx === idx);
+  if(!it) return;
+  if(P.credits < it.price){ toast('NOT ENOUGH CREDITS'); return; }
+  const btns = document.querySelectorAll('#store .btn');
+  btns.forEach(b => b.disabled = true);            // no double-buy while in flight
+  try{
+    const r = await fetch(liveHttpUrl()+'/store/buy', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+AUTH.token},
+      body: JSON.stringify({ idx })
+    });
+    const j = await r.json();
+    if(j && j.ok){
+      // the server is authoritative for both sides of the trade; take its numbers
+      if(typeof j.credits === 'number') P.credits = j.credits;
+      if(j.part) P.inventory.push(partFromRow(j.part));
+      STORE.bought = (STORE.bought || []).concat([idx]);
+      refreshChips();
+      sfx('kill');
+      toast(it.name.toUpperCase() + ' ACQUIRED — −' + it.price.toLocaleString() + ' CR');
+    } else {
+      const why = j && j.reason;
+      toast(why === 'not-enough-credits' ? 'NOT ENOUGH CREDITS'
+          : why === 'locker-full'        ? 'LOCKER FULL — SCRAP OR LIST SOMETHING FIRST'
+          : why === 'already-bought'     ? 'ALREADY PURCHASED TODAY'
+          : 'PURCHASE FAILED — NOTHING WAS CHARGED');
+      if(why === 'already-bought'){ STORE.bought = (STORE.bought||[]).concat([idx]); }
+    }
+  }catch(e){
+    toast('STORE UNREACHABLE — NOTHING WAS CHARGED');
+  }
+  renderStore();
+}
+
 function renderMenu(){
   const need = xpNeeded(P.level), pct = Math.min(1, P.xp/need);
   const nextUnlock = WEAPONS.filter(w=>w.unlock>P.level).sort((a,b)=>a.unlock-b.unlock)[0];
@@ -1012,6 +1141,7 @@ function renderMenu(){
    +'<div class="tile" onclick="renderLoadout()"><div class="t">Armory</div><div class="d">Equip one weapon, fit its six part slots, track set bonuses.</div></div>'
    +'<div class="tile" onclick="renderInventory()"><div class="t">Parts Locker</div><div class="d">'+partsHeld()+' / '+PART_CAP+' parts held. Equip, scrap for credits, or send to auction.</div></div>'
    +'<div class="tile" onclick="renderAuction()"><div class="t">Auction House</div><div class="d">Live listings shared across all operators. Parts only — weapons are yours forever.</div></div>'
+   +'<div class="tile" onclick="renderStore()"><div class="t">Daily Store</div><div class="d">Eight parts, yours alone, for credits. Rotates 7PM CT — <span id="storetick">loading…</span></div></div>'
    +'</div>'
    +'<div class="panel" style="margin-top:14px"><div class="eyebrow">Service Record</div>'
    +'<div class="grid g3" style="margin-top:6px">'

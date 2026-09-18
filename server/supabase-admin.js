@@ -152,4 +152,53 @@ async function grantReward(playerId, { credits = 0, xp = 0, part = null, statsDe
   }
 }
 
-module.exports = { ENABLED, PART_CAP, verifyUser, playerIdForUid, claimMatch, partsHeld, grantReward };
+/* ---- daily store ----------------------------------------------------------
+   The shop is never stored; the server re-derives it from the seed and sends the
+   part down itself, so a client cannot name its own rarity, mods or price. These
+   two only deal with what has to persist: which slots a player already bought. */
+
+// Slots already purchased in this window, so the UI can grey them out.
+async function storePurchases(playerId, dayKey) {
+  if (!ENABLED || !playerId) return [];
+  try {
+    const r = await fetch(SUPABASE_URL + '/rest/v1/store_purchases'
+      + '?select=idx,part_uid&player_id=eq.' + encodeURIComponent(playerId)
+      + '&day_key=eq.' + encodeURIComponent(dayKey), { headers: adminHeaders() });
+    if (!r.ok) { console.error('[supabase] store_purchases failed', r.status); return []; }
+    return (await r.json()).map(row => row.idx);
+  } catch (e) {
+    console.error('[supabase] store_purchases threw', e && e.message || e);
+    return [];
+  }
+}
+
+// One atomic purchase: claim the slot, check and deduct credits, insert the part.
+async function buyStorePart(playerId, dayKey, idx, price, part) {
+  if (!ENABLED || !playerId) return { ok: false, reason: 'no-economy' };
+  try {
+    const r = await fetch(SUPABASE_URL + '/rest/v1/rpc/buy_store_part', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({
+        p_player: playerId, p_day: dayKey, p_idx: idx, p_price: price,
+        p_part: { weapon: part.weapon, slot: part.slot, rarity: part.rarity,
+                  name: part.name, mods: part.mods || {}, ability: part.ability || '' },
+      }),
+    });
+    const body = await r.json().catch(() => null);
+    if (!r.ok) {
+      const msg = String((body && (body.message || body.hint)) || r.status);
+      // the RPC raises for the three states the player can actually act on
+      const reason = /locker full/.test(msg) ? 'locker-full'
+                   : /not enough credits/.test(msg) ? 'not-enough-credits'
+                   : msg;
+      return { ok: false, reason };
+    }
+    return body || { ok: false, reason: 'no-body' };
+  } catch (e) {
+    console.error('[supabase] buyStorePart threw', e && e.message || e);
+    return { ok: false, reason: String(e && e.message || e) };
+  }
+}
+
+module.exports = { ENABLED, PART_CAP, verifyUser, playerIdForUid, claimMatch, partsHeld, grantReward,
+                   storePurchases, buyStorePart };

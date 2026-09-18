@@ -224,7 +224,106 @@
              mods:scaleMods(tpl.mods, rarity), ability:rollAbility(rarity), set:null };
   }
 
-  const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped, rollServerDrop };
+
+  /* ---- daily store -------------------------------------------------------
+     Eight parts per player per day, refreshing at 7pm America/Chicago.
+
+     Nothing is stored. The whole shop is a pure function of (player id, store
+     day), so the server can re-derive exactly what a client was shown and
+     validate a purchase against it — you cannot reroll by reloading, and you
+     cannot buy an item you were never offered. Different players get different
+     shops because the player id is in the seed.
+
+     Real Chicago wall-clock, not a fixed UTC offset, so it stays 7pm through
+     daylight saving rather than drifting to 8pm for half the year. */
+  const STORE_TZ = 'America/Chicago';
+  const STORE_HOUR = 19;
+  const STORE_SLOTS = ['common','common','uncommon','uncommon','rare','rare','epic','BONUS'];
+  const STORE_BONUS_LEGENDARY = 0.25;         // the 8th slot: 75% epic, 25% legendary
+  const STORE_PRICE = { common:1000, uncommon:2500, rare:5000, epic:10000, legendary:25000 };
+
+  function tzParts(ms){
+    const dtf = new Intl.DateTimeFormat('en-US', { timeZone: STORE_TZ, hour12:false,
+      year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const o = {};
+    for(const part of dtf.formatToParts(new Date(ms))) if(part.type !== 'literal') o[part.type] = +part.value;
+    if(o.hour === 24) o.hour = 0;             // some ICU builds report midnight as 24
+    return o;
+  }
+  // UTC instant of a given Chicago wall-clock time. Solved twice so a DST
+  // transition inside the guess corrects itself.
+  function localToUtc(y, mo, d, h){
+    const want = Date.UTC(y, mo - 1, d, h, 0, 0);
+    let guess = want;
+    for(let i = 0; i < 2; i++){
+      const p2 = tzParts(guess);
+      const off = Date.UTC(p2.year, p2.month - 1, p2.day, p2.hour, p2.minute, p2.second) - (guess - guess % 1000);
+      guess = want - off;
+    }
+    return guess;
+  }
+  const pad2 = n => (n < 10 ? '0' : '') + n;
+  /* The window containing `nowMs`: when it opened, when it closes, and the
+     Chicago calendar date of its opening, which is the seed key. */
+  function storeWindow(nowMs){
+    const now = typeof nowMs === 'number' ? nowMs : Date.now();
+    const p = tzParts(now);
+    let start = localToUtc(p.year, p.month, p.day, STORE_HOUR);
+    if(start > now){                           // before 7pm: the live window opened yesterday
+      const q = tzParts(start - 24 * 3600 * 1000);
+      start = localToUtc(q.year, q.month, q.day, STORE_HOUR);
+    }
+    const n = tzParts(start + 26 * 3600 * 1000);   // +26h lands safely on the next Chicago day
+    const next = localToUtc(n.year, n.month, n.day, STORE_HOUR);
+    const k = tzParts(start + 3600 * 1000);        // an hour in, so the date is unambiguously the window's
+    return { start, next, key: k.year + '-' + pad2(k.month) + '-' + pad2(k.day) };
+  }
+
+  // FNV-1a -> mulberry32. Deterministic and identical in Node and the browser,
+  // which is the whole point: both sides must derive the same eight parts.
+  function seededRng(str){
+    let h = 2166136261 >>> 0;
+    for(let i = 0; i < str.length; i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return function(){
+      h = (h + 0x6D2B79F5) >>> 0;
+      let t = h;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* The shop for one player on one day. Set pieces are deliberately excluded:
+     they are the grind reward, and putting them behind credits would undercut
+     the only long-term chase in the game. Abilities roll on the normal rarity
+     gates, so a 10,000-credit epic is worth the same as a dropped one. */
+  function rollDailyStore(playerKey, dayKey){
+    const rnd = seededRng(String(playerKey || 'anon') + '|' + String(dayKey));
+    const pick = arr => arr[Math.floor(rnd() * arr.length)];
+    return STORE_SLOTS.map((want, i) => {
+      const rarity = want !== 'BONUS' ? want
+        : (rnd() < STORE_BONUS_LEGENDARY ? 'legendary' : 'epic');
+      const weapon = pick(WEAPONS).id;
+      const slot = pick(SLOTS);
+      const tpl = pick(PART_POOL[slot]);
+      // same ability gates as a drop, driven by the seeded stream
+      const ri = RKEYS.indexOf(rarity);
+      let ability = null;
+      if(ri >= 2){
+        const chance = ri === 2 ? 0.55 : ri === 3 ? 0.8 : 1.0;
+        if(rnd() <= chance){
+          const pool = Object.keys(ABILITY_MINR).filter(a => ABILITY_MINR[a] <= ri);
+          ability = pool[Math.floor(rnd() * pool.length)];
+        }
+      }
+      return { idx:i, weapon, slot, rarity, name:tpl.name,
+               mods:scaleMods(tpl.mods, rarity), ability, set:null,
+               price: STORE_PRICE[rarity] };
+    });
+  }
+
+  const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
+                rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
   else root.LoadoutCore = api;                                              // browser
