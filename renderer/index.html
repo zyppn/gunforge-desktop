@@ -1037,7 +1037,6 @@ function controlsHtml(){
       '<div class="ctl"><span>'+label+'</span>'
     + '<button class="bindbtn" id="bind-'+a+'" onclick="startBind(\''+a+'\')">'+bindLabel(BINDS[a])+'</button></div>'
     ).join('')
-  + '<div class="ctl"><span>Aim</span><b>MOUSE</b></div>'
   + '<div class="ctl"><span>Scoreboard</span><b>TAB</b></div>'
   + '<div class="ctl"><span>Pause</span><b>ESC</b></div>'
   + '<p class="note" id="bindnote" style="margin-top:6px">Click a control to rebind it. '
@@ -1454,6 +1453,7 @@ function openSetup(){
    ===================================================================== */
 const cv = $('#cv');
 let renderer = null, scene = null, camera = null, vm = null, muzzle = null, muzzleLight = null;
+let muzzleBaseY = 0.02;
 let gameFS = false;
 let G = null, paused = false, locked = false;
 const keys = {};
@@ -1861,6 +1861,7 @@ function buildViewmodel(){
   muzzle = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.16),
     new THREE.MeshBasicMaterial({color:0xFFD27A, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide}));
   muzzle.position.set(0, 0.02, built.tipZ - 0.05);
+  muzzleBaseY = muzzle.position.y;   // updateViewmodelPose drops it from here when aimed
   muzzleLight = new THREE.PointLight(0xFFC46A, 0, 6);
   muzzleLight.position.set(0, 0, -0.7);
   vm.add(muzzle, muzzleLight);
@@ -2695,8 +2696,10 @@ function fire(e, dir){
       G.kickYaw += (Math.random()-0.5) * 0.006 * kick;
     }
     if(w.type === 'Shotgun') G.shake = Math.min(1, G.shake + 0.16 * kick); // and only the Warden rattles the frame
-    muzzle.material.opacity = 0.9; muzzle.rotation.z = Math.random()*6.28;
-    muzzleLight.intensity = 1.6;
+    // peak flash, dimmed by how far into the sight you are (adsT 0..1)
+    muzzle.material.opacity = 0.9 * (1 - adsT*0.55);
+    muzzle.rotation.z = Math.random()*6.28;
+    muzzleLight.intensity = 1.6 * (1 - adsT*0.45);
   } else if(e.mesh && e.mesh.userData.gunMuzzle){
     const u = e.mesh.userData;
     u.gunMuzzle.material.opacity = 0.9;
@@ -3201,8 +3204,25 @@ function updateViewmodelPose(dt, me, isMoving){
   vm.position.z = hipZ + (aimZ - hipZ)*adsEff + G.recoil*0.05*adsEff;
   vm.rotation.x = vm.rotation.x * (1 - adsEff*0.5);
   vm.rotation.z = vm.rotation.z * (1 - adsEff);
-  muzzle.material.opacity = Math.max(0, muzzle.material.opacity - dt*10);
-  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt*14);
+  /* Muzzle flash sizing. Hipfire is untouched; ADS is the problem case, and it is
+     bad for three compounding reasons: the ADS solve puts the barrel tip on your
+     eye line, the FOV drop (78 -> ~54) magnifies everything roughly 1.4x, and the
+     flash is a fixed 0.16 plane a few cm from the camera. Together they blank the
+     reticle at the exact moment you are trying to place a precise shot.
+     Scale is driven every frame rather than at fire time, so a flash that starts
+     at the hip shrinks correctly if you pull into the sight while it is still lit. */
+  const mzAds = adsT;
+  // Measured at full ADS on a 1280x720 view, in normalised screen coords where the
+  // reticle is 0 and 1 is half the screen: unmodified, the flash's TOP EDGE lands at
+  // -0.004 — touching the reticle — covering 4.5% of the screen. Halving it and
+  // dropping it 4cm puts the top edge at -0.29 for 1.1% coverage: a quarter of the
+  // area, well clear of the sight, and still large enough to read as a flash.
+  // (Pushing it further down the BARREL would be wrong: the bore converges toward
+  // screen centre, so forward moves it INTO the reticle, not away from it.)
+  muzzle.scale.setScalar(1 - mzAds * 0.5);
+  muzzle.position.y = muzzleBaseY - mzAds * 0.04;
+  muzzle.material.opacity = Math.max(0, muzzle.material.opacity - dt*(10 + mzAds*16));  // and gone sooner
+  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt*(14 + mzAds*12));
 }
 
 /* --- main loop --- */
