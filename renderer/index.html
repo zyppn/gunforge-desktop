@@ -2445,6 +2445,14 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     const s = new THREE.Mesh(new THREE.PlaneGeometry(wd, ht), glowM(c, op));
     s.position.set(px, py, pz); VMT.add(s); return s;
   };
+  // An aiming dot should be round. strip() is a square plane, which is fine for
+  // crosshair arms but reads as a red BLOCK on a red-dot sight - and you are
+  // looking at it from a few centimetres away when aimed, so the corners show.
+  // 20 segments is enough to stay round at that distance without faceting.
+  const dot = (r, c, op, px, py, pz) => {
+    const d = new THREE.Mesh(new THREE.CircleGeometry(r, 20), glowM(c, op));
+    d.position.set(px, py, pz); VMT.add(d); return d;
+  };
   const tube = (rIn, wall, len, cz, cy, shellMat) => {
     const outer = new THREE.Mesh(new THREE.CylinderGeometry(rIn+wall, rIn+wall, len, 16, 1, true), shellMat);
     const inner = new THREE.Mesh(new THREE.CylinderGeometry(rIn, rIn, len, 16, 1, true), mat(0x0A0D10));
@@ -2508,7 +2516,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     const c = n.includes('Eye') ? 0xFFE9A0 : 0xFF3B30;
     const win = new THREE.Mesh(new THREE.CircleGeometry(0.028, 16), glowM(rc, 0.15));
     win.position.set(0, cy, z + 0.001); glassPane(win, 0.15);
-    strip(0.005, 0.005, c, 1, 0, cy, z - 0.003);
+    dot(0.002, c, 1, 0, cy, z - 0.003);   // was a 5mm square; now a 4mm circle
     riser(0.02, 0.02, cy - 0.036);
     setAim(0, cy, z, 0.22, 24);
   } else if(n.includes('Holo')){
