@@ -1431,6 +1431,9 @@ function renderInventory(filter){
   (P.listedUids || []).forEach(u => listed[u] = true);
 
   const held = partsHeld();
+  // Listed parts are escrowed: still yours, still shown, but NOT counted against
+  // the cap. Saying so stops "18 / 200" looking wrong beside 20 visible cards.
+  const nListed = (P.listedUids || []).filter(u => P.inventory.some(q => q.uid === u)).length;
   const capColor = held >= PART_CAP ? '#E05A4E' : (held >= PART_CAP*0.9 ? '#E8A33A' : 'inherit');
 
   const cards = items.map(p=>{
@@ -1451,7 +1454,9 @@ function renderInventory(filter){
   }).join('');
 
   $('#inventory').innerHTML =
-   '<div class="eyebrow">Parts Locker</div><h2>Inventory — <span style="color:'+capColor+'">'+held+' / '+PART_CAP+'</span> parts'+(invFilter==='all' ? '' : ' · showing '+items.length)+'</h2>'
+   '<div class="eyebrow">Parts Locker</div><h2>Inventory — <span style="color:'+capColor+'">'+held+' / '+PART_CAP+'</span> parts'
+   + (nListed ? ' <span style="color:var(--dim);font-size:13px">+ '+nListed+' listed</span>' : '')
+   + (invFilter==='all' ? '' : ' · showing '+items.length)+'</h2>'
    +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning. Parts on the auction block are escrowed and don\'t count against your '+PART_CAP+'.</p>'
    +(held >= PART_CAP ? '<p class="note" style="color:#E05A4E">Locker full — drops and auction buys will be refused until you scrap or list something.</p>' : '')
    +'<div class="filters">'+fbs+'</div>'
@@ -1551,7 +1556,8 @@ async function doList(uidv){
     // list_part enforces ownership, not-equipped, not-bound, no duplicate, max 3 active
     await sbRpc('list_part', { p_part: uidv, p_price: price });
     P.listedUids = (P.listedUids || []).concat([uidv]);
-    refreshChips();
+    await refreshListed();     // same reason: never let the tag drift from the DB
+    refreshChips(); repaintParts();
     toast('LISTED FOR ' + price + ' CR');
   }catch(e){
     toast('LISTING FAILED \u2014 ' + e.message);
@@ -1606,13 +1612,44 @@ async function buyListing(id){
   }
   renderAuction();
 }
+/* The escrow tag was the one bit of state the client kept by hand. cancel_listing
+   returns the freed part's uid, but PostgREST's shape for a scalar-returning RPC
+   is not something to bet the UI on: if it came back as anything other than a
+   bare string, the filter matched nothing, the toast still said DELISTED, and the
+   card kept its LISTED tag forever. Normalise the return for instant feedback,
+   then confirm against the database. That read is two columns, not the 70 KB a
+   full profile resync costs, so it is cheap enough to do on every list/delist. */
+function rpcUuid(v){
+  if(typeof v === 'string') return v;
+  if(Array.isArray(v)) return v.length ? rpcUuid(v[0]) : null;
+  if(v && typeof v === 'object'){
+    const k = Object.keys(v)[0];
+    return k ? rpcUuid(v[k]) : null;
+  }
+  return null;
+}
+async function refreshListed(){
+  if(!ACCOUNT.online || !ACCOUNT.playerId) return;
+  try{
+    const ls = await sbSelect('listings?select=part_uid&status=eq.active&seller_id=eq.'+ACCOUNT.playerId);
+    P.listedUids = ls.map(l => l.part_uid);
+  }catch(e){ /* keep the optimistic value rather than wiping every tag */ }
+}
+// Repaint the locker if that is what the player is looking at, so a delist made
+// from the auction screen is not still showing LISTED when they navigate back.
+function repaintParts(){
+  const inv = document.getElementById('inventory');
+  if(inv && inv.classList.contains('on')) renderInventory();
+}
+
 async function cancelListing(id){
   if(!ACCOUNT.online){ toast('AUCTION NEEDS A CLOUD SESSION'); return; }
   try{
-    const freed = await sbRpc('cancel_listing', { p_listing: id });
+    const freed = rpcUuid(await sbRpc('cancel_listing', { p_listing: id }));
     if(freed) P.listedUids = (P.listedUids || []).filter(u => u !== freed);
-    refreshChips();
-    toast('DELISTED \u2014 PART RETURNED');
+    await refreshListed();     // the database decides, not the RPC's return shape
+    refreshChips(); repaintParts();
+    toast('DELISTED \u2014 PART RETURNED TO YOUR LOCKER');
   }catch(e){
     toast('DELIST FAILED \u2014 ' + e.message);
     await resyncProfile();
