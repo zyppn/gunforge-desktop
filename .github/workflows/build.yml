@@ -118,13 +118,27 @@ jobs:
 
           # A green job that quietly shipped a release missing its updater files
           # is worse than a red one. Confirm every file is actually there.
+          #
+          # GitHub REWRITES asset filenames on upload: anything outside
+          # [A-Za-z0-9._-] becomes a dot, so "GUNFORGE Setup 1.4.19.exe" is stored
+          # as "GUNFORGE.Setup.1.4.19.exe". Comparing the local basename to the
+          # stored name therefore reported two perfectly good Windows uploads as
+          # missing. Normalise both sides the same way before comparing.
+          norm(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '.'; }
           echo "--- verifying ---"
           have=$(gh release view "$TAG" --json assets --jq '.assets[].name')
           missing=()
           for f in "${files[@]}"; do
-            grep -qxF "$(basename "$f")" <<< "$have" || missing+=("$(basename "$f")")
+            want=$(norm "$(basename "$f")")
+            found=0
+            while IFS= read -r a; do
+              [ "$(norm "$a")" = "$want" ] && { found=1; break; }
+            done <<< "$have"
+            [ $found -eq 1 ] || missing+=("$(basename "$f")")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::release is missing after upload: ${missing[*]}"; exit 1
+            echo "::error::release is missing after upload: ${missing[*]}"
+            echo "assets actually on the release:"; printf '  %s\n' $have
+            exit 1
           fi
           echo "all ${#files[@]} assets present on $TAG"
