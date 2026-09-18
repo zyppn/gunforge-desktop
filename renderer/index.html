@@ -3820,6 +3820,20 @@ function liveRemoveRemote(id){
   if(r){ if(r.mesh) scene.remove(r.mesh); live.remotes.delete(id); }
 }
 
+/* The server owns respawns in live play, so the local respawn() never runs for you
+   (it is gated to non-live modes) and nothing reset the weapon. You came back holding
+   whatever was left in the mag when you died, mid-reload and all. The server has no
+   ammo model at all, so this is the client's to do — and both places a live player
+   comes back (respawn, rematch) call it, so they can't drift apart again. */
+function liveResetWeapon(){
+  if(!G || !G.me) return;
+  const me = G.me;
+  me.ammo = me.wep.mag;
+  me.reloading = false; me.reloadT = 0;
+  me.fireT = 0; me.lastFire = -9999;
+  G.recoil = 0; G.kickPitch = 0; G.kickYaw = 0; G.shake = 0;
+}
+
 function liveTick(dt){
   if(!live || !live.room) return;
   const me = G.me, room = live.room;
@@ -3865,6 +3879,7 @@ function liveTick(dt){
     if(!sp.dead && me.dead){
       me.dead = false; me.hp = sp.hp; me.x = sp.x; me.z = sp.z; live.lastHp = sp.hp;
       live.deadAnnounced = false;
+      liveResetWeapon();
     }
     if(!me.dead){
       // reconciliation: soft pull for small drift, hard snap only for teleport-scale (respawn) jumps
@@ -4070,6 +4085,8 @@ function liveRematchDeploy(){
   G.over = false;
   const sp = live.room && live.room.state.players.get(live.myId);
   if(sp){ G.me.x = sp.x; G.me.z = sp.z; G.me.hp = sp.hp; G.me.dead = false; G.me.kills = 0; G.me.deaths = 0; live.lastHp = sp.hp; }
+  liveResetWeapon();   // a rematch is a fresh round: full mag, not the one you died holding
+  live.deadAnnounced = false;
   feed('REMATCH — FIGHT', true);
   enterGameScreen();
 }
