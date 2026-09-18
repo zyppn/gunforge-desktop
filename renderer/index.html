@@ -2989,6 +2989,71 @@ function feed(txt, me){
   $('#killfeed').innerHTML = G.feed.map(f=>'<div class="'+(f.me?'me':'')+'">'+esc(f.txt)+'</div>').join('');
 }
 
+/* ADS blend + viewmodel pose, pulled out of tick() so the PAUSE path can run them too.
+   A live match does not stop for your pause menu, so neither can the sight picture:
+   `wantAim` is forced false while paused, which blends the scope back out instead of
+   leaving you frozen half-zoomed with a crosshair that never comes back. */
+function updateAdsView(dt, me, wantAim){
+  if(!vm || !vm.userData) return;   // still connecting: no viewmodel to pose yet
+  adsT += ((wantAim && !me.dead && !me.reloading) ? 1 : -1) * dt * 8; // reload breaks ADS; held RMB re-engages after
+  adsT = Math.max(0, Math.min(1, adsT));
+  const targetFov = 78 - adsT * (vmAds ? vmAds.fovDrop : 24);
+  if(Math.abs(camera.fov - targetFov) > 0.01){
+    camera.fov = targetFov;
+    camera.updateProjectionMatrix();
+  }
+  adsLook = camera.fov / 78;
+  const acc = vm.userData.accent;
+  if(acc){
+    acc.material.emissiveIntensity = acc.userData.baseEI * (1 - adsT);
+    acc.material.color.copy(acc.userData.baseCol).multiplyScalar(1 - adsT*0.82);
+  }
+  if(vm.userData.glass){
+    for(const gp of vm.userData.glass) gp.material.opacity = gp.userData.baseOp * (1 - adsT*0.92);
+  }
+  const ch = $('#crosshair');
+  ch.style.opacity = Math.max(0, 1 - Math.max(0, (adsT - 0.25) / 0.45)).toFixed(3);
+  ch.style.transform = 'translate(-50%,-50%) scale(' + (1 - adsT*0.35).toFixed(3) + ')';
+}
+function updateViewmodelPose(dt, me, isMoving){
+  if(!vm || !vm.userData) return;   // still connecting: no viewmodel to pose yet
+  if(isMoving){
+    G.stepT = (G.stepT||0) + dt;
+    if(G.stepT > 0.37){ G.stepT = 0; sfx('step', 0.55); }
+  } else G.stepT = 0.25;
+  G.bobT = (G.bobT||0) + dt * (isMoving ? 8.5 : 0);
+  const bobX = isMoving ? Math.sin(G.bobT) * 0.010 : 0;
+  const bobY = isMoving ? Math.abs(Math.cos(G.bobT)) * 0.008 : 0;
+  // phased reload: drop + twist -> fumble jitter -> snap back with overshoot
+  let rl = 0, jit = 0;
+  if(me.reloading){
+    const dur = me.wep.reload/1000;
+    const prog = 1 - Math.max(0, me.reloadT - G.elapsed)/dur; // 0 -> 1
+    const down = Math.min(1, prog*3.2);                        // fast drop
+    const up = prog > 0.72 ? Math.min(1, (prog-0.72)/0.28) : 0; // rise phase
+    rl = down * (1 - up*up);                                   // ease-out snap
+    if(up===0 && down>=1) jit = Math.sin(prog*46) * 0.02;      // mag fumble
+    if(up>0 && up<0.35) rl -= 0.08*Math.sin(up*9);             // slight overshoot
+  }
+  vm.rotation.x = -0.6*rl + jit + G.recoil*0.08;
+  vm.rotation.z = -0.38*rl;
+  const bobScale = 1 - adsT*0.8; // steady hands while aimed
+  const adsEff = adsT * (1 - rl); // reloading pulls you off the sight
+  const A = vmAds || {ax:0, ay:0.05, az:-0.28, dist:0.22};
+  // solve: place the optic's aperture exactly at (0, 0, -dist) in front of the eye
+  const aimX = -A.ax, aimY = -A.ay, aimZ = -A.dist - A.az;
+  const hipX = 0.22 + bobX*bobScale + 0.05*rl;
+  const hipY = -0.2 - bobY*bobScale - 0.07*rl;
+  const hipZ = -0.32 + G.recoil*0.06;
+  vm.position.x = hipX + (aimX - hipX)*adsEff;
+  vm.position.y = hipY + (aimY - hipY)*adsEff;
+  vm.position.z = hipZ + (aimZ - hipZ)*adsEff + G.recoil*0.05*adsEff;
+  vm.rotation.x = vm.rotation.x * (1 - adsEff*0.5);
+  vm.rotation.z = vm.rotation.z * (1 - adsEff);
+  muzzle.material.opacity = Math.max(0, muzzle.material.opacity - dt*10);
+  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt*14);
+}
+
 /* --- main loop --- */
 const V3 = new THREE.Vector3();
 const TMPQ = new THREE.Quaternion();
@@ -2999,7 +3064,7 @@ function tick(now){
   if(dt > 0.05) dt = 0.05;
   if(paused){
     if(G.mode === 'live'){
-      liveTick(dt); hud(); // the server plays on — sync and repaint under the menu
+      liveTick(dt); // the server plays on — sync and repaint under the menu (hud() below)
       // advance local bullets too (no collision) so they don't hang frozen midair
       for(let i = G.bullets.length - 1; i >= 0; i--){
         const b = G.bullets[i];
@@ -3011,9 +3076,20 @@ function tick(now){
       camera.position.set(G.me.x, EYE, G.me.z); // camera follows respawns even while menuing
       camera.rotation.y = yaw + G.kickYaw;
       camera.rotation.x = pitch + G.kickPitch;
+      G.recoil    = Math.max(0, G.recoil - dt*5);
       G.kickPitch *= Math.max(0, 1 - 9*dt);
       G.kickYaw   *= Math.max(0, 1 - 9*dt);
       G.shake     *= Math.max(0, 1 - 7*dt);
+      // The weapon clock is wall-clock on the server (Date.now()), and the server has
+      // no notion of "paused" at all. Freezing G.elapsed here stalled the reload for as
+      // long as the menu was open, so you came back still empty on a gun that had had
+      // four seconds to finish a two-second reload. Keep it running in live matches.
+      G.elapsed += dt;
+      if(G.me.reloading && G.elapsed >= G.me.reloadT){ G.me.reloading = false; G.me.ammo = G.me.wep.mag; }
+      // and blend out of the sight rather than hanging half-scoped under the menu
+      updateAdsView(dt, G.me, false);
+      updateViewmodelPose(dt, G.me, false);
+      hud();
     }
     renderer.render(scene, camera);
     return;
@@ -3254,26 +3330,7 @@ function tick(now){
     }
   }
 
-  // ADS: zoom, tightened feel, centered gun
-  adsT += ((aiming && !me.dead && !me.reloading) ? 1 : -1) * dt * 8; // reload breaks ADS; held RMB re-engages after
-  adsT = Math.max(0, Math.min(1, adsT));
-  const targetFov = 78 - adsT * (vmAds ? vmAds.fovDrop : 24);
-  if(Math.abs(camera.fov - targetFov) > 0.01){
-    camera.fov = targetFov;
-    camera.updateProjectionMatrix();
-  }
-  adsLook = camera.fov / 78;
-  const acc = vm.userData.accent;
-  if(acc){
-    acc.material.emissiveIntensity = acc.userData.baseEI * (1 - adsT);
-    acc.material.color.copy(acc.userData.baseCol).multiplyScalar(1 - adsT*0.82);
-  }
-  if(vm.userData.glass){
-    for(const gp of vm.userData.glass) gp.material.opacity = gp.userData.baseOp * (1 - adsT*0.92);
-  }
-  const ch = $('#crosshair');
-  ch.style.opacity = Math.max(0, 1 - Math.max(0, (adsT - 0.25) / 0.45)).toFixed(3);
-  ch.style.transform = 'translate(-50%,-50%) scale(' + (1 - adsT*0.35).toFixed(3) + ')';
+  updateAdsView(dt, me, aiming);
 
   // camera + viewmodel
   camera.rotation.order = 'YXZ';
@@ -3289,43 +3346,7 @@ function tick(now){
   G.kickPitch *= Math.max(0, 1 - 9*dt);   // the barrel settles
   G.kickYaw   *= Math.max(0, 1 - 9*dt);
   G.shake     *= Math.max(0, 1 - 7*dt);
-  // movement bob
-  const isMoving = !me.dead && (keys['w']||keys['a']||keys['s']||keys['d']);
-  if(isMoving){
-    G.stepT = (G.stepT||0) + dt;
-    if(G.stepT > 0.37){ G.stepT = 0; sfx('step', 0.55); }
-  } else G.stepT = 0.25;
-  G.bobT = (G.bobT||0) + dt * (isMoving ? 8.5 : 0);
-  const bobX = isMoving ? Math.sin(G.bobT) * 0.010 : 0;
-  const bobY = isMoving ? Math.abs(Math.cos(G.bobT)) * 0.008 : 0;
-  // phased reload: drop + twist -> fumble jitter -> snap back with overshoot
-  let rl = 0, jit = 0;
-  if(me.reloading){
-    const dur = me.wep.reload/1000;
-    const prog = 1 - Math.max(0, me.reloadT - G.elapsed)/dur; // 0 -> 1
-    const down = Math.min(1, prog*3.2);                        // fast drop
-    const up = prog > 0.72 ? Math.min(1, (prog-0.72)/0.28) : 0; // rise phase
-    rl = down * (1 - up*up);                                   // ease-out snap
-    if(up===0 && down>=1) jit = Math.sin(prog*46) * 0.02;      // mag fumble
-    if(up>0 && up<0.35) rl -= 0.08*Math.sin(up*9);             // slight overshoot
-  }
-  vm.rotation.x = -0.6*rl + jit + G.recoil*0.08;
-  vm.rotation.z = -0.38*rl;
-  const bobScale = 1 - adsT*0.8; // steady hands while aimed
-  const adsEff = adsT * (1 - rl); // reloading pulls you off the sight
-  const A = vmAds || {ax:0, ay:0.05, az:-0.28, dist:0.22};
-  // solve: place the optic's aperture exactly at (0, 0, -dist) in front of the eye
-  const aimX = -A.ax, aimY = -A.ay, aimZ = -A.dist - A.az;
-  const hipX = 0.22 + bobX*bobScale + 0.05*rl;
-  const hipY = -0.2 - bobY*bobScale - 0.07*rl;
-  const hipZ = -0.32 + G.recoil*0.06;
-  vm.position.x = hipX + (aimX - hipX)*adsEff;
-  vm.position.y = hipY + (aimY - hipY)*adsEff;
-  vm.position.z = hipZ + (aimZ - hipZ)*adsEff + G.recoil*0.05*adsEff;
-  vm.rotation.x = vm.rotation.x * (1 - adsEff*0.5);
-  vm.rotation.z = vm.rotation.z * (1 - adsEff);
-  muzzle.material.opacity = Math.max(0, muzzle.material.opacity - dt*10);
-  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt*14);
+  updateViewmodelPose(dt, me, !me.dead && (keys['w']||keys['a']||keys['s']||keys['d']));
 
   // win checks
   if(G.mode==='ffa'){
@@ -3820,7 +3841,8 @@ function liveTick(dt){
     const fwdX = -Math.sin(yaw), fwdZ = -Math.cos(yaw);
     room.send('input', {
       mx, mz,
-      ads: adsT,                 // server mirrors the 40% ADS slowdown
+      ads: canAct ? adsT : 0,    // server mirrors the 40% ADS slowdown — but a paused
+                                 // player is not aiming, and shouldn't be taxed for it
       yaw: Math.atan2(fwdZ, fwdX),
       pitch,
       fire: (locked && !live.results && !paused) && mouseDown && !me.reloading && !me.dead
