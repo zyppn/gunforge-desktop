@@ -29,14 +29,12 @@ const PVP = {
   critChance:     0.12,  // deadeye
   critMul:        2,
   vampFrac:       0.08,  // 12% offline; toned down for PvP
-  explDmg:        10,    // explosive splash
-  explRadius:     2.2,
+  explDmg:        10,    // explosive splash  (matches PvE)
+  explRadius:     3,     //                    (matches PvE)
   critHeal:       6,     // Saint set
   killShield:     25,    // Bulwark set
   novaRadius:     4,     // Dragon set: ignite around a corpse
-  homingCorridor: 1.5,   // "bullets curve toward enemies", done as hit forgiveness
-  baseCorridor:   0.6,   // normal hit tolerance
-  maxRange:       60,
+  novaDmg:        14,    // PvE deals damage here too, PvP was only igniting
 };
 
 /* one live session per callsign on this server — no parallel-room reward farming
@@ -46,12 +44,18 @@ const activeCallsigns = new Map(); // NAME -> sessionId
 /* Maps: wall rects only — must match the client's MAPS geometry.
    (Phase 2: generate both from one shared JSON.) */
 /* Wall + spawn data extracted VERBATIM from the client's MAPS — one source of truth. */
+/* Wall heights matter now that bullets are 3D: a round clears a 2.4u crate but
+   not a 3.2u slab. These MUST stay identical to renderer/index.html's B(x,z,w,d,h)
+   — same default, same per-wall overrides — or a shot that visibly sails over cover
+   on your screen stops dead on the server. */
+const WALL_H = 3.2;
+const B = (x, z, w, d, h) => ({ x, z, w, d, h: h || WALL_H });
 const MAPS = {
-  foundry: { walls: [{x:9,z:6,w:13,d:1.5},{x:38,z:6,w:13,d:1.5},{x:9,z:29.5,w:13,d:1.5},{x:38,z:29.5,w:13,d:1.5},{x:28,z:14,w:4,d:9},{x:15,z:16.5,w:1.5,d:6},{x:43.5,z:16.5,w:1.5,d:6},{x:24,z:4,w:1.5,d:6},{x:34.5,z:27,w:1.5,d:6}],
+  foundry: { walls: [B(9,6,13,1.5),B(38,6,13,1.5),B(9,29.5,13,1.5),B(38,29.5,13,1.5),B(28,14,4,9,4.2),B(15,16.5,1.5,6),B(43.5,16.5,1.5,6),B(24,4,1.5,6),B(34.5,27,1.5,6)],
     spawns: [[4,4],[56,4],[4,36],[56,36],[30,4],[30,36],[4,20],[56,20]] },
-  dustrelay: { walls: [{x:12,z:10,w:7,d:7},{x:41,z:10,w:7,d:7},{x:12,z:23,w:7,d:7},{x:41,z:23,w:7,d:7},{x:28,z:5,w:4,d:4},{x:28,z:31,w:4,d:4},{x:4,z:17,w:6,d:1.5},{x:50,z:17,w:6,d:1.5}],
+  dustrelay: { walls: [B(12,10,7,7,2.4),B(41,10,7,7,2.4),B(12,23,7,7,2.4),B(41,23,7,7,2.4),B(28,5,4,4),B(28,31,4,4),B(4,17,6,1.5),B(50,17,6,1.5)],
     spawns: [[4,4],[56,4],[4,36],[56,36],[30,18.5],[15,34],[45,4],[30,6]] },
-  blacksite: { walls: [{x:0,z:12,w:17,d:1.5},{x:43,z:12,w:17,d:1.5},{x:0,z:23.5,w:17,d:1.5},{x:43,z:23.5,w:17,d:1.5},{x:25,z:0,w:1.5,d:10},{x:33.5,z:0,w:1.5,d:10},{x:25,z:30,w:1.5,d:10},{x:33.5,z:30,w:1.5,d:10},{x:28,z:16.5,w:4,d:4}],
+  blacksite: { walls: [B(0,12,17,1.5),B(43,12,17,1.5),B(0,23.5,17,1.5),B(43,23.5,17,1.5),B(25,0,1.5,10),B(33.5,0,1.5,10),B(25,30,1.5,10),B(33.5,30,1.5,10),B(28,16.5,4,4,4.6)],
     spawns: [[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] }
 };
 
@@ -111,6 +115,7 @@ class ArenaRoom extends Room {
     this.loadouts = new Map(); // sessionId -> computed weapon stats (server-authoritative)
     this.playerIds = new Map(); // sessionId -> supabase players.id (verified)
     this.burnSrc = new Map();   // sessionId -> who set them alight (for kill credit)
+    this.bullets = [];          // live projectiles — see stepBullets()
     this.rewarded = false;      // guard: rewards granted once per round
 
     this.onMessage('ping', (client, msg) => {
@@ -238,6 +243,11 @@ class ArenaRoom extends Room {
       }
       if(inp.fire) this.tryFire(id, p, inp);
     });
+
+    // Rounds in flight advance AFTER movement and firing, so a bullet spawned
+    // this tick doesn't get a free frame of travel before anyone has moved.
+    if(this.state.phase === 'live') this.stepBullets(dt);
+    else if(this.bullets.length) this.bullets.length = 0;
   }
 
   collides(x, z){
@@ -311,6 +321,7 @@ class ArenaRoom extends Room {
       p.x = s[0]; p.z = s[1];
     });
     this.fireT.clear();
+    this.bullets.length = 0;    // rounds in flight don't survive the round
     this.state.timeLeft = 300;
     this.state.phase = this.clients.length >= 2 ? 'live' : 'waiting';
     this.broadcast('rematch', {});
@@ -331,90 +342,154 @@ class ArenaRoom extends Room {
   tryFire(id, p, inp){
     if(this.state.phase !== 'live') return; // no damage during waiting or results
     const now = Date.now();
-    const ld = this.loadouts.get(id) || { rof:140, dmg:12, pellets:1, spread:0.05, abilities:[] };
+    const ld = this.loadouts.get(id) || { rof:140, dmg:12, pellets:1, spread:0.05, bspd:560, abilities:[] };
     if((this.fireT.get(id) || 0) > now) return;
     this.fireT.set(id, now + ld.rof);
-    this.broadcast('shot', { id, x: p.x, z: p.z, yaw: inp.yaw }, { except: this.clients.find(c => c.sessionId === id) });
 
     const ab = ld.abilities || [];
     const has = k => ab.indexOf(k) >= 0;
-    const corridor = has('homing') ? PVP.homingCorridor : PVP.baseCorridor;
-    const pierce = has('pierce_all') ? 99 : (has('pierce') ? 1 : 0);
-    const bounces = has('ricochet') ? 1 : 0;
-    const spread = Math.max(0, Number(ld.spread) || 0);
     const pellets = Math.max(1, ld.pellets || 1);
+    // Mirrors the client exactly: it builds its weapon with spread = L.spread * 0.55
+    // and then tightens by (1 - adsT * 0.55) when aimed. The server used raw L.spread
+    // and no ADS term at all, so it rolled a pattern ~1.8x wider than the one you saw
+    // and aiming down sights made you slower without making you more accurate.
+    const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
+    const sprd = Math.max(0, (Number(ld.spread) || 0) * 0.55) * (1 - ads * 0.55);
+    const speed = (Number(ld.bspd) || 560) / 9;   // the client's player-bullet speed
+    const pitch = Math.max(-1.4, Math.min(1.4, Number(inp.pitch) || 0));
 
+    // aim vector from yaw+pitch, same basis the client fires along
+    // Matches three.js Euler 'YXZ' applied to (0,0,-1), which is how the client
+    // builds its own aim vector. y is +sin(pitch): the client does pitch -= movementY,
+    // so looking up is POSITIVE pitch and the round must rise, not dive.
+    const cp = Math.cos(pitch);
+    const ax = Math.cos(inp.yaw) * cp, ay = Math.sin(pitch), az = Math.sin(inp.yaw) * cp;
+
+    const wire = [];
     for(let i = 0; i < pellets; i++){
-      // per-pellet jitter: this is what finally makes spread mods matter
-      const a = inp.yaw + (Math.random() - 0.5) * 2 * spread;
-      this.castPellet(id, p, Math.cos(a), Math.sin(a), ld, corridor, pierce, bounces);
+      let dx = ax + (Math.random()-0.5)*2*sprd;
+      let dy = ay + (Math.random()-0.5)*2*sprd;
+      let dz = az + (Math.random()-0.5)*2*sprd;
+      const l = Math.hypot(dx, dy, dz) || 1;
+      dx /= l; dy /= l; dz /= l;
+      const b = {
+        owner: id,
+        x: p.x + dx*(PLAYER_R + 0.35), y: EYE - 0.06, z: p.z + dz*(PLAYER_R + 0.35),
+        vx: dx*speed, vy: dy*speed, vz: dz*speed,
+        dmg: ld.dmg, life: 1.6,
+        pierce: has('pierce_all') ? 99 : (has('pierce') ? 1 : 0),
+        bounce: has('ricochet') ? 1 : 0,
+        homing: has('homing'),
+        crit: has('deadeye') && Math.random() < PVP.critChance,
+        hit: new Set(),
+      };
+      this.bullets.push(b);
+      // The shooter already predicted this round locally; everyone else gets the
+      // exact vector so their tracer follows the same path this bullet will.
+      wire.push(+b.x.toFixed(2), +b.y.toFixed(2), +b.z.toFixed(2),
+                +b.vx.toFixed(2), +b.vy.toFixed(2), +b.vz.toFixed(2));
     }
+    this.broadcast('shot', { id, b: wire }, { except: this.clients.find(c => c.sessionId === id) });
   }
 
-  /* One pellet. Walks the ray, damaging up to `pierce`+1 targets, and on
-     ricochet reflects off the first wall it would have stopped at. */
-  castPellet(id, p, dx, dz, ld, corridor, pierce, bounces){
-    let ox = p.x, oz = p.z, hitsLeft = pierce + 1;
-    const alreadyHit = new Set();
+  /* ------------------------------------------------------------------
+     Bullets are simulated, not cast. This is a port of the client's PvE
+     bullet loop (renderer/index.html) so that live combat resolves the same
+     way free-for-all does: travel time, 3D spread, real wall and floor
+     collision, homing that actually steers, ricochet that actually bounces.
 
-    for(let leg = 0; leg <= bounces && hitsLeft > 0; leg++){
-      const targets = [];
-      this.state.players.forEach((t, tid) => {
-        if(tid === id || t.dead || alreadyHit.has(tid)) return;
-        const rx = t.x - ox, rz = t.z - oz;
-        const along = rx*dx + rz*dz;
-        if(along < 0 || along > PVP.maxRange) return;
-        const perp = Math.abs(rx*dz - rz*dx);
-        if(perp < corridor && this.losClear(ox, oz, t.x, t.z)) targets.push({ t, tid, along });
-      });
-      targets.sort((a, b) => a.along - b.along);
+     Deliberately NOT lag-compensated. At bspd/9 (~62 u/s) a 20u shot is in
+     the air ~0.32s, in which a strafing target moves ~1.8u — you lead by
+     over three player-radii regardless. Rewinding by a 50ms ping would
+     correct ~0.3u of that, less than one radius, so the complexity buys
+     almost nothing here. If real games at real ping say otherwise, rewind
+     goes in stepBullets and nothing else has to change.
+     ------------------------------------------------------------------ */
+  stepBullets(dt){
+    for(let i = this.bullets.length - 1; i >= 0; i--){
+      const b = this.bullets[i];
+      b.life -= dt;
+      if(b.life <= 0){ this.bullets.splice(i, 1); continue; }
 
-      for(const hit of targets){
-        if(hitsLeft <= 0) break;
-        hitsLeft--; alreadyHit.add(hit.tid);
-        this.applyHit(id, p, hit.t, hit.tid, ld);
+      if(b.homing){
+        let ht = null, hd = 144;   // 12u seek radius, as in PvE
+        this.state.players.forEach((t, tid) => {
+          if(t.dead || tid === b.owner || b.hit.has(tid)) return;
+          const ddx = t.x - b.x, ddz = t.z - b.z, dd = ddx*ddx + ddz*ddz;
+          if(dd < hd){ hd = dd; ht = t; }
+        });
+        if(ht){
+          const spd = Math.hypot(b.vx, b.vz);
+          const cur = Math.atan2(b.vz, b.vx);
+          let dA = Math.atan2(ht.z - b.z, ht.x - b.x) - cur;
+          while(dA >  Math.PI) dA -= 2*Math.PI;
+          while(dA < -Math.PI) dA += 2*Math.PI;
+          if(Math.abs(dA) < 0.9){        // only bend toward targets ahead — no boomerangs
+            const na = cur + Math.max(-3.5*dt, Math.min(3.5*dt, dA));
+            b.vx = Math.cos(na)*spd; b.vz = Math.sin(na)*spd;
+            b.vy += Math.max(-6, Math.min(6, (1.1 - b.y)*4)) * dt;
+          }
+        }
       }
 
-      if(leg < bounces && hitsLeft > 0){
-        const r = this.reflect(ox, oz, dx, dz);
-        if(!r) break;
-        ox = r.x; oz = r.z; dx = r.dx; dz = r.dz;
+      /* Substep the flight. A round travels bspd/9 = ~62 u/s, so a single 1/30s
+         tick advances it 2.07u — wider than a player (1.36u across) and wider than
+         the thinnest wall (1.5u). Integrated in one jump it tunnels straight through
+         both: in testing, an M17 shot at a target 6u away landed at 4.97 and then
+         7.04 and never touched it. Cap each step well under the smallest thing a
+         bullet can hit, so collision is independent of tick rate. */
+      const dist = Math.hypot(b.vx, b.vz, b.vy) * dt;
+      const steps = Math.max(1, Math.ceil(dist / 0.3));
+      const sdt = dt / steps;
+      let dead = false, consumed = false;
+      const owner = this.state.players.get(b.owner);
+
+      for(let sIdx = 0; sIdx < steps && !dead && !consumed; sIdx++){
+        const nx = b.x + b.vx*sdt, ny = b.y + b.vy*sdt, nz = b.z + b.vz*sdt;
+        if(nx < 0.05 || nx > AW-0.05){ if(b.bounce > 0){ b.bounce--; b.vx *= -1; } else dead = true; }
+        if(nz < 0.05 || nz > AD-0.05){ if(b.bounce > 0){ b.bounce--; b.vz *= -1; } else dead = true; }
+        if(ny < 0.03){ if(b.bounce > 0){ b.bounce--; b.vy *= -1; } else dead = true; }
+        if(ny > 9) dead = true;
+        if(!dead){
+          for(const w of this.walls){
+            if(nx > w.x && nx < w.x+w.w && nz > w.z && nz < w.z+w.d && ny < w.h){
+              if(b.bounce > 0){
+                b.bounce--;
+                if(b.x <= w.x || b.x >= w.x+w.w) b.vx *= -1; else b.vz *= -1;
+              } else dead = true;
+              break;
+            }
+          }
+        }
+        if(dead) break;
+        b.x = nx; b.y = ny; b.z = nz;
+
+        // entity hits — the same capsule the client uses (radius + 0.18, top 1.9)
+        this.state.players.forEach((t, tid) => {
+          if(consumed || t.dead || tid === b.owner || b.hit.has(tid)) return;
+          const ddx = t.x - b.x, ddz = t.z - b.z;
+          if(b.y > 0 && b.y < 1.9 && ddx*ddx + ddz*ddz < (PLAYER_R + 0.18)*(PLAYER_R + 0.18)){
+            b.hit.add(tid);
+            if(owner) this.applyHit(b.owner, owner, t, tid, this.loadouts.get(b.owner) || {}, b);
+            if(b.pierce > 0) b.pierce--; else consumed = true;
+          }
+        });
       }
+      if(dead || consumed){ this.bullets.splice(i, 1); continue; }
     }
-  }
-
-  /* Ricochet: march until a wall, then mirror the direction on the face we
-     crossed. Geometry, not simulation — no bullet ever exists. */
-  reflect(ox, oz, dx, dz){
-    const step = 0.4;
-    let x = ox, z = oz;
-    for(let d = 0; d < PVP.maxRange; d += step){
-      const nx = x + dx*step, nz = z + dz*step;
-      for(const w of this.walls){
-        const inNow = nx > w.x && nx < w.x+w.w && nz > w.z && nz < w.z+w.d;
-        if(!inNow) continue;
-        // which face did we cross? test each axis independently
-        const hitX = !(x > w.x && x < w.x+w.w);
-        return { x, z, dx: hitX ? -dx : dx, dz: hitX ? dz : -dz };
-      }
-      if(nx < 0 || nx > AW || nz < 0 || nz > AD){
-        const outX = (nx < 0 || nx > AW);
-        return { x, z, dx: outX ? -dx : dx, dz: outX ? dz : -dz };
-      }
-      x = nx; z = nz;
-    }
-    return null;
   }
 
   /* Damage one target, then every on-hit ability. */
-  applyHit(id, p, t, tid, ld){
+  applyHit(id, p, t, tid, ld, b){
     const ab = ld.abilities || [];
     const has = k => ab.indexOf(k) >= 0;
     const tld = this.loadouts.get(tid);
     const tAb = (tld && tld.abilities) || [];
 
-    let dmg = ld.dmg;   // per pellet now, NOT multiplied by pellet count
-    const crit = has('deadeye') && Math.random() < PVP.critChance;
+    let dmg = ld.dmg;   // per pellet, NOT multiplied by pellet count
+    // Crit is decided when the round leaves the barrel, exactly as PvE does it
+    // (b.crit), so one pellet's luck can't be re-rolled per target it pierces.
+    const crit = b ? !!b.crit : (has('deadeye') && Math.random() < PVP.critChance);
     if(crit) dmg *= PVP.critMul;
 
     // Juggernaut: 30% reduction while the target is firing
@@ -429,9 +504,10 @@ class ArenaRoom extends Room {
     if(crit && has('critheal')) this.heal(p, PVP.critHeal);   // Saint set
 
     if(has('explosive')){
+      const ex = b ? b.x : t.x, ez = b ? b.z : t.z;   // splash from the impact, like PvE
       this.state.players.forEach((o, oid) => {
         if(oid === tid || oid === id || o.dead) return;
-        if(Math.hypot(o.x - t.x, o.z - t.z) <= PVP.explRadius) this.damage(o, PVP.explDmg);
+        if(Math.hypot(o.x - ex, o.z - ez) <= PVP.explRadius) this.damage(o, PVP.explDmg);
       });
       this.checkDeaths(id, p);
     }
@@ -474,6 +550,7 @@ class ArenaRoom extends Room {
       this.state.players.forEach((o, oid) => {
         if(oid === tid || oid === id || o.dead) return;
         if(Math.hypot(o.x - t.x, o.z - t.z) <= PVP.novaRadius){
+          this.damage(o, PVP.novaDmg);          // PvE deals 14 here; PvP only ignited
           o.burnT = Math.max(o.burnT, PVP.burnDur);
           this.burnSrc.set(oid, id);
         }
@@ -485,15 +562,6 @@ class ArenaRoom extends Room {
     this.clock.setTimeout(() => this.respawn(tid), 2500);
   }
 
-  losClear(x1, z1, x2, z2){
-    const steps = Math.ceil(Math.hypot(x2-x1, z2-z1) / 0.5);
-    for(let i=1; i<steps; i++){
-      const t = i/steps;
-      const x = x1 + (x2-x1)*t, z = z1 + (z2-z1)*t;
-      for(const w of this.walls) if(x > w.x && x < w.x+w.w && z > w.z && z < w.z+w.d) return false;
-    }
-    return true;
-  }
 
   respawn(id){
     const p = this.state.players.get(id);

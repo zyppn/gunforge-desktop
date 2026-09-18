@@ -3718,23 +3718,22 @@ function startLiveMatch(){
         r.mesh.userData.gunMuzzle.material.opacity = 0.9;
         r.mesh.userData.kick = 1;
       }
-      // Spawn a visible tracer. Previously remote fire was a muzzle flash and a
-      // sound with nothing travelling, so incoming rounds were invisible.
+      // The server now simulates real projectiles and sends us the exact spawn
+      // point and velocity of every pellet, so these tracers follow the same path
+      // the authoritative bullet does — same speed, same 3D spread, same walls.
+      // They are still cosmetic: the server already owns hit registration, so they
+      // never enter G.bullets and can't damage anyone.
       const w = WEAPONS.find(x => x.id === (r.p.wid || 'm17')) || WEAPONS[0];
-      const dx = Math.cos(m.yaw), dz = Math.sin(m.yaw);
-      // Cosmetic only: the SERVER already did hit registration for this shot, so
-      // these never enter G.bullets and can't damage anyone or need an owner.
       live.tracers = live.tracers || [];
-      for(let i = 0; i < (w.pellets || 1); i++){
-        const sp = w.spread || 0;
-        const jx = dx + (Math.random()-0.5)*2*sp, jz = dz + (Math.random()-0.5)*2*sp;
-        const jl = Math.hypot(jx, jz) || 1;
-        const tm = new THREE.Mesh(bulletGeo, bMat(0xE8734A));
-        tm.position.set(m.x + (jx/jl)*0.6, 1.35, m.z + (jz/jl)*0.6);
+      const wire = m.b || [];
+      for(let i = 0; i + 5 < wire.length; i += 6){
+        const tm = new THREE.Mesh(bulletGeo, bMat(0xD8DEE6));  // enemy-fire colour, as in FFA
+        tm.position.set(wire[i], wire[i+1], wire[i+2]);
         scene.add(tm);
-        live.tracers.push({ mesh: tm, vx: (jx/jl)*w.bspd, vz: (jz/jl)*w.bspd, life: 1.1 });
+        live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6 });
       }
-      const d = Math.hypot(m.x - G.me.x, m.z - G.me.z);
+      const d = Math.hypot(m.x0 != null ? m.x0 - G.me.x : (wire[0]||0) - G.me.x,
+                           m.z0 != null ? m.z0 - G.me.z : (wire[2]||0) - G.me.z);
       const range = 26;
       if(d < range) gunSound(w.type, 0.8 * (1 - d/range));
     });
@@ -3995,10 +3994,22 @@ function liveTick(dt){
   if(live.tracers && live.tracers.length){
     for(let i = live.tracers.length - 1; i >= 0; i--){
       const t2 = live.tracers[i];
-      t2.mesh.position.x += t2.vx * dt;
-      t2.mesh.position.z += t2.vz * dt;
+      const q = t2.mesh.position;
+      const nx = q.x + t2.vx*dt, ny = q.y + t2.vy*dt, nz = q.z + t2.vz*dt;
+      // Tracers used to fly flat and straight through geometry, which is why
+      // incoming fire visibly passed through walls. Stop them where the server's
+      // bullet stops: same bounds, same floor, same wall heights.
+      let gone = (nx < 0.05 || nx > AW-0.05 || nz < 0.05 || nz > AD-0.05 || ny < 0.03 || ny > 9);
+      if(!gone) for(const wl of G.map.walls){
+        if(nx > wl.x && nx < wl.x+wl.w && nz > wl.z && nz < wl.z+wl.d && ny < wl.h){ gone = true; break; }
+      }
       t2.life -= dt;
-      if(t2.life <= 0){ scene.remove(t2.mesh); live.tracers.splice(i, 1); }
+      if(gone || t2.life <= 0){
+        if(gone) spawnSpark(q.x, q.y, q.z, 0x9BA8B0);   // the same impact fleck PvE draws
+        scene.remove(t2.mesh); live.tracers.splice(i, 1);
+        continue;
+      }
+      q.set(nx, ny, nz);
     }
   }
 

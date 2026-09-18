@@ -37,6 +37,8 @@ function scenario(ability, wid, extra){
   const ld = r.loadouts.get('A');
   return { r, a, b, c, ld, abilities: ld.abilities.slice().sort() };
 }
+function settle(r){ const dt=1/30; for(let i=0;i<80 && r.bullets.length;i++) r.stepBullets(dt); }
+function shoot(sc){ sc.r.fireT.set('A',-1); sc.r.tryFire('A', sc.a, sc.r.inputs.get('A')); settle(sc.r); }
 function check(label, ok, detail){
   console.log((ok ? '  PASS  ' : '  FAIL  ') + label + (detail ? '   [' + detail + ']' : ''));
   if(!ok) fails++;
@@ -47,7 +49,7 @@ console.log('per-ability smoke run (no throws, ability actually reaches the load
 for(const ab of ABIL){
   const s = scenario(ab, 'm17');
   let threw = null;
-  try { s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0); for(let i=0;i<10;i++) s.r.tick(); }
+  try { shoot(s); for(let i=0;i<10;i++) s.r.tick(); }
   catch(e){ threw = e.message; }
   check(ab.padEnd(11) + ' resolves', !threw && s.abilities.indexOf(ab) >= 0,
         (threw || 'abilities=' + JSON.stringify(s.abilities)));
@@ -55,27 +57,27 @@ for(const ab of ABIL){
 
 console.log('\nspecific effects:');
 { const s = scenario('explosive', 'm17');
-  s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0);
+  shoot(s);
   check('explosive splashes a bystander', s.c.hp < 100, 'bystander hp=' + s.c.hp.toFixed(1));
   check('the direct hit still takes more than the splash', (100 - s.b.hp) > (100 - s.c.hp)); }
 { const s = scenario('deadeye', 'm17');   // no firing_resist on the target
   let plain = 0; for(let i = 0; i < 400; i++){ const x = scenario(null, 'm17');
-    x.r.tryFire('A', x.a, x.r.inputs.get('A'), 0); plain += 100 - x.b.hp; }
+    shoot(x); plain += 100 - x.b.hp; }
   let resist = 0; for(let i = 0; i < 400; i++){ const x = scenario(null, 'm17', {bFiring:true});
     x.b.hp = 100;
     // give B the jugg effect by hand: it is a SET bonus, not a part ability
     x.r.loadouts.get('B').abilities.push('firing_resist');
-    x.r.tryFire('A', x.a, x.r.inputs.get('A'), 0); resist += 100 - x.b.hp; }
+    shoot(x); resist += 100 - x.b.hp; }
   console.log('    plain ' + (plain/400).toFixed(2) + ' vs vs-a-firing-juggernaut ' + (resist/400).toFixed(2));
   check('firing_resist cuts incoming damage 30% while the target shoots',
         Math.abs((resist/400) / (plain/400) - 0.7) < 0.02, (resist/plain).toFixed(3)); }
 { const s = scenario(null, 'm17');
   s.r.loadouts.get('A').abilities.push('killshield');
-  s.b.hp = 5; s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0);
+  s.b.hp = 5; shoot(s);
   check('killshield grants a shield on the kill', s.b.dead && s.a.shield === 25, 'shield=' + s.a.shield); }
 { const s = scenario(null, 'm17');
   s.r.loadouts.get('A').abilities.push('fire_nova');
-  s.b.hp = 5; s.r.tryFire('A', s.a, s.r.inputs.get('A'), 0);
+  s.b.hp = 5; shoot(s);
   check('fire_nova ignites bystanders around the corpse', s.b.dead && s.c.burnT > 0, 'c.burnT=' + s.c.burnT); }
 { const s = scenario('deadeye', 'm17');
   s.r.loadouts.get('A').abilities.push('critheal');
@@ -83,7 +85,7 @@ console.log('\nspecific effects:');
   let healed = false;
   for(let i = 0; i < 200 && !healed; i++){ const x = scenario('deadeye', 'm17');
     x.r.loadouts.get('A').abilities.push('critheal'); x.a.hp = 50;
-    x.r.tryFire('A', x.a, x.r.inputs.get('A'), 0);
+    shoot(x);
     if(x.a.hp >= 56) healed = true; }
   check('critheal tops the shooter up on a crit', healed); }
 { const s = scenario('homing', 'm17'), t = scenario(null, 'm17');
@@ -91,9 +93,9 @@ console.log('\nspecific effects:');
   let hHits = 0, nHits = 0;
   for(let i = 0; i < 200; i++){
     const h = scenario('homing', 'm17'); h.b.z = 11.2; h.c.x = 99;
-    h.r.tryFire('A', h.a, h.r.inputs.get('A'), 0); if(h.b.hp < 100) hHits++;
+    shoot(h); if(h.b.hp < 100) hHits++;
     const n = scenario(null, 'm17'); n.b.z = 11.2; n.c.x = 99;
-    n.r.tryFire('A', n.a, n.r.inputs.get('A'), 0); if(n.b.hp < 100) nHits++;
+    shoot(n); if(n.b.hp < 100) nHits++;
   }
   console.log('    off-axis target: homing hit ' + hHits + '/200, plain hit ' + nHits + '/200');
   check('homing forgives shots a plain round misses', hHits > nHits); }
