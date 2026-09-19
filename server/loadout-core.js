@@ -96,7 +96,7 @@
 
      Takes the spread AFTER the 0.55 base-cone multiplier that both the client
      and the server apply, so pass (stats.spread * 0.55). */
-  const ADS_SPREAD = 0.55;
+  const ADS_SPREAD = 0.30;
   function fireSpread(spread, ads){
     const a = Math.max(0, Math.min(1, Number(ads) || 0));
     return Math.max(0, Number(spread) || 0) * (1 - a * ADS_SPREAD);
