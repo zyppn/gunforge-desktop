@@ -378,7 +378,7 @@ class ArenaRoom extends Room {
         vx: dx*speed, vy: dy*speed, vz: dz*speed,
         dmg: ld.dmg, life: 1.6,
         pierce: has('pierce_all') ? 99 : (has('pierce') ? 1 : 0),
-        bounce: has('ricochet') ? 1 : 0,
+        bounce: has('ricochet') ? 3 : 0,   // a single bounce almost never produced a hit
         homing: has('homing'),
         crit: Math.random() < (Number(ld.crit) || 0),   // build-dependent: stacked Deadeye + Saint
         hit: new Set(),

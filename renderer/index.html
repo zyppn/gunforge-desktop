@@ -617,7 +617,7 @@ const WEAPONS = [
   {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:13, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1, desc:'Standard-issue sidearm. Reliable, unglamorous, always yours.'},
   {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:8,  rof:95,   mag:30, reload:1500, spread:0.110, bspd:520,  pellets:1, desc:'Buzzsaw-cadence room clearer. Sprays wide, bites fast.'},
   {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.070, bspd:640,  pellets:1, desc:'Balanced mid-range workhorse with a mean trigger.'},
-  {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:750,  mag:6,  reload:2000, spread:0.150, bspd:560,  pellets:8, desc:'Eight-pellet argument ender. Get close, win closer.'},
+  {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:620,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8, desc:'Eight-pellet argument ender. Get close, win closer.'},
   {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1150, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1, desc:'One breath, one lane, one problem solved.'},
   {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:110,  mag:80, reload:3200, spread:0.100, bspd:600,  pellets:1, desc:'Eighty rounds of area denial. Reloading is a lifestyle.'},
 ];
@@ -670,8 +670,8 @@ const ABILITIES = {
   deadeye:   {n:'Deadeye',           d:'+12% crit chance (crits deal 2x). Stacks +6% each extra, cap 30%.', minR:2},
   swift:     {n:'Featherweight',     d:'+10% move speed. Stacks +5% each extra, cap 25%.', minR:2},
   pierce:    {n:'AP Rounds',         d:'Shots pierce through one enemy.',                 minR:3},
-  ricochet:  {n:'Ricochet Coating',  d:'Shots bounce off walls once.',                    minR:3},
-  vampiric:  {n:'Vampiric Coating',  d:'Heal for 12% of damage dealt.',                   minR:4},
+  ricochet:  {n:'Ricochet Coating',  d:'Shots bounce off walls up to 3 times.',           minR:3},
+  vampiric:  {n:'Vampiric Coating',  d:'Heal for 12% of damage dealt (8% in PvP).',        minR:3},
   explosive: {n:'HE Payload',        d:'Hits detonate for 10 splash damage.',             minR:4},
 };
 
@@ -815,6 +815,15 @@ function makePart(weapon, slot, rarity, tpl, ability=null, setId=null){
   return { uid:uid(), weapon, slot, rarity, name:tpl.name,
            mods:scaleMods(tpl.mods, rarity), ability, set:setId };
 }
+/* Mirrors pickSetWeighted in loadout-core.js. Drop weight ~ piece count, so a
+   4-piece set is not punished twice: once for needing more pieces, again for each
+   being rarer. */
+function pickSetWeighted(){
+  const total = SETS.reduce((a, st) => a + Object.keys(st.pieces).length, 0);
+  let r = Math.random() * total;
+  for(const st of SETS){ r -= Object.keys(st.pieces).length; if(r <= 0) return st; }
+  return SETS[0];
+}
 function rollRarity(){
   const total = RKEYS.reduce((a,k)=>a+RAR[k].w,0);
   let r = Math.random()*total;
@@ -833,9 +842,9 @@ function rollAbility(rarity){
 function rollDrop(kills, completedMatch){
   const chance = (completedMatch?0.35:0.15) + Math.min(kills*0.02, 0.25);
   if(Math.random() > chance) return null;
-  // 15% of drops are set pieces
-  if(Math.random() < 0.15){
-    const set = SETS[Math.floor(Math.random()*SETS.length)];
+  // 20% of drops are set pieces, weighted by piece count
+  if(Math.random() < 0.20){
+    const set = pickSetWeighted();
     const slots = Object.keys(set.pieces);
     const slot = slots[Math.floor(Math.random()*slots.length)];
     const tpl = {name:set.pieces[slot], mods:PART_POOL[slot][Math.floor(Math.random()*PART_POOL[slot].length)].mods};
@@ -2975,7 +2984,7 @@ function fire(e, dir){
       mesh:m, vx:d.x*speed, vy:d.y*speed, vz:d.z*speed,
       dmg:w.dmg, owner:e, life:1.6,
       pierce: ab.has('pierce_all') ? 99 : (ab.has('pierce') ? 1 : 0),
-      bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 1 : 0,
+      bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 3 : 0,   // one bounce was worth ~0
       burn: ab.has('incendiary'),
       homing: ab.has('homing'),
       cryo: ab.has('cryo'), vamp: ab.has('vampiric'), expl: ab.has('explosive'),

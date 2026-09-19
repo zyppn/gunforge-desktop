@@ -14,7 +14,7 @@
     {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:13, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
     {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:8,  rof:95,   mag:30, reload:1500, spread:0.110, bspd:520,  pellets:1},
     {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.070, bspd:640,  pellets:1},
-    {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:750,  mag:6,  reload:2000, spread:0.150, bspd:560,  pellets:8},
+    {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:620,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
     {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1150, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
     {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:110,  mag:80, reload:3200, spread:0.100, bspd:600,  pellets:1},
   ];
@@ -170,6 +170,15 @@
     stock:[{name:'Padded Stock',mods:{spread:-0.03}},{name:'Marksman Stock',mods:{dmg:0.02,spread:-0.015}},{name:'CQB Stock',mods:{speed:0.025}},{name:'Skeleton Stock',mods:{speed:0.02,rof:0.01}}],
     optic:[{name:'Red Dot',mods:{spread:-0.035}},{name:'Holo Sight',mods:{spread:-0.025,rof:0.01}},{name:'ACOG-4',mods:{dmg:0.03}},{name:'Iron Ring',mods:{speed:0.015,spread:-0.015}}],
   };
+  /* Set drop weight ~ piece count, so a 4-piece set is not punished twice: once
+     for needing more pieces and again for each being rarer. */
+  const SET_WEIGHT = st => Object.keys(st.pieces).length;
+  function pickSetWeighted(rnd){
+    const total = SETS.reduce((a, st) => a + SET_WEIGHT(st), 0);
+    let r = (rnd ? rnd() : Math.random()) * total;
+    for(const st of SETS){ r -= SET_WEIGHT(st); if(r <= 0) return st; }
+    return SETS[0];
+  }
   function rollRarity(){
     const total = RKEYS.reduce((a,k)=>a+RAR[k].w,0);
     let r = Math.random()*total;
@@ -189,7 +198,7 @@
   const ABILITY_MINR = {
     incendiary:2, cryo:2, deadeye:2, swift:2,
     pierce:3, ricochet:3,
-    vampiric:4, explosive:4,
+    vampiric:3, explosive:4,   // vampiric was legendary-gated but worth less than a RARE deadeye
   };
   function rollAbility(rarity){
     const ri = RKEYS.indexOf(rarity);
@@ -207,9 +216,14 @@
   function rollServerDrop(kills){
     const chance = 0.35 + Math.min((kills||0)*0.02, 0.25);
     if(Math.random() > chance) return null;
-    // 15% of drops are set pieces
-    if(Math.random() < 0.15){
-      const set = SETS[Math.floor(Math.random()*SETS.length)];
+    // 20% of drops are set pieces (was 15%). Raised alongside the weighting below
+    // so every set gets FASTER to finish and none gets slower.
+    if(Math.random() < 0.20){
+      // Weighted by piece count. A flat 1-in-6 meant a 4-piece set took 556 matches
+      // to finish while a 2-piece took 200 - so the EPIC 3-piece sets were a longer
+      // grind than the LEGENDARY 2-piece one, which is backwards. Weighting by
+      // pieces brings them to 200 / 244 / 278.
+      const set = pickSetWeighted();   // Math.random(); the store never sells set pieces
       const slots = Object.keys(set.pieces);
       const slot = slots[Math.floor(Math.random()*slots.length)];
       const base = PART_POOL[slot][Math.floor(Math.random()*PART_POOL[slot].length)];
