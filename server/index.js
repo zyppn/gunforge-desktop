@@ -354,7 +354,9 @@ class ArenaRoom extends Room {
     // and no ADS term at all, so it rolled a pattern ~1.8x wider than the one you saw
     // and aiming down sights made you slower without making you more accurate.
     const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
-    const sprd = Math.max(0, (Number(ld.spread) || 0) * 0.55) * (1 - ads * 0.55);
+    // The 0.55 is the base cone both sides bake in; the ADS tightening lives in
+    // loadout-core so the client cannot disagree with the server about it.
+    const sprd = LoadoutCore.fireSpread((Number(ld.spread) || 0) * 0.55, ads);
     const speed = (Number(ld.bspd) || 560) / 9;   // the client's player-bullet speed
     const pitch = Math.max(-1.4, Math.min(1.4, Number(inp.pitch) || 0));
 
@@ -383,6 +385,7 @@ class ArenaRoom extends Room {
         crit: Math.random() < (Number(ld.crit) || 0),   // build-dependent: stacked Deadeye + Saint
         hit: new Set(),
       };
+      b.ox = b.x; b.oz = b.z;   // muzzle, for range falloff in applyHit
       this.bullets.push(b);
       // The shooter already predicted this round locally; everyone else gets the
       // exact vector so their tracer follows the same path this bullet will.
@@ -487,6 +490,13 @@ class ArenaRoom extends Room {
     const tAb = (tld && tld.abilities) || [];
 
     let dmg = ld.dmg;   // per pellet, NOT multiplied by pellet count
+    // Range falloff, measured muzzle -> impact. Flat 1.0 for every weapon but
+    // the LS-1; see FALLOFF in loadout-core. Applied BEFORE crit so a crit
+    // doubles what actually landed rather than what the sniper would have done
+    // from across the map.
+    if(b && b.ox !== undefined){
+      dmg *= LoadoutCore.rangeMul(ld.weaponId, Math.hypot(b.x - b.ox, b.z - b.oz));
+    }
     // Crit is decided when the round leaves the barrel, exactly as PvE does it
     // (b.crit), so one pellet's luck can't be re-rolled per target it pierces.
     const crit = b ? !!b.crit : (Math.random() < (Number(ld.crit) || 0));

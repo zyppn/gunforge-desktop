@@ -15,7 +15,7 @@
     {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:9,  rof:95,   mag:30, reload:1500, spread:0.090, bspd:520,  pellets:1},
     {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
     {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:620,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
-    {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:70, rof:1450, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
+    {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1100, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
     {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:125,  mag:80, reload:2600, spread:0.100, bspd:600,  pellets:1},
   ];
 
@@ -61,6 +61,46 @@
   // heal ON a crit while granting no crit chance of its own, so the set did
   // literally nothing unless you ALSO spent a slot on a Deadeye part.
   const SAINT_CRIT = 0.15;
+
+  /* ---- range falloff -----------------------------------------------------
+     Damage scaled by the distance from the muzzle to the impact. Only the
+     sniper has an entry; every other weapon is flat, because their range
+     limit is spread, not damage.
+
+     The LS-1 needs one because 65 base two-shots at ANY distance and the
+     max-damage build used to one-shot at any distance, which made it the best
+     shotgun in the game as well as the best sniper - measured TTK at 3u was
+     0.07s. Full damage from 20u out, 45% at 6u and closer, linear between.
+
+     Deliberately measured from where the shot was TAKEN, not from the
+     shooter's current position: the round is in the air for up to a fifth of
+     a second and the shooter may have closed the gap since. */
+  const FALLOFF = {
+    ls1: { near: 6, far: 20, floor: 0.45 },
+  };
+  function rangeMul(weaponId, dist){
+    const f = FALLOFF[weaponId];
+    if(!f) return 1;
+    const d = Number(dist) || 0;
+    if(d >= f.far)  return 1;
+    if(d <= f.near) return f.floor;
+    return f.floor + (1 - f.floor) * (d - f.near) / (f.far - f.near);
+  }
+
+  /* ---- ADS ---------------------------------------------------------------
+     How much aiming down sights tightens the cone. This was 0.55, which left
+     every weapon at a quarter of its listed spread while scoped: against a
+     0.68u hit radius the Warden landed all eight pellets at 25u and NOTHING
+     had a range ceiling, so no weapon could own a band. At 0.30 spread starts
+     working again past ~15u and the shotgun/SMG/LMG fall off as they should.
+
+     Takes the spread AFTER the 0.55 base-cone multiplier that both the client
+     and the server apply, so pass (stats.spread * 0.55). */
+  const ADS_SPREAD = 0.55;
+  function fireSpread(spread, ads){
+    const a = Math.max(0, Math.min(1, Number(ads) || 0));
+    return Math.max(0, Number(spread) || 0) * (1 - a * ADS_SPREAD);
+  }
 
   const weaponById = id => WEAPONS.find(w => w.id === id) || WEAPONS[0];
 
@@ -337,7 +377,9 @@
   }
 
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
-                rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS };
+                rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
+                FALLOFF, rangeMul, ADS_SPREAD, fireSpread,
+                PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
   else root.LoadoutCore = api;                                              // browser

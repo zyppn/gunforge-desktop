@@ -618,7 +618,7 @@ const WEAPONS = [
   {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:9,  rof:95,   mag:30, reload:1500, spread:0.090, bspd:520,  pellets:1, desc:'Buzzsaw-cadence room clearer. Sprays wide, bites fast.'},
   {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1, desc:'Balanced mid-range workhorse with a mean trigger.'},
   {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:620,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8, desc:'Eight-pellet argument ender. Get close, win closer.'},
-  {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:70, rof:1450, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1, desc:'One breath, one lane, one problem solved.'},
+  {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1100, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1, desc:'One breath, one lane, one problem solved.'},
   {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:125,  mag:80, reload:2600, spread:0.100, bspd:600,  pellets:1, desc:'Eighty rounds of area denial. Reloading is a lifestyle.'},
 ];
 const SLOTS = ['frame','barrel','magazine','foregrip','stock','optic'];
@@ -2866,7 +2866,7 @@ function rollBotLoadout(){
   }
   for(const st of SETS) if(st.weapon===w.id && (setCount[st.id]||0) >= st.need) abilities.add(st.effect);
   const wep = {
-    name: w.name, type: w.type,
+    wid: w.id, name: w.name, type: w.type,
     dmg: w.dmg*0.72 * m.dmg,
     rof: Math.max(60, w.rof*1.35 / m.rof),
     mag: Math.max(3, Math.round(w.mag * m.mag)),
@@ -2968,7 +2968,8 @@ function fire(e, dir){
   e.ammo--;
   const ab = w.abilities;
   const oy = e.isPlayer ? EYE - 0.06 : (e.grunt ? 1.2 : 1.5);
-  const sprd = w.spread * (1 - (e.isPlayer ? adsT : (e.aimT||0)) * 0.55); // ADS: -55% spread at full aim, player and bot alike
+  // ADS tightening lives in loadout-core so PvE, PvP and the armory agree.
+  const sprd = LoadoutCore.fireSpread(w.spread, e.isPlayer ? adsT : (e.aimT||0));
   for(let i=0;i<w.pellets;i++){
     const d = dir.clone();
     d.x += (Math.random()-0.5)*2*sprd;
@@ -2983,6 +2984,8 @@ function fire(e, dir){
     G.bullets.push({
       mesh:m, vx:d.x*speed, vy:d.y*speed, vz:d.z*speed,
       dmg:w.dmg, owner:e, life:1.6,
+      // muzzle + weapon, so range falloff measures the shot rather than the shooter
+      wid:w.wid, ox:e.x + d.x*(e.r+0.35), oz:e.z + d.z*(e.r+0.35),
       pierce: ab.has('pierce_all') ? 99 : (ab.has('pierce') ? 1 : 0),
       bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 3 : 0,   // one bounce was worth ~0
       burn: ab.has('incendiary'),
@@ -3388,7 +3391,7 @@ function startMatch(){
   const me = mkEnt({
     name:P.name, isPlayer:true, team: G.mode==='ffa' ? 'me' : 'blue',
     baseSpeed: 6.0 * L.speedMul,
-    wep:{name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
+    wep:{wid:L.base.id, name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
     ammo: L.mag
   });
   const sp = spawnOrder[0]; me.x = sp[0]; me.z = sp[1];
@@ -3768,7 +3771,9 @@ function tick(now){
       const dx=e.x-p.x, dz=e.z-p.z;
       if(p.y > 0 && p.y < top && dx*dx+dz*dz < (e.r+0.18)*(e.r+0.18)){
         b.hitset.add(e.id);
-        damage(e, b.dmg, b.owner, b.crit);
+        // Range falloff (LS-1 only today) - mirrors applyHit in server/index.js
+        const fall = LoadoutCore.rangeMul(b.wid, Math.hypot(p.x - b.ox, p.z - b.oz));
+        damage(e, b.dmg * fall, b.owner, b.crit);
         spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
         if(b.burn && !e.dead){ e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; }
         if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);
@@ -4140,7 +4145,7 @@ function startLiveMatch(){
   const me = mkEnt({
     isPlayer:true, team:'blue', name:P.name, x:AW/2, z:AD/2, r:0.5,
     hp:100, maxhp:100, baseSpeed: 6.0 * L.speedMul,
-    wep:{name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
+    wep:{wid:L.base.id, name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
     ammo:L.mag
   });
   G.me = me; G.ents.push(me);
