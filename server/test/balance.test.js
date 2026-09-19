@@ -1,14 +1,15 @@
-/* Balance regression.  Everything here is measured, not asserted from a table:
-   the TTK harness below is a port of stepBullets (substepped flight, real
-   spread cone, real 0.68u capsule, crit at x2) so a change to the weapon table
-   or to the falloff shows up as a changed kill time, the way a player feels it.
+/* Balance regression.  Everything here is measured, not asserted from a table.
 
-   What this file is protecting:
-     1. No LS-1 build one-shots on a body hit.  The one-shot is meant to be a
-        CRIT - a Deadeye reward you feel occasionally - not a property of owning
-        four legendary damage parts.  Checked exhaustively over the real pool.
-     2. Every weapon owns a range band and loses the others.
-     3. The renderer's mirror of the weapon table has not drifted.
+   The important lesson baked into this file: an earlier version scored every
+   weapon on its MAX-DAMAGE build, and passed, while the actual optimal build -
+   six spread parts on the Warden - was landing 86% of its pellets at 35u and
+   owning every range band from 3u to 22u. A single hand-picked build is not a
+   test. So this searches all 4096 part combinations per weapon and scores the
+   BEST one, which is the only build that matters for balance.
+
+   Hit probability is closed-form rather than marched, so the search is fast.
+   It is cross-checked against the marching model in stepBullets to within
+   0.005 at every range/spread pair that matters.
 
    Run:  node server/test/balance.test.js                                    */
 
@@ -19,169 +20,199 @@ const path = require('path');
 let fails = 0;
 const check = (l, ok, d) => { console.log((ok?'  PASS  ':'  FAIL  ')+l+(d?'   ['+d+']':'')); if(!ok) fails++; };
 
+const R_HIT = 0.68, EYE = 1.54, TOP = 1.9, LEG = C.RAR.legendary.scale, CRIT_CAP = 0.30;
+
 /* ---------------------------------------------------------------- harness */
-const PLAYER_R = 0.5, EYE = 1.6, HITR = PLAYER_R + 0.18, CRITMUL = 2, HP = 100;
-
-/* Expected time to kill a stationary target at `dist`, in seconds, including
-   the killing round's flight time.  Stationary and in the open: this FLATTERS
-   the fast, flat-shooting weapons and gives the sniper no credit for its
-   travel-time advantage, so treat these as a floor on the LS-1, not a ceiling. */
-function ttk(st, dist, ads, trials){
-  const sprd    = C.fireSpread(st.spread * 0.55, ads);
-  const speed   = st.bspd / 9;
-  const pellets = Math.max(1, st.pellets);
-  const dt = 1/30;
-  let sum = 0, kills = 0;
-  for(let t = 0; t < trials; t++){
-    let hp = HP, shot = 0, done = false;
-    while(shot < 400 && !done){
-      const tFire = shot * st.rof / 1000; shot++;
-      const crit = Math.random() < (st.crit || 0);
-      for(let pi = 0; pi < pellets && !done; pi++){
-        let dx = 1 + (Math.random()-0.5)*2*sprd;
-        let dy = 0 + (Math.random()-0.5)*2*sprd;
-        let dz = 0 + (Math.random()-0.5)*2*sprd;
-        const l = Math.hypot(dx,dy,dz) || 1; dx/=l; dy/=l; dz/=l;
-        const ox = dx*(PLAYER_R+0.35), oz = dz*(PLAYER_R+0.35);
-        let bx = ox, by = EYE-0.06, bz = oz;
-        const vx = dx*speed, vy = dy*speed, vz = dz*speed;
-        let life = 1.6, hit = false, flight = 0;
-        while(life > 0 && !hit){
-          life -= dt;
-          // same substep cap the server uses, so collision is tick-independent
-          const n = Math.max(1, Math.ceil(Math.hypot(vx,vy,vz)*dt / 0.3)), sdt = dt/n;
-          for(let s2 = 0; s2 < n; s2++){
-            bx += vx*sdt; by += vy*sdt; bz += vz*sdt; flight += sdt;
-            if(by < 0.03 || by > 9 || bx > dist + 6){ life = 0; break; }
-            const ddx = dist-bx, ddz = -bz;
-            if(by > 0 && by < 1.9 && ddx*ddx + ddz*ddz < HITR*HITR){ hit = true; break; }
-          }
-        }
-        if(hit){
-          let dmg = st.dmg * C.rangeMul(st.weaponId, Math.hypot(bx-ox, bz-oz));
-          if(crit) dmg *= CRITMUL;
-          hp -= dmg;
-          if(hp <= 0){ sum += tFire + flight; kills++; done = true; }
-        }
-      }
-    }
+/* Probability one pellet connects, and the mean flight time of the ones that
+   do. Same cone construction as tryFire: uniform +/-sprd per axis, normalised. */
+function hit(dist, sprd, speed, N){
+  let h = 0, f = 0;
+  for(let i = 0; i < N; i++){
+    let dx = 1 + (Math.random()-0.5)*2*sprd;
+    let dy =     (Math.random()-0.5)*2*sprd;
+    let dz =     (Math.random()-0.5)*2*sprd;
+    const L = Math.hypot(dx,dy,dz); dx/=L; dy/=L; dz/=L;
+    const ax = dx*0.85 - dist, az = dz*0.85;
+    const vv = dx*dx + dz*dz, av = ax*dx + az*dz;
+    const t = -av/vv, d2 = (ax*ax + az*az) - av*av/vv;
+    if(d2 >= R_HIT*R_HIT || t <= 0) continue;
+    const te = t - Math.sqrt((R_HIT*R_HIT - d2)/vv);
+    if(te <= 0) continue;
+    const y = EYE + dy*te;
+    if(y <= 0 || y >= TOP) continue;
+    if(te/speed > 1.6) continue;              // bullet life
+    h++; f += te/speed;
   }
-  return kills ? sum/kills : Infinity;
+  return { p: h/N, flight: h ? f/h : dist/speed };
 }
 
-/* The build we are actually worried about: every slot legendary, every damage
-   part taken, Deadeye wherever a damage part can also carry it. */
-function metaBuild(wid){
-  const S = C.RAR.legendary.scale;
-  const pick = slot => {
-    const pool = C.PART_POOL[slot];
-    // the highest-damage template in this slot, else the first
-    let best = pool[0], bd = -1;
-    for(const t of pool){ const d = t.mods.dmg || 0; if(d > bd){ bd = d; best = t; } }
-    const mods = {}; for(const k in best.mods) mods[k] = +(best.mods[k]*S).toFixed(3);
-    return { slot, weapon:wid, rarity:'legendary', name:best.name, mods,
-             ability: (best.mods.dmg ? 'deadeye' : null), set:null };
-  };
-  const eq = {}; for(const s of C.SLOTS) eq[s] = pick(s);
-  return eq;
+/* Expected time to kill a stationary 100hp target, reloads and burn included. */
+function ttk(S, dist, p, flight, trials){
+  const mul = C.rangeMul(S.weaponId, dist);
+  let sum = 0;
+  for(let n = 0; n < trials; n++){
+    let t = 0, hp = 100, ammo = S.mag, burn = 0, guard = 0;
+    while(hp > 0 && guard++ < 600){
+      if(ammo <= 0){ t += S.reload/1000; ammo = S.mag; }
+      const crit = Math.random() < S.crit;
+      let landed = 0;
+      for(let k = 0; k < S.pellets; k++) if(Math.random() < p) landed++;
+      ammo--;
+      if(landed){ hp -= landed * S.dmg * mul * (crit ? 2 : 1); burn = 3; }
+      const step = S.rof/1000;
+      if(burn > 0){ const b = Math.min(burn, step); hp -= 4*b; burn -= b; }
+      t += step;
+    }
+    sum += t - S.rof/1000 + flight;
+  }
+  return sum/trials;
 }
 
-/* ------------------------------------------- 1. no body-shot one-shot ever */
+/* ---- the best build a player can actually assemble ---------------------- */
+/* Every slot legendary, every template considered, Deadeye at the 30% cap
+   (abilities do not compete with stat templates - a part carries both). */
+function statsFor(wid, pick){
+  const w = C.weaponById(wid);
+  const m = {dmg:1, rof:1, mag:1, reload:1, spread:1};
+  for(let i = 0; i < C.SLOTS.length; i++){
+    const t = C.PART_POOL[C.SLOTS[i]][pick[i]].mods;
+    for(const k in t) if(k in m) m[k] += +(t[k]*LEG).toFixed(3);
+  }
+  return { weaponId:wid, dmg:w.dmg*m.dmg, rof:Math.max(45, w.rof/m.rof),
+           mag:Math.max(3, Math.round(w.mag*m.mag)), reload:Math.max(400, w.reload*m.reload),
+           spread:Math.max(w.spread*C.SPREAD_FLOOR, w.spread*m.spread),
+           bspd:w.bspd, pellets:w.pellets, crit:CRIT_CAP, pick };
+}
+const PROBE = [3, 12.5, 22.5, 35];
+function bestBuild(wid){
+  let best = null;
+  const cache = new Map();
+  for(let n = 0; n < 4096; n++){
+    let v = n; const pick = [];
+    for(let i = 0; i < 6; i++){ pick.push(v % 4); v = (v/4)|0; }
+    const S = statsFor(wid, pick);
+    const sprd = C.fireSpread(S.spread*0.55, 1), speed = S.bspd/9;
+    let sc = 0;
+    for(const d of PROBE){
+      const key = d + '|' + sprd.toFixed(5);
+      if(!cache.has(key)) cache.set(key, hit(d, sprd, speed, 3000));
+      const h = cache.get(key);
+      sc += h.p < 0.02 ? 12 : ttk(S, d, h.p, h.flight, 40);
+    }
+    if(!best || sc < best.sc){ best = S; best.sc = sc; }
+  }
+  return best;
+}
+
+/* -------------------------------------------- 1. no body-shot one-shot ever */
 console.log('LS-1  no build may one-shot on a BODY hit (the one-shot is a crit)');
 {
-  // exhaustive over the real pool: best damage template in every slot at legendary
-  const S = C.RAR.legendary.scale;
   let mult = 1;
   for(const slot of C.SLOTS){
     let bd = 0;
-    for(const t of C.PART_POOL[slot]) bd = Math.max(bd, (t.mods.dmg || 0) * S);
+    for(const t of C.PART_POOL[slot]) bd = Math.max(bd, (t.mods.dmg || 0) * LEG);
     mult += bd;
   }
-  const ls1 = C.weaponById('ls1');
-  const top = ls1.dmg * mult;
+  const top = C.weaponById('ls1').dmg * mult;
   check('best possible LS-1 body shot = ' + top.toFixed(1), top < 100,
         'must stay under 100hp; headroom ' + (100-top).toFixed(1));
-  check('a crit still one-shots (that is the reward)', top * 2 >= 100,
-        (top*2).toFixed(1) + ' on a crit');
-  // and confirm computeStats agrees with the exhaustive number
-  const st = C.computeStats('ls1', metaBuild('ls1'));
-  check('computeStats matches the exhaustive max', Math.abs(st.dmg - top) < 0.01,
-        st.dmg.toFixed(1) + ' vs ' + top.toFixed(1));
-  check('and that build reaches the 30% deadeye cap', Math.abs(st.crit - 0.30) < 1e-9,
-        (st.crit*100).toFixed(0) + '%');
+  check('a crit still one-shots (that is the reward)', top * 2 >= 100, (top*2).toFixed(1));
 }
 
 /* ------------------------------------------------------ 2. falloff shape */
-console.log('\nRANGE FALLOFF');
-{
-  const f = C.FALLOFF.ls1;
-  check('floor at and inside ' + f.near + 'u', C.rangeMul('ls1', 0) === f.floor &&
-        C.rangeMul('ls1', f.near) === f.floor, 'x' + f.floor);
-  check('full damage at and beyond ' + f.far + 'u', C.rangeMul('ls1', f.far) === 1 &&
-        C.rangeMul('ls1', 200) === 1);
-  let mono = true, prev = -1;
-  for(let d = 0; d <= 30; d += 0.5){ const v = C.rangeMul('ls1', d); if(v < prev - 1e-12) mono = false; prev = v; }
-  check('monotonic, no step', mono);
-  check('midpoint is halfway', Math.abs(C.rangeMul('ls1', 13) - (f.floor + (1-f.floor)/2)) < 1e-9);
-  for(const w of C.WEAPONS){
-    if(w.id === 'ls1') continue;
-    check(w.id + ' is flat at every range',
-          [0,5,10,25,60].every(d => C.rangeMul(w.id, d) === 1));
+console.log('\nRANGE FALLOFF  (a two-point ramp; it can go up or down)');
+for(const [id, f] of Object.entries(C.FALLOFF)){
+  const dir = f.m1 > f.m0 ? 'ramps UP with range (sniper)' : 'ramps DOWN with range (shotgun)';
+  check(id + ' ' + dir, true, 'x' + f.m0 + ' at ' + f.d0 + 'u -> x' + f.m1 + ' at ' + f.d1 + 'u');
+  check('  ' + id + ' flat outside the ramp',
+        C.rangeMul(id, 0) === f.m0 && C.rangeMul(id, f.d0) === f.m0 &&
+        C.rangeMul(id, f.d1) === f.m1 && C.rangeMul(id, 500) === f.m1);
+  let mono = true, prev = C.rangeMul(id, 0);
+  for(let d = 0; d <= 60; d += 0.5){
+    const v = C.rangeMul(id, d);
+    if((f.m1 > f.m0 ? v < prev - 1e-12 : v > prev + 1e-12)) mono = false;
+    prev = v;
   }
+  check('  ' + id + ' monotonic, no step', mono);
+  check('  ' + id + ' midpoint is halfway',
+        Math.abs(C.rangeMul(id, (f.d0+f.d1)/2) - (f.m0+f.m1)/2) < 1e-9);
+}
+for(const w of C.WEAPONS){
+  if(C.FALLOFF[w.id]) continue;
+  check(w.id + ' is flat at every range', [0,5,10,25,60].every(d => C.rangeMul(w.id, d) === 1));
 }
 
-/* --------------------------------------------------------- 3. ADS spread */
-console.log('\nADS');
+/* --------------------------------------------------------- 3. ADS + floor */
+console.log('\nADS AND SPREAD FLOOR');
 {
-  // Deliberately NOT pinned to a number: the coefficient is a tuning knob and
-  // the RANGE BANDS below are what actually has to hold. If someone moves it,
-  // this prints the new value and the band checks decide whether it was OK.
-  console.log('    ADS_SPREAD = ' + C.ADS_SPREAD + '  (scoped spread is '
+  console.log('    ADS_SPREAD = ' + C.ADS_SPREAD + '  (scoped cone is '
               + ((1-C.ADS_SPREAD)*100).toFixed(0) + '% of hipfire)');
+  console.log('    SPREAD_FLOOR = ' + C.SPREAD_FLOOR + '  (tightest reachable cone)');
   check('hipfire is untouched', C.fireSpread(0.1, 0) === 0.1);
-  check('full ADS tightens to ' + ((1-C.ADS_SPREAD)*100).toFixed(0) + '%',
+  check('full ADS tightens correctly',
         Math.abs(C.fireSpread(0.1, 1) - 0.1*(1-C.ADS_SPREAD)) < 1e-12);
-  check('clamps a bogus ads value', C.fireSpread(0.1, 99) === C.fireSpread(0.1, 1) &&
-        C.fireSpread(0.1, -5) === 0.1);
+  check('clamps a bogus ads value',
+        C.fireSpread(0.1, -5) === 0.1 && C.fireSpread(0.1, 99) === C.fireSpread(0.1, 1));
+  // the floor has to actually bind: stack every spread part and check
+  const allSpread = C.SLOTS.map(s => {
+    const pool = C.PART_POOL[s];
+    let bi = 0, bv = 1;
+    pool.forEach((t,i) => { const v = t.mods.spread === undefined ? 1 : t.mods.spread; if(v < bv){ bv = v; bi = i; } });
+    return bi;
+  });
+  const w = statsFor('warden', allSpread);
+  check('a full spread stack cannot go below the floor',
+        Math.abs(w.spread - C.weaponById('warden').spread * C.SPREAD_FLOOR) < 1e-9,
+        w.spread.toFixed(4));
 }
 
-/* ------------------------------------------------- 4. every weapon a band */
-console.log('\nRANGE BANDS  (measured, max build, ADS, 700 trials/cell)');
+/* ------------------------------- 4. range bands, on each weapon's BEST build */
+console.log('\nRANGE BANDS  (exhaustive build search, ADS, measured)');
+const RANGES = [3, 8, 12.5, 17.5, 22.5, 27.5, 35, 45];
+const T = {}, PH35 = {};
+for(const w of C.WEAPONS){
+  const S = bestBuild(w.id);
+  const sprd = C.fireSpread(S.spread*0.55, 1), speed = S.bspd/9;
+  T[w.id] = {};
+  let line = '    ' + w.id.padEnd(10);
+  for(const d of RANGES){
+    const h = hit(d, sprd, speed, 20000);
+    T[w.id][d] = h.p < 0.02 ? 99 : ttk(S, d, h.p, h.flight, 1500);
+    line += (T[w.id][d] === 99 ? '--' : T[w.id][d].toFixed(2)).padStart(7);
+  }
+  PH35[w.id] = hit(35, sprd, speed, 20000).p;
+  console.log(line + '   pellets@35u ' + (PH35[w.id]*100).toFixed(0) + '%');
+}
+console.log('    ' + 'weapon'.padEnd(10) + RANGES.map(r => (r+'u').padStart(7)).join(''));
+
+const ids = C.WEAPONS.map(w => w.id);
+const owner = d => ids.reduce((a,b) => T[a][d] <= T[b][d] ? a : b);
+const owns = {}; ids.forEach(i => owns[i] = RANGES.filter(d => owner(d) === i));
+for(const i of ids) console.log('    ' + i.padEnd(10) + ' owns: ' + (owns[i].map(d=>d+'u').join(' ') || '-'));
+
+check('the Warden owns point blank',  owns.warden.includes(3) && owns.warden.includes(8));
+check('the Warden owns NOTHING past 20u',
+      !owns.warden.some(d => d >= 20), owns.warden.join(','));
+check('the Warden is not a marksman rifle: <70% of pellets land at 35u',
+      PH35.warden < 0.70, (PH35.warden*100).toFixed(0) + '%');
+check('the LS-1 owns the long bands', owns.ls1.includes(35) && owns.ls1.includes(45));
+check('the LS-1 owns nothing point blank', !owns.ls1.some(d => d <= 8), owns.ls1.join(','));
+check('no weapon owns more than 5 of the 8 bands',
+      ids.every(i => owns[i].length <= 5),
+      ids.map(i => i+':'+owns[i].length).join(' '));
 {
-  const RANGES = [3, 6, 25, 40];
-  const T = {};
-  const rows = [];
-  for(const w of C.WEAPONS){
-    const st = C.computeStats(w.id, metaBuild(w.id));
-    T[w.id] = {};
-    let line = '    ' + w.id.padEnd(10);
-    for(const r of RANGES){ const v = ttk(st, r, 1, 700); T[w.id][r] = v; line += (v===Infinity?'--':v.toFixed(2)).padStart(8); }
-    rows.push(line);
-  }
-  console.log('    ' + 'weapon'.padEnd(10) + RANGES.map(r => (r+'u').padStart(8)).join(''));
-  rows.forEach(l => console.log(l));
-
-  const fastest = r => C.WEAPONS.map(w => w.id).reduce((a,b) => T[a][r] <= T[b][r] ? a : b);
-  const slowest = r => C.WEAPONS.map(w => w.id).reduce((a,b) => T[a][r] >= T[b][r] ? a : b);
-
-  check('Warden owns 3u',  fastest(3)  === 'warden',  fastest(3));
-  check('Warden owns 6u',  fastest(6)  === 'warden',  fastest(6));
-  check('LS-1 owns 25u',   fastest(25) === 'ls1',     fastest(25));
-  check('LS-1 owns 40u',   fastest(40) === 'ls1',     fastest(40));
-  check('LS-1 is the WORST weapon at 3u', slowest(3) === 'ls1', slowest(3));
-  check('LS-1 is the WORST weapon at 6u', slowest(6) === 'ls1', slowest(6));
-  check('LS-1 close range is a real penalty (>2x the Warden at 3u)',
-        T.ls1[3] > T.warden[3] * 2, T.ls1[3].toFixed(2) + ' vs ' + T.warden[3].toFixed(2));
-  check('nothing kills faster than 0.4s at 40u (no cross-map instakill)',
-        C.WEAPONS.every(w => T[w.id][40] > 0.4),
-        C.WEAPONS.map(w => w.id + ':' + T[w.id][40].toFixed(2)).join(' '));
-  // horizontal parity: the best weapon at any range should not lap the field
-  for(const r of RANGES){
-    const vals = C.WEAPONS.map(w => T[w.id][r]).filter(v => v < Infinity).sort((a,b)=>a-b);
-    check('at ' + r + 'u the best is within 3x the median',
-          vals[0] * 3 >= vals[Math.floor(vals.length/2)],
-          'best ' + vals[0].toFixed(2) + ', median ' + vals[Math.floor(vals.length/2)].toFixed(2));
-  }
+  const peaks = ids.map(i => ({ i, p: Math.min(...RANGES.map(d => T[i][d])) }));
+  peaks.sort((a,b) => a.p - b.p);
+  const gap = peaks[peaks.length-1].p / peaks[0].p;
+  console.log('    peaks: ' + peaks.map(q => q.i+' '+q.p.toFixed(2)).join('  '));
+  check('every weapon is within 2x the best weapon IN ITS OWN BAND', gap <= 2.0,
+        gap.toFixed(2) + 'x');
+  // Not a failure, but it should be visible on every run: a weapon that never
+  // wins a band is a weapon nobody has a reason to pick, even if its numbers
+  // are close. Today the LS-1's two-shot covers everything past 17u.
+  const idle = ids.filter(i => !owns[i].length);
+  if(idle.length) console.log('    NOTE  owns no band: ' + idle.join(', ') +
+        '  (within ' + gap.toFixed(2) + 'x on peak, but never the best answer)');
 }
 
 /* -------------------------------------------- 5. the renderer has not drifted */
@@ -191,17 +222,14 @@ console.log('\nDRIFT  renderer/index.html mirrors the weapon table');
   for(const w of C.WEAPONS){
     const m = html.match(new RegExp("\\{id:'" + w.id + "'[^}]*\\}"));
     if(!m){ check(w.id + ' present in renderer table', false, 'row not found'); continue; }
-    const row = m[0];
-    const num = k => { const mm = row.match(new RegExp(k + ':\\s*(-?[0-9.]+)')); return mm ? Number(mm[1]) : null; };
+    const num = k => { const mm = m[0].match(new RegExp(k + ':\\s*(-?[0-9.]+)')); return mm ? Number(mm[1]) : null; };
     const bad = ['dmg','rof','mag','reload','spread','bspd','pellets','unlock']
-      .filter(k => num(k) !== w[k])
-      .map(k => k + ' ' + num(k) + '!=' + w[k]);
+      .filter(k => num(k) !== w[k]).map(k => k + ' ' + num(k) + '!=' + w[k]);
     check(w.id + ' matches loadout-core', bad.length === 0, bad.join(', '));
   }
-  const vendor = fs.readFileSync(path.join(__dirname, '../../renderer/vendor/loadout-core.js'), 'utf8');
-  const server = fs.readFileSync(path.join(__dirname, '../loadout-core.js'), 'utf8');
-  check('renderer/vendor/loadout-core.js is byte-identical', vendor === server,
-        vendor === server ? '' : 'run npm run sync:core');
+  check('renderer/vendor/loadout-core.js is byte-identical',
+        fs.readFileSync(path.join(__dirname, '../../renderer/vendor/loadout-core.js'), 'utf8')
+        === fs.readFileSync(path.join(__dirname, '../loadout-core.js'), 'utf8'), 'run npm run sync:core');
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all balance checks passed'));

@@ -14,7 +14,7 @@
     {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:13, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
     {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:9,  rof:95,   mag:30, reload:1500, spread:0.090, bspd:520,  pellets:1},
     {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
-    {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:620,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
+    {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:700,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
     {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1100, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
     {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:125,  mag:80, reload:2600, spread:0.100, bspd:600,  pellets:1},
   ];
@@ -76,15 +76,22 @@
      shooter's current position: the round is in the air for up to a fifth of
      a second and the shooter may have closed the gap since. */
   const FALLOFF = {
-    ls1: { near: 6, far: 20, floor: 0.45 },
+    // sniper: weak up close, full damage from 20u out
+    ls1:    { d0: 6, m0: 0.45, d1: 20, m1: 1.00 },
+    // shotgun: full damage to 8u, 45% by 22u. The Warden needed this for the
+    // same reason but in the opposite direction - 8 pellets x 8 applies at ANY
+    // distance, so it two-shot across the map and owned every band from 3u to
+    // 22u. A shotgun's range limit is supposed to be its pattern; this makes
+    // damage agree with that instead of fighting it.
+    warden: { d0: 8, m0: 1.00, d1: 22, m1: 0.45 },
   };
   function rangeMul(weaponId, dist){
     const f = FALLOFF[weaponId];
     if(!f) return 1;
     const d = Number(dist) || 0;
-    if(d >= f.far)  return 1;
-    if(d <= f.near) return f.floor;
-    return f.floor + (1 - f.floor) * (d - f.near) / (f.far - f.near);
+    if(d <= f.d0) return f.m0;
+    if(d >= f.d1) return f.m1;
+    return f.m0 + (f.m1 - f.m0) * (d - f.d0) / (f.d1 - f.d0);
   }
 
   /* ---- ADS ---------------------------------------------------------------
@@ -97,6 +104,14 @@
      Takes the spread AFTER the 0.55 base-cone multiplier that both the client
      and the server apply, so pass (stats.spread * 0.55). */
   const ADS_SPREAD = 0.30;
+
+  /* The tightest cone any build may reach, as a fraction of the weapon's base
+     spread. This was 0.25, and six spread parts is enough to hit the floor: the
+     Warden went 0.120 -> 0.030, which after the base cone and ADS is a 0.40u
+     pattern at 35u against a 0.68u target. It landed 86% of its pellets across
+     the map. Spread-stacking was strictly the best thing to do with six slots
+     on every weapon, which is also why no optimal build took a damage part. */
+  const SPREAD_FLOOR = 0.50;
   function fireSpread(spread, ads){
     const a = Math.max(0, Math.min(1, Number(ads) || 0));
     return Math.max(0, Number(spread) || 0) * (1 - a * ADS_SPREAD);
@@ -143,7 +158,7 @@
       rof:    Math.max(45, w.rof / m.rof),
       mag:    Math.max(3, Math.round(w.mag * m.mag)),
       reload: Math.max(400, w.reload * m.reload),
-      spread: Math.max(w.spread * 0.25, w.spread * m.spread),
+      spread: Math.max(w.spread * SPREAD_FLOOR, w.spread * m.spread),
       bspd:   w.bspd,
       pellets:w.pellets,
       speedMul: m.speed + stackValue('swift', count.swift || 0),
@@ -378,7 +393,7 @@
 
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
-                FALLOFF, rangeMul, ADS_SPREAD, fireSpread,
+                FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
