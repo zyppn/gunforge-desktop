@@ -12,11 +12,11 @@
 
   const WEAPONS = [
     {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:13, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
-    {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:8,  rof:95,   mag:30, reload:1500, spread:0.110, bspd:520,  pellets:1},
-    {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.070, bspd:640,  pellets:1},
+    {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:9,  rof:95,   mag:30, reload:1500, spread:0.090, bspd:520,  pellets:1},
+    {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
     {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:620,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
-    {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1150, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
-    {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:110,  mag:80, reload:3200, spread:0.100, bspd:600,  pellets:1},
+    {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:70, rof:1450, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
+    {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:125,  mag:80, reload:2600, spread:0.100, bspd:600,  pellets:1},
   ];
 
   const SLOTS = ['frame','barrel','magazine','foregrip','stock','optic'];
