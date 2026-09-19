@@ -2674,11 +2674,21 @@ function partThumb(part){
   if(!thRenderer){
     try{
       const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+      // A lost GPU context makes toDataURL return a blank-but-valid PNG. Cached,
+      // that part shows an empty box for the rest of the session and only a
+      // restart clears it. Drop the renderer and the cache when it happens so the
+      // next paint rebuilds both.
+      c.addEventListener('webglcontextlost', ev => {
+        ev.preventDefault();
+        thRenderer = null; thumbCache.clear();
+      });
       thRenderer = new THREE.WebGLRenderer({canvas:c, antialias:true, alpha:true, preserveDrawingBuffer:true});
       thRenderer.setSize(128, 128, false);
     }catch(e){ thRenderer = 'fail'; }
   }
   if(thRenderer === 'fail') return null;
+  { const gl0 = thRenderer.getContext();
+    if(gl0 && gl0.isContextLost && gl0.isContextLost()){ thRenderer = null; thumbCache.clear(); return null; } }
   try{
     const scene2 = new THREE.Scene();
     scene2.add(new THREE.HemisphereLight(0xAFC4D8, 0x141210, 1.15));
@@ -2706,19 +2716,34 @@ function partThumb(part){
     const cam2 = new THREE.PerspectiveCamera(30, 1, 0.005, 10);
     const dist = Math.max((fit/2)/Math.tan(15*Math.PI/180), sz.z*0.9 + 0.06);
     cam2.position.set(0, sz.y*0.1, dist); cam2.lookAt(0, 0, 0);
+    // Nothing to draw: caching this would bake in an empty box permanently.
+    if(!grp.children.length) return null;
     thRenderer.render(scene2, cam2);
+    const gl = thRenderer.getContext();
+    if(gl && gl.isContextLost && gl.isContextLost()){
+      thRenderer = null; thumbCache.clear(); return null;   // retry on the next paint
+    }
     const url = thRenderer.domElement.toDataURL('image/png');
+    // Only a render we are confident in goes in the cache. A bad one is returned
+    // for this paint but not remembered, so the next one tries again.
     thumbCache.set(key, url);
     return url;
   }catch(e){ return null; }
 }
-function hydrateThumbs(){
+function hydrateThumbs(retry){
+  let missed = 0;
   document.querySelectorAll('img.pimg[data-part]').forEach(img=>{
+    if(img.dataset.done === '1') return;
     try{
       const url = partThumb(JSON.parse(decodeURIComponent(img.dataset.part)));
-      if(url) img.src = url; else img.style.display = 'none';
+      if(url){ img.src = url; img.dataset.done = '1'; }
+      else missed++;                       // leave the frame, try again shortly
     }catch(e){ img.style.display = 'none'; }
   });
+  // One retry on the next frame. A thumbnail that failed because the GPU context
+  // blinked used to stay an empty box until the app was restarted; now the
+  // context has been dropped above and this pass rebuilds it.
+  if(missed && !retry) requestAnimationFrame(() => hydrateThumbs(true));
 }
 
 function botMesh(color, grunt, gunInfo){
@@ -4150,8 +4175,14 @@ function startLiveMatch(){
     });
     room.onMessage('rematch', () => feed('ARENA RESET — NEW ROUND', true));
     room.onMessage('reward', m => {
-      live.serverReward = m;
-      paintLiveReward();   // the panel is usually already on screen when this lands
+      // Fast path only. pollLiveReward() is what guarantees the panel resolves.
+      if(live && !live.rewardResolved){
+        live.serverReward = m;
+        live.rewardResolved = true;
+        // the server sends a drop in game shape, but tolerate a raw DB row too
+        if(m && m.part && m.part.weapon_id) live.serverReward.part = partFromRow(m.part);
+        paintLiveReward();
+      }
     });
     room.onMessage('presence', m => {
       feed(m.name + (m.on ? '  CONNECTED' : '  DISCONNECTED'), false);
@@ -4278,6 +4309,43 @@ function liveRemoveRemote(id){
    comes back (respawn, rematch) call it, so they can't drift apart again. */
 /* One place that turns live.serverReward into the debrief line, so the results
    panel and the late-arriving 'reward' message can't disagree. */
+/* Poll the profile until the server's grant shows up in it. This is the part
+   that cannot get stuck: loadCloudProfile always returns something, so the panel
+   always resolves, message or no message. */
+async function pollLiveReward(){
+  const before = live && live.rewardBefore;
+  if(!before) return;
+  const deadline = Date.now() + 20000;
+  let delay = 400;
+  while(live && !live.rewardResolved && Date.now() < deadline){
+    let fresh = null;
+    try{ fresh = await loadCloudProfile(); }catch(e){}
+    if(fresh){
+      const xpNow = (fresh.xp | 0) + (fresh.level | 0) * 100000;
+      const gainedCr = (fresh.credits | 0) - before.credits;
+      const gainedXp = xpNow - before.xp;
+      const newPart = fresh.inventory.find(p2 => !before.uids.has(p2.uid)) || null;
+      if(gainedCr > 0 || gainedXp > 0 || newPart){
+        P = fresh; refreshChips();
+        live.rewardResolved = true;
+        live.serverReward = { credits: gainedCr, xp: gainedXp, part: newPart,
+                              lockerFull: !!(live.serverReward && live.serverReward.lockerFull) };
+        paintLiveReward();
+        return;
+      }
+      P = fresh; refreshChips();
+    }
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(2500, Math.round(delay * 1.5));
+  }
+  if(live && !live.rewardResolved){
+    // 20s with no change in the database. Say so plainly rather than spin.
+    live.rewardResolved = true;
+    if(!live.serverReward) live.serverReward = { credits:0, xp:0, part:null, reason:'timeout' };
+    paintLiveReward();
+  }
+}
+
 function liveRewardBody(){
   const rw = live && live.serverReward;
   if(!rw) return '<span style="opacity:.7">Tallying rewards\u2026</span>';
@@ -4289,17 +4357,25 @@ function liveRewardBody(){
   if(rw.reason === 'grant-failed' || rw.reason === 'timeout')
     return '<span style="color:#E8A33A">Reward could not be confirmed \u2014 nothing was banked for this match. '
          + 'Nothing was double-spent either; the server grants once or not at all.</span>';
-  let h = '+'+(rw.credits|0)+' CR \u00b7 +'+(rw.xp|0)+' XP';
-  if(rw.part) h += ' \u00b7 <span style="color:'+RCOL_CSS(rw.part.rarity)+'">'+esc(rw.part.name)+' ['+rw.part.rarity.toUpperCase()+']</span>';
-  else if(rw.lockerFull) h += ' \u00b7 <span style="color:#E05A4E">salvage forfeited \u2014 locker full at '+PART_CAP+'</span>';
+  let h = '<div>+'+(rw.credits|0)+' CR \u00b7 +'+(rw.xp|0)+' XP</div>';
+  // A live drop gets the same card and the same dropIn/dropGlow animation the
+  // campaign gives you. It was one line of text, which made the better loot in
+  // the game feel like the lesser one.
+  if(rw.part) h += dropBlockHtml(rw.part);
+  else if(rw.lockerFull) h += '<div class="note" style="margin-top:12px;color:#E05A4E">'
+    + '\u25c6 SALVAGE FORFEITED \u2014 your locker is full at '+PART_CAP+' parts.</div>';
+  else h += '<div class="note" style="margin-top:12px">No salvage recovered this run. '
+    + 'Drop odds rise with eliminations.</div>';
   return h;
 }
 function paintLiveReward(){
   const el = document.getElementById('livereward');
-  if(el) el.innerHTML = liveRewardBody();
-  // the grant also moved credits/parts server-side: pull the real numbers back
-  if(live && live.serverReward && !live.serverReward.reason){
-    loadCloudProfile().then(fresh => { if(fresh){ P = fresh; refreshChips(); } }).catch(()=>{});
+  if(!el) return;
+  el.innerHTML = liveRewardBody();
+  const rw = live && live.serverReward;
+  if(rw && rw.part){
+    hydrateThumbs();                                        // the card carries a 3D thumbnail
+    setTimeout(() => playDropSound(rw.part.rarity), 200);   // same cue as a campaign drop
   }
 }
 
@@ -4522,18 +4598,16 @@ async function endLiveMatch(){
       // show whatever the server has told us so far, then re-sync from cloud.
       rewardHtml = '<div class="panel" style="margin-top:10px"><div class="eyebrow">Debrief rewards · server-verified</div>'
         + '<div id="livereward" style="margin-top:6px">' + liveRewardBody() + '</div></div>';
-      // The server grants asynchronously (Supabase round-trip), so the message
-      // almost always lands AFTER this panel is built. Nothing repainted it, so it
-      // read "Tallying rewards..." forever. Arm a fallback too: a dead economy or a
-      // dropped socket must not leave the player staring at a spinner.
-      clearTimeout(live.rewardTO);
-      live.rewardTO = setTimeout(() => {
-        if(!live || live.serverReward) return;
-        live.serverReward = { credits:0, xp:0, part:null, reason:'timeout' };
-        paintLiveReward();
-      }, 12000);
-      // pull the authoritative inventory/credits the server just wrote
-      try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
+      // Snapshot BEFORE the server's write lands. The 'reward' socket message is
+      // now only a fast path: what actually resolves this panel is the profile
+      // itself, polled until it changes. Hanging on "Tallying rewards..." meant a
+      // message that never arrived had no backstop, and the database always knows.
+      live.rewardBefore = {
+        credits: P.credits | 0,
+        xp: (P.xp | 0) + (P.level | 0) * 100000,          // monotonic across a level-up
+        uids: new Set(P.inventory.map(p2 => p2.uid)),
+      };
+      pollLiveReward();
     } else {
       // offline fallback: local grant (no cloud account this session)
       const kills = G.me.kills, deaths = G.me.deaths;
@@ -4578,6 +4652,7 @@ function liveRematchDeploy(){
   if(ov) ov.style.display = 'none';
   if(!G || !live) return;
   live.results = false; live.rewarded = false;
+  live.rewardResolved = false; live.serverReward = null; live.rewardBefore = null;
   G.over = false;
   const sp = live.room && live.room.state.players.get(live.myId);
   if(sp){ G.me.x = sp.x; G.me.z = sp.z; G.me.hp = sp.hp; G.me.dead = false; G.me.kills = 0; G.me.deaths = 0; live.lastHp = sp.hp; }
