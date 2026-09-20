@@ -29,7 +29,8 @@ const PVP = {
   critChance:     0.12,  // deadeye, first copy (loadout-core stacks it and adds Saint's +15%)
   critMul:        2,
   vampFrac:       0.08,  // 12% offline; toned down for PvP
-  explDmg:        10,    // explosive splash  (matches PvE)
+  // explDmg is gone: HE Payload is now a fraction of the damage that triggered
+  // it (LoadoutCore.splashDamage), so it stops scaling with rate of fire.
   explRadius:     3,     //                    (matches PvE)
   critHeal:       10,    // Saint set — Absolution, reworked to carry its own crit chance
   killShield:     25,    // Bulwark set
@@ -497,6 +498,9 @@ class ArenaRoom extends Room {
     if(b && b.ox !== undefined){
       dmg *= LoadoutCore.rangeMul(ld.weaponId, Math.hypot(b.x - b.ox, b.z - b.oz));
     }
+    // What HE Payload scales from: after range falloff, before crit. A crit
+    // should double what it hits, not the blast radius as well.
+    const splashBase = dmg;
     // Crit is decided when the round leaves the barrel, exactly as PvE does it
     // (b.crit), so one pellet's luck can't be re-rolled per target it pierces.
     const crit = b ? !!b.crit : (Math.random() < (Number(ld.crit) || 0));
@@ -517,7 +521,7 @@ class ArenaRoom extends Room {
       const ex = b ? b.x : t.x, ez = b ? b.z : t.z;   // splash from the impact, like PvE
       this.state.players.forEach((o, oid) => {
         if(oid === tid || oid === id || o.dead) return;
-        if(Math.hypot(o.x - ex, o.z - ez) <= PVP.explRadius) this.damage(o, PVP.explDmg);
+        if(Math.hypot(o.x - ex, o.z - ez) <= PVP.explRadius) this.damage(o, LoadoutCore.splashDamage(splashBase));
       });
       this.checkDeaths(id, p);
     }

@@ -58,7 +58,13 @@ for(const ab of ABIL){
 console.log('\nspecific effects:');
 { const s = scenario('explosive', 'm17');
   shoot(s);
-  check('explosive splashes a bystander', s.c.hp < 100, 'bystander hp=' + s.c.hp.toFixed(1));
+  const C2 = require('../loadout-core.js');
+  // HE Payload is a FRACTION of the hit now, not a flat 10, so a 13-damage M17
+  // round splashes 7.8 and an LS-1 round splashes 44. Assert the ratio, not a number.
+  const want = 100 - C2.splashDamage(13);
+  check('explosive splashes a bystander for a share of the hit',
+        Math.abs(s.c.hp - want) < 0.5,
+        'bystander hp=' + s.c.hp.toFixed(1) + ', expected ' + want.toFixed(1));
   check('the direct hit still takes more than the splash', (100 - s.b.hp) > (100 - s.c.hp)); }
 { const s = scenario('deadeye', 'm17');   // no firing_resist on the target
   let plain = 0; for(let i = 0; i < 400; i++){ const x = scenario(null, 'm17');

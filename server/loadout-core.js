@@ -12,7 +12,7 @@
 
   const WEAPONS = [
     {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:13, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
-    {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:9,  rof:95,   mag:30, reload:1500, spread:0.090, bspd:520,  pellets:1},
+    {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:10, rof:95,   mag:30, reload:1500, spread:0.110, bspd:520,  pellets:1},
     {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
     {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:700,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
     {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1100, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
@@ -112,6 +112,26 @@
      the map. Spread-stacking was strictly the best thing to do with six slots
      on every weapon, which is also why no optimal build took a damage part. */
   const SPREAD_FLOOR = 0.50;
+
+  /* ---- HE Payload --------------------------------------------------------
+     Splash used to be a flat 10 per hit, which means it scaled with how OFTEN
+     you hit - so the fastest weapon in the game won by construction. The
+     Havoc-9 owned all eight PvE bands and beat the LS-1 by 239%.
+
+     Scaling it off the damage that triggered it takes rate of fire out of the
+     equation: a fast, weak gun splashes little and often, a slow, heavy one
+     splashes hard and rarely, and splash DPS lands within a few percent across
+     the roster. It also makes the legendary itself better - flat splash was
+     worth 51% faster clears on an SMG and 19% on a sniper, so the same drop was
+     a jackpot or a dud depending on which gun you played. This is 34-42% on
+     everything.
+
+     Fed the post-falloff, PRE-crit damage: a crit should double what it hits,
+     not double the whole blast radius as well. */
+  const HE_SPLASH_FRAC = 0.60;
+  function splashDamage(dealt){
+    return Math.max(0, Number(dealt) || 0) * HE_SPLASH_FRAC;
+  }
   function fireSpread(spread, ads){
     const a = Math.max(0, Math.min(1, Number(ads) || 0));
     return Math.max(0, Number(spread) || 0) * (1 - a * ADS_SPREAD);
@@ -394,6 +414,7 @@
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
+                HE_SPLASH_FRAC, splashDamage,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node

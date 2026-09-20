@@ -22,15 +22,31 @@ const check = (l, ok, d) => { console.log((ok?'  PASS  ':'  FAIL  ')+l+(d?'   ['
 
 const R_HIT = 0.68, EYE = 1.54, TOP = 1.9, LEG = C.RAR.legendary.scale, CRIT_CAP = 0.30;
 
+/* Seeded, because this suite is a regression test and must not be a coin flip.
+   The Warden one-shots on a 30% crit, so whether it needs one shell or two is a
+   literal coin toss - unseeded, its measured TTK swung 0.43 to 0.48 between runs
+   and the build search picked a different winner each time, which made the band
+   assertions flaky. Same seed, same numbers, every run: if the output moves, the
+   GAME moved. */
+const SEED = 0x9E3779B9;
+let _s = SEED;
+const reseed = () => { _s = SEED; };
+const rnd = () => {
+  _s = (_s + 0x6D2B79F5) | 0;
+  let t = Math.imul(_s ^ (_s >>> 15), 1 | _s);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
 /* ---------------------------------------------------------------- harness */
 /* Probability one pellet connects, and the mean flight time of the ones that
    do. Same cone construction as tryFire: uniform +/-sprd per axis, normalised. */
 function hit(dist, sprd, speed, N){
   let h = 0, f = 0;
   for(let i = 0; i < N; i++){
-    let dx = 1 + (Math.random()-0.5)*2*sprd;
-    let dy =     (Math.random()-0.5)*2*sprd;
-    let dz =     (Math.random()-0.5)*2*sprd;
+    let dx = 1 + (rnd()-0.5)*2*sprd;
+    let dy =     (rnd()-0.5)*2*sprd;
+    let dz =     (rnd()-0.5)*2*sprd;
     const L = Math.hypot(dx,dy,dz); dx/=L; dy/=L; dz/=L;
     const ax = dx*0.85 - dist, az = dz*0.85;
     const vv = dx*dx + dz*dz, av = ax*dx + az*dz;
@@ -54,9 +70,9 @@ function ttk(S, dist, p, flight, trials){
     let t = 0, hp = 100, ammo = S.mag, burn = 0, guard = 0;
     while(hp > 0 && guard++ < 600){
       if(ammo <= 0){ t += S.reload/1000; ammo = S.mag; }
-      const crit = Math.random() < S.crit;
+      const crit = rnd() < S.crit;
       let landed = 0;
-      for(let k = 0; k < S.pellets; k++) if(Math.random() < p) landed++;
+      for(let k = 0; k < S.pellets; k++) if(rnd() < p) landed++;
       ammo--;
       if(landed){ hp -= landed * S.dmg * mul * (crit ? 2 : 1); burn = 3; }
       const step = S.rof/1000;
@@ -92,12 +108,18 @@ function bestBuild(wid){
     for(let i = 0; i < 6; i++){ pick.push(v % 4); v = (v/4)|0; }
     const S = statsFor(wid, pick);
     const sprd = C.fireSpread(S.spread*0.55, 1), speed = S.bspd/9;
+    /* Common random numbers. Taking the max of 4096 independently-noisy
+       estimates does not find the best build, it finds the luckiest one - the
+       winner's curse, and it moved the answer by more than the balance changes
+       being tested. Resetting the stream per candidate means every build faces
+       identical luck, so the differences between them are real. */
+    reseed();
     let sc = 0;
     for(const d of PROBE){
       const key = d + '|' + sprd.toFixed(5);
       if(!cache.has(key)) cache.set(key, hit(d, sprd, speed, 3000));
       const h = cache.get(key);
-      sc += h.p < 0.02 ? 12 : ttk(S, d, h.p, h.flight, 40);
+      sc += h.p < 0.02 ? 12 : ttk(S, d, h.p, h.flight, 120);
     }
     if(!best || sc < best.sc){ best = S; best.sc = sc; }
   }
@@ -166,6 +188,29 @@ console.log('\nADS AND SPREAD FLOOR');
         w.spread.toFixed(4));
 }
 
+console.log('\nHE PAYLOAD  (scales with the damage that triggered it, not the hit count)');
+{
+  console.log('    HE_SPLASH_FRAC = ' + C.HE_SPLASH_FRAC);
+  check('splash is a fraction of the hit',
+        Math.abs(C.splashDamage(10) - 10*C.HE_SPLASH_FRAC) < 1e-9 &&
+        Math.abs(C.splashDamage(73) - 73*C.HE_SPLASH_FRAC) < 1e-9,
+        C.splashDamage(10).toFixed(1) + ' off a 10-dmg hit, ' + C.splashDamage(73).toFixed(1) + ' off a 73');
+  check('nothing pathological for junk input',
+        C.splashDamage(0) === 0 && C.splashDamage(-5) === 0 && C.splashDamage(undefined) === 0);
+  /* The whole point. A flat 10 per hit gave the Havoc-9 ~120 splash/sec and the
+     LS-1 ~12, so the fastest gun in the game owned all eight PvE bands by
+     construction. Scaled off the hit, the rates converge. */
+  const rate = w => {
+    const S = C.computeStats(w.id, {});
+    return C.splashDamage(S.dmg) * S.pellets / (S.rof/1000);
+  };
+  const rates = C.WEAPONS.map(w => ({ id:w.id, r:rate(w) })).sort((a,b) => a.r - b.r);
+  console.log('    splash dps: ' + rates.map(x => x.id + ' ' + x.r.toFixed(0)).join('  '));
+  check('splash dps is within 3x across the roster',
+        rates[rates.length-1].r / rates[0].r <= 3.0,
+        (rates[rates.length-1].r / rates[0].r).toFixed(2) + 'x');
+}
+
 /* ------------------------------- 4. range bands, on each weapon's BEST build */
 console.log('\nRANGE BANDS  (exhaustive build search, ADS, measured)');
 const RANGES = [3, 8, 12.5, 17.5, 22.5, 27.5, 35, 45];
@@ -173,6 +218,7 @@ const T = {}, PH35 = {};
 for(const w of C.WEAPONS){
   const S = bestBuild(w.id);
   const sprd = C.fireSpread(S.spread*0.55, 1), speed = S.bspd/9;
+  reseed();                 // and the same draws for every weapon's band table
   T[w.id] = {};
   let line = '    ' + w.id.padEnd(10);
   for(const d of RANGES){
@@ -197,6 +243,15 @@ check('the Warden is not a marksman rifle: <70% of pellets land at 35u',
       PH35.warden < 0.70, (PH35.warden*100).toFixed(0) + '%');
 check('the LS-1 owns the long bands', owns.ls1.includes(35) && owns.ls1.includes(45));
 check('the LS-1 owns nothing point blank', !owns.ls1.some(d => d <= 8), owns.ls1.join(','));
+// The Havoc-9 was a strictly weaker VK Raptor: tied at 3u and worse at all seven
+// other ranges. An SMG should beat the rifle up close and lose badly at distance.
+check('the Havoc-9 beats the VK Raptor up close',
+      T.havoc9[3] < T.vkraptor[3] && T.havoc9[8] < T.vkraptor[8],
+      '3u ' + T.havoc9[3].toFixed(2) + ' vs ' + T.vkraptor[3].toFixed(2) +
+      ',  8u ' + T.havoc9[8].toFixed(2) + ' vs ' + T.vkraptor[8].toFixed(2));
+check('the Havoc-9 loses badly to it at range',
+      T.havoc9[45] > T.vkraptor[45] * 1.15,
+      '45u ' + T.havoc9[45].toFixed(2) + ' vs ' + T.vkraptor[45].toFixed(2));
 check('no weapon owns more than 5 of the 8 bands',
       ids.every(i => owns[i].length <= 5),
       ids.map(i => i+':'+owns[i].length).join(' '));
