@@ -669,7 +669,7 @@ const ABILITIES = {
   cryo:      {n:'Cryo Rounds',       d:'Hits slow the target 35% for 1.5s.',              minR:2},
   deadeye:   {n:'Deadeye',           d:'+12% crit chance (crits deal 2x). Stacks +6% each extra, cap 30%.', minR:2},
   swift:     {n:'Featherweight',     d:'+10% move speed. Stacks +5% each extra, cap 25%.', minR:2},
-  pierce:    {n:'AP Rounds',         d:'Shots pierce through one enemy.',                 minR:3},
+  pierce:    {n:'AP Rounds',         d:'Shots punch through one enemy AND through thin cover, at half damage.', minR:3},
   ricochet:  {n:'Ricochet Coating',  d:'Shots bounce off walls up to 3 times.',           minR:3},
   vampiric:  {n:'Vampiric Coating',  d:'Heal for 12% of damage dealt (8% in PvP).',        minR:3},
   explosive: {n:'HE Payload',        d:'Hits detonate, dealing 60% of the hit as splash to everyone nearby. Nothing in a 1v1.', minR:4},
@@ -690,7 +690,7 @@ const SETS = [
    bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
   {id:'ghost',   weapon:'ls1',      name:'Ghost Protocol',need:2, rarity:'legendary',
    pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'},
-   bonus:'SET · WALLS MEAN NOTHING — shots pierce every enemy in a line.', effect:'pierce_all'},
+   bonus:'SET · GHOST PROTOCOL — rounds travel 75% faster and pass through everything.', effect:'pierce_all'},
   {id:'jugg',    weapon:'goliath',  name:'Juggernaut',    need:4, rarity:'legendary',
    pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'},
    bonus:'SET · UNSTOPPABLE — take 30% less damage while firing.', effect:'firing_resist'},
@@ -2994,6 +2994,10 @@ function fire(e, dir){
       // muzzle + weapon, so range falloff measures the shot rather than the shooter
       wid:w.wid, ox:e.x + d.x*(e.r+0.35), oz:e.z + d.z*(e.r+0.35),
       pierce: ab.has('pierce_all') ? 99 : (ab.has('pierce') ? 1 : 0),
+      // AP Rounds: budget of solid wall this round may cross - mirrors server
+      // a seeker carries no wall budget, and a piercer does not seek - see server
+      wall: (ab.has('pierce') || ab.has('pierce_all')) && !seeker ? LoadoutCore.AP_WALL.budget : 0,
+      thruWall: false,
       bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 3 : 0,   // one bounce was worth ~0
       burn: ab.has('incendiary'),
       homing: seeker,
@@ -3730,7 +3734,8 @@ function tick(now){
     b.life -= dt;
     if(b.life<=0){ scene.remove(b.mesh); G.bullets.splice(i,1); continue; }
     const p = b.mesh.position;
-    if(b.homing){
+    // a seeker that came through cover stops seeking - mirrors server/index.js
+    if(b.homing && !b.thruWall){
       const HM = LoadoutCore.HOMING;
       let ht = null, hd = HM.seek * HM.seek;
       for(const e2 of G.ents){
@@ -3762,7 +3767,11 @@ function tick(now){
     if(ny>9) dead=true;
     if(!dead) for(const w of G.map.walls){
       if(nx>w.x && nx<w.x+w.w && nz>w.z && nz<w.z+w.d && ny < w.h){
-        if(b.bounce>0){
+        if(b.wall > 0){                    // AP Rounds burn wall budget
+          b.wall -= Math.hypot(b.vx, b.vy, b.vz) * dt;
+          b.thruWall = true;
+          if(b.wall <= 0) dead = true;
+        } else if(b.bounce>0){
           b.bounce--;
           const fromX = p.x <= w.x || p.x >= w.x+w.w;
           if(fromX) b.vx*=-1; else b.vz*=-1;
@@ -3782,7 +3791,7 @@ function tick(now){
         b.hitset.add(e.id);
         // Range falloff (LS-1 only today) - mirrors applyHit in server/index.js
         const fall = LoadoutCore.rangeMul(b.wid, Math.hypot(p.x - b.ox, p.z - b.oz));
-        damage(e, b.dmg * fall, b.owner, b.crit);
+        damage(e, b.dmg * fall * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
         spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
         if(b.burn && !e.dead){ e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; }
         if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);

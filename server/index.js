@@ -387,6 +387,14 @@ class ArenaRoom extends Room {
         vx: dx*speed, vy: dy*speed, vz: dz*speed,
         dmg: ld.dmg, life: 1.6,
         pierce: has('pierce_all') ? 99 : (has('pierce') ? 1 : 0),
+        // AP Rounds: how much solid wall this round may cross before it stops
+        // A seeker round carries no wall budget, and a piercing round does not
+        // seek. Otherwise Hornet plus AP Rounds is a round that curves toward
+        // someone through a wall (the target scan has no line of sight check)
+        // and then punches through it. This way your straight rounds pierce
+        // cover and your seeker rounds seek - one or the other, never both.
+        wall: (has('pierce') || has('pierce_all')) && !seeker ? LoadoutCore.AP_WALL.budget : 0,
+        thruWall: false,
         bounce: has('ricochet') ? 3 : 0,   // a single bounce almost never produced a hit
         homing: seeker,
         crit: Math.random() < (Number(ld.crit) || 0),   // build-dependent: stacked Deadeye + Saint
@@ -422,7 +430,13 @@ class ArenaRoom extends Room {
       b.life -= dt;
       if(b.life <= 0){ this.bullets.splice(i, 1); continue; }
 
-      if(b.homing){
+      // A seeker that has come through cover stops seeking. The target scan has
+      // no line of sight check - it takes the nearest body inside HOMING.seek
+      // whether you can see it or not - so AP Rounds plus the Hornet set would
+      // otherwise be a round that punches through a wall and then curves onto
+      // someone you cannot see. Fixing it here is cheaper and more predictable
+      // than raycasting line of sight for every bullet, every tick.
+      if(b.homing && !b.thruWall){
         const HM = LoadoutCore.HOMING;
         let ht = null, hd = HM.seek * HM.seek;
         this.state.players.forEach((t, tid) => {
@@ -465,7 +479,14 @@ class ArenaRoom extends Room {
         if(!dead){
           for(const w of this.walls){
             if(nx > w.x && nx < w.x+w.w && nz > w.z && nz < w.z+w.d && ny < w.h){
-              if(b.bounce > 0){
+              // AP Rounds burn their wall budget instead of stopping. Thin
+              // cover (every long barrier here is 1.5u) stops being absolute;
+              // the 4u pillars still eat the round.
+              if(b.wall > 0){
+                b.wall -= Math.hypot(b.vx, b.vy, b.vz) * sdt;
+                b.thruWall = true;
+                if(b.wall <= 0) dead = true;
+              } else if(b.bounce > 0){
                 b.bounce--;
                 if(b.x <= w.x || b.x >= w.x+w.w) b.vx *= -1; else b.vz *= -1;
               } else dead = true;
@@ -508,6 +529,8 @@ class ArenaRoom extends Room {
     }
     // What HE Payload scales from: after range falloff, before crit. A crit
     // should double what it hits, not the blast radius as well.
+    // a round that came through cover lands softer
+    if(b && b.thruWall) dmg *= LoadoutCore.AP_WALL.dmgMul;
     const splashBase = dmg;
     // Crit is decided when the round leaves the barrel, exactly as PvE does it
     // (b.crit), so one pellet's luck can't be re-rolled per target it pierces.

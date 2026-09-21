@@ -209,5 +209,76 @@ console.log('\nspecific effects:');
   }
 }
 
+/* AP Rounds now punch through thin cover, not through people. Piercing an
+   enemy measured at 2.8% of shots in a full FFA; thin cover is 8-12% of every
+   shot on these maps, and every long barrier here is exactly 1.5u deep. */
+{
+  const C5 = require('../loadout-core.js');
+  const wall = (x, w) => [{ x, z: 6, w, d: 8, h: 3.2 }];
+  const shoot = (ability, thickness) => {
+    const x = scenario(ability, 'm17');
+    x.r.walls = wall(13, thickness);          // between shooter (x10) and target (x14)
+    x.b.x = 18; x.b.z = 10; x.c.x = 99;
+    shoot_(x);
+    return { hp: x.b.hp, hit: x.b.hp < 100 };
+  };
+  const shoot_ = sc => { sc.r.fireT.set('A', -1);
+    sc.r.tryFire('A', sc.a, sc.r.inputs.get('A')); settle(sc.r); };
+  check('a plain round dies in 1u of cover', !shoot(null, 1.0).hit);
+  const thin = shoot('pierce', 1.0);
+  check('an AP round comes through 1u of cover', thin.hit, 'target hp=' + thin.hp.toFixed(1));
+  check('but lands at ' + (C5.AP_WALL.dmgMul*100) + '% damage',
+        Math.abs((100 - thin.hp) - 13 * C5.AP_WALL.dmgMul) < 0.6,
+        'took ' + (100 - thin.hp).toFixed(1) + ', a clean hit is 13');
+  /* 1.5u is the depth of every long barrier on these maps, and the budget has
+     to EXCEED it - a budget equal to the wall is consumed to exactly zero at
+     the far face and the round dies inside. Shipped at 1.5 once; it pierced
+     nothing but corner-clips. */
+  const barrier = shoot('pierce', 1.5);
+  check('an AP round crosses a real 1.5u barrier', barrier.hit,
+        'budget ' + C5.AP_WALL.budget + 'u vs a 1.5u wall');
+  check('a 4u pillar still stops an AP round', !shoot('pierce', 4.0).hit,
+        'budget is ' + C5.AP_WALL.budget + 'u');
+  /* A seeker must not also pierce. The homing target scan has NO line of sight
+     check, so a round that both seeks and pierces would curve onto someone
+     behind a wall and then punch through it. */
+  {
+    const y = scenario('pierce', 'havoc9');
+    y.r.loadouts.get('A').abilities.push('homing');
+    y.r.shotN.set('A', 0);
+    const budgets = [];
+    for(let k = 0; k < 4; k++){
+      y.r.bullets.length = 0; y.r.fireT.set('A', -1);
+      y.r.tryFire('A', y.a, y.r.inputs.get('A'));
+      const b = y.r.bullets[0];
+      budgets.push({ seeker: !!b.homing, wall: b.wall });
+    }
+    check('a seeker round carries no wall budget',
+          budgets.filter(b => b.seeker).every(b => b.wall === 0),
+          budgets.map(b => (b.seeker?'seek':'pierce')+':'+b.wall).join(' '));
+    check('a piercing round still gets its budget',
+          budgets.filter(b => !b.seeker).every(b => b.wall === C5.AP_WALL.budget),
+          String(C5.AP_WALL.budget));
+  }
+}
+
+/* Ghost Protocol: the LS-1's legendary set was pierce-everything, multiplying
+   that same 2.8%. It now overcharges the round instead, because travel time is
+   what actually makes sniping hard. */
+{
+  const C5 = require('../loadout-core.js');
+  const ghost = { barrel:{slot:'barrel',weapon:'ls1',rarity:'legendary',name:'Ghost Bore',mods:{},ability:null,set:'ghost'},
+                  optic: {slot:'optic', weapon:'ls1',rarity:'legendary',name:'Ghost Lens',mods:{},ability:null,set:'ghost'} };
+  const bare = C5.computeStats('ls1', {}), set = C5.computeStats('ls1', ghost);
+  check('the set activates', set.abilities.indexOf('pierce_all') >= 0, set.abilities.join(','));
+  check('and overcharges the round to x' + C5.OVERCHARGE,
+        Math.abs(set.bspd - bare.bspd * C5.OVERCHARGE) < 1e-9,
+        bare.bspd + ' -> ' + set.bspd);
+  check('no set, no overcharge', bare.bspd === C5.weaponById('ls1').bspd, String(bare.bspd));
+  // it must not leak onto every weapon
+  const v = C5.computeStats('vkraptor', {});
+  check('other weapons are untouched', v.bspd === C5.weaponById('vkraptor').bspd, String(v.bspd));
+}
+
 console.log('\n' + (fails ? fails + ' CHECK(S) FAILED' : 'ALL CHECKS PASSED'));
 process.exit(fails ? 1 : 0);

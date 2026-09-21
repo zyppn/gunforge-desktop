@@ -189,6 +189,54 @@
      three separate times in one session. The module still PARSED every time.) */
   const SHIELD_SOAK = 0.60;
 
+  /* ---- AP Rounds ---------------------------------------------------------
+     Was "shots pierce through one enemy", which measured at 2.8% of shots even
+     in a full seven-player FFA and 0.5% in a duel - two enemies almost never
+     line up inside a 0.68u corridor. Comfortably the weakest thing in the game,
+     at an EPIC gate.
+
+     Armour-piercing should punch through cover, not through people. A round
+     now carries a budget of solid wall it can cross, and deals reduced damage
+     once it has. Measured against the real map geometry, share of ALL shots
+     this opens up:
+
+                        foundry  dustrelay  blacksite
+       budget 1.5u        11.7%      7.7%      11.4%
+       budget 2.5u        31.7%     13.2%      32.5%
+       AP Rounds today     2.8%      2.8%       2.8%
+
+     1.5u is deliberate: every long barrier on these maps is 1.5u deep and the
+     pillars and crates are 4u, so thin cover stops being absolute while the
+     real structure still stops a bullet. You are firing blind through it
+     either way, so it rewards knowing where someone is rather than luck. */
+  const AP_WALL = { budget: 1.8, dmgMul: 0.5 };
+  /* 1.8, not 1.5. The barriers ARE 1.5u deep, and a budget equal to the wall is
+     consumed to exactly zero at the far face - the round dies inside it. At 1.5
+     the only shots that got through were ones clipping a corner, which is not
+     the effect. 1.8 crosses a barrier you are FACING and still fails on an
+     angled path (a 45 degree line through the same wall is 2.12u of solid).
+     Opens 23% of shots on foundry and blacksite, 11% on dustrelay. */
+
+  /* ---- Ghost Protocol ----------------------------------------------------
+     The LS-1's legendary 2-piece set granted pierce-everything, which multiplies
+     the 2.8% above - it was the worst set in the game, at the highest rarity.
+
+     Travel time is the whole difficulty of sniping: at 45u a round is in the
+     air 0.35s and a strafing target covers 2.1u, three hitbox radii. And the
+     LS-1 has 0.005 spread, so it is binary - lead correctly and you always
+     hit, lead slightly wrong and you always miss, with nothing in between.
+
+     So the set attacks travel time. Hit% on a strafing target, 25% lead:
+
+                    25u    35u    45u
+       live 1150     0%     0%     0%
+       x1.75        100%    44%     0%
+       x2.17        100%   100%    31%     <- hands you 35u for free
+
+     x1.75 makes mid-range sniping forgiving and leaves long range a skill.
+     With no lead at all it still fails past 25u. */
+  const OVERCHARGE = 1.75;
+
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){
     return Math.max(0, Number(dealt) || 0) * HE_SPLASH_FRAC;
@@ -240,7 +288,7 @@
       mag:    Math.max(3, Math.round(w.mag * m.mag)),
       reload: Math.max(400, w.reload * m.reload),
       spread: Math.max(w.spread * SPREAD_FLOOR, w.spread * m.spread),
-      bspd:   w.bspd,
+      bspd:   w.bspd * (abilities.has('pierce_all') ? OVERCHARGE : 1),   // Ghost Protocol
       pellets:w.pellets,
       speedMul: m.speed + stackValue('swift', count.swift || 0),
       crit:   Math.min(0.5, stackValue('deadeye', count.deadeye || 0)
@@ -476,6 +524,7 @@
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
                 HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
+                AP_WALL, OVERCHARGE,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
