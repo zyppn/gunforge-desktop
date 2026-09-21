@@ -128,6 +128,26 @@
 
      Fed the post-falloff, PRE-crit damage: a crit should double what it hits,
      not double the whole blast radius as well. */
+  /* ---- Hornet Swarm (homing) --------------------------------------------
+     Measured max aim error that still lands 100% of shots, at 10u:
+       no set          3 degrees
+       old seek 12u / cone 52deg / turn 3.5     20 degrees
+       these values                              6 degrees
+     Seven times the aim tolerance of every other build in the game is not a
+     set bonus, it is an aimbot - you could point most of the way past someone
+     and still hit. These land it at roughly DOUBLE the natural tolerance at
+     every range, which is a rule you can state: the Swarm forgives a near
+     miss, it does not do the aiming.
+
+     `vert` matters as much as the rest: at 4 the round snapped to chest height
+     on its own, so vertical aim was free. */
+  const HOMING = {
+    seek: 8,      // acquisition radius, world units
+    cone: 0.35,   // only bend toward a target within this angle of travel, rad
+    turn: 1.2,    // rad/sec
+    vert: 1.5,    // pull toward chest height
+  };
+
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){
     return Math.max(0, Number(dealt) || 0) * HE_SPLASH_FRAC;
@@ -414,7 +434,7 @@
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
-                HE_SPLASH_FRAC, splashDamage,
+                HE_SPLASH_FRAC, splashDamage, HOMING,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node

@@ -416,7 +416,8 @@ class ArenaRoom extends Room {
       if(b.life <= 0){ this.bullets.splice(i, 1); continue; }
 
       if(b.homing){
-        let ht = null, hd = 144;   // 12u seek radius, as in PvE
+        const HM = LoadoutCore.HOMING;
+        let ht = null, hd = HM.seek * HM.seek;
         this.state.players.forEach((t, tid) => {
           if(t.dead || tid === b.owner || b.hit.has(tid)) return;
           const ddx = t.x - b.x, ddz = t.z - b.z, dd = ddx*ddx + ddz*ddz;
@@ -428,10 +429,10 @@ class ArenaRoom extends Room {
           let dA = Math.atan2(ht.z - b.z, ht.x - b.x) - cur;
           while(dA >  Math.PI) dA -= 2*Math.PI;
           while(dA < -Math.PI) dA += 2*Math.PI;
-          if(Math.abs(dA) < 0.9){        // only bend toward targets ahead — no boomerangs
-            const na = cur + Math.max(-3.5*dt, Math.min(3.5*dt, dA));
+          if(Math.abs(dA) < HM.cone){    // only bend toward targets ahead — no boomerangs
+            const na = cur + Math.max(-HM.turn*dt, Math.min(HM.turn*dt, dA));
             b.vx = Math.cos(na)*spd; b.vz = Math.sin(na)*spd;
-            b.vy += Math.max(-6, Math.min(6, (1.1 - b.y)*4)) * dt;
+            b.vy += Math.max(-6, Math.min(6, (1.1 - b.y)*HM.vert)) * dt;
           }
         }
       }

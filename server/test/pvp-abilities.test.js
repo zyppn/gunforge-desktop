@@ -94,17 +94,42 @@ console.log('\nspecific effects:');
     shoot(x);
     if(x.a.hp >= 56) healed = true; }
   check('critheal tops the shooter up on a crit', healed); }
-{ const s = scenario('homing', 'm17'), t = scenario(null, 'm17');
-  // a target offset sideways: the wide corridor should forgive what a normal shot misses
-  let hHits = 0, nHits = 0;
-  for(let i = 0; i < 200; i++){
-    const h = scenario('homing', 'm17'); h.b.z = 11.2; h.c.x = 99;
-    shoot(h); if(h.b.hp < 100) hHits++;
-    const n = scenario(null, 'm17'); n.b.z = 11.2; n.c.x = 99;
-    shoot(n); if(n.b.hp < 100) nHits++;
-  }
-  console.log('    off-axis target: homing hit ' + hHits + '/200, plain hit ' + nHits + '/200');
-  check('homing forgives shots a plain round misses', hHits > nHits); }
+/* Hornet Swarm must forgive a near miss, not do the aiming. Measured against
+   the real server: sweep the target sideways and find the largest offset that
+   still lands, with the set and without it. Seven times the plain tolerance is
+   what this set used to be - you could aim most of the way past someone. */
+{
+  const HIT = 0.75, N = 40;
+  const maxOffset = ability => {
+    let best = 0;
+    for(let off = 0; off <= 4.0; off += 0.1){
+      let hits = 0;
+      for(let i = 0; i < N; i++){
+        const x = scenario(ability, 'm17');
+        x.b.x = 20; x.b.z = 10 + off;        // 10u downrange, offset sideways
+        x.c.x = 99;                          // bystander well out of the way
+        shoot(x);
+        if(x.b.hp < 100) hits++;
+      }
+      if(hits / N >= HIT) best = off; else break;
+    }
+    return best;
+  };
+  const withSet = maxOffset('homing'), plain = maxOffset(null);
+  const ratio = plain > 0 ? withSet / plain : Infinity;
+  console.log('    max sideways offset still hitting (target 10u away): set ' +
+              withSet.toFixed(1) + 'u, plain ' + plain.toFixed(1) + 'u  ->  ' + ratio.toFixed(2) + 'x');
+  check('the Swarm forgives what a plain round misses', withSet > plain,
+        withSet.toFixed(1) + 'u vs ' + plain.toFixed(1) + 'u');
+  // Bound, not a target: 0.1u steps at 10u resolve to ~0.6 degrees, so the
+  // ratio carries a step of slack either way. It was SEVEN times before.
+  check('but it does NOT aim for you (under 3x the plain tolerance)', ratio < 3.0,
+        ratio.toFixed(2) + 'x');
+  const C3 = require('../loadout-core.js');
+  check('homing constants are shared, not hardcoded',
+        C3.HOMING && C3.HOMING.seek > 0 && C3.HOMING.cone > 0 && C3.HOMING.turn > 0,
+        JSON.stringify(C3.HOMING));
+}
 
 console.log('\n' + (fails ? fails + ' CHECK(S) FAILED' : 'ALL CHECKS PASSED'));
 process.exit(fails ? 1 : 0);

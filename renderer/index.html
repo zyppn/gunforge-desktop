@@ -681,7 +681,7 @@ const SETS = [
    bonus:'SET · ABSOLUTION — +15% critical chance, and critical hits restore 10 HP.', effect:'critheal'},
   {id:'hornet',  weapon:'havoc9',   name:'Hornet Swarm',  need:3, rarity:'epic',
    pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'},
-   bonus:'SET · SEEKER SWARM — bullets curve toward nearby enemies.', effect:'homing'},
+   bonus:'SET · SEEKER SWARM — bullets curve toward enemies within 8m, forgiving a near miss.', effect:'homing'},
   {id:'dragon',  weapon:'vkraptor', name:'Dragonfire',    need:2, rarity:'epic',
    pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'},
    bonus:'SET · EXHALE — your kills detonate in dragonfire, igniting nearby enemies.', effect:'fire_nova'},
@@ -3723,7 +3723,8 @@ function tick(now){
     if(b.life<=0){ scene.remove(b.mesh); G.bullets.splice(i,1); continue; }
     const p = b.mesh.position;
     if(b.homing){
-      let ht = null, hd = 144; // seek radius 12u
+      const HM = LoadoutCore.HOMING;
+      let ht = null, hd = HM.seek * HM.seek;
       for(const e2 of G.ents){
         if(e2.dead || e2 === b.owner || !hostile(b.owner, e2) || b.hitset.has(e2.id)) continue;
         const ddx = e2.x-p.x, ddz = e2.z-p.z, dd = ddx*ddx + ddz*ddz;
@@ -3736,11 +3737,11 @@ function tick(now){
         let dA = want - cur;
         while(dA > Math.PI) dA -= 2*Math.PI;
         while(dA < -Math.PI) dA += 2*Math.PI;
-        if(Math.abs(dA) < 0.9){ // only bend toward targets roughly ahead — no boomerangs
-          const turn = Math.max(-3.5*dt, Math.min(3.5*dt, dA));
+        if(Math.abs(dA) < HM.cone){ // only bend toward targets roughly ahead — no boomerangs
+          const turn = Math.max(-HM.turn*dt, Math.min(HM.turn*dt, dA));
           const na = cur + turn;
           b.vx = Math.cos(na)*spd; b.vz = Math.sin(na)*spd;
-          b.vy += Math.max(-6, Math.min(6, (1.1 - p.y)*4)) * dt; // gentle vertical seek to chest height
+          b.vy += Math.max(-6, Math.min(6, (1.1 - p.y)*HM.vert)) * dt; // gentle vertical seek to chest height
         }
       }
     }
