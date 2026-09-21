@@ -690,7 +690,7 @@ const SETS = [
    bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
   {id:'ghost',   weapon:'ls1',      name:'Ghost Protocol',need:2, rarity:'legendary',
    pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'},
-   bonus:'SET · GHOST PROTOCOL — rounds travel 160% faster and pass through everything.', effect:'pierce_all'},
+   bonus:'SET · GHOST PROTOCOL — rounds travel 160% faster, pass through everything, and you keep full speed while scoped.', effect:'pierce_all'},
   {id:'jugg',    weapon:'goliath',  name:'Juggernaut',    need:4, rarity:'legendary',
    pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'},
    bonus:'SET · UNSTOPPABLE — take 30% less damage while firing.', effect:'firing_resist'},
@@ -3626,7 +3626,8 @@ function tick(now){
     let f=0, r=0;
     if(act('forward'))f++; if(act('back'))f--; if(act('right'))r++; if(act('left'))r--;
     if(f||r){
-      const sp = me.baseSpeed * (me.slowT>0?0.65:1) * (1 - adsT*0.4);
+      // Ghost Protocol lifts the scope movement tax - mirrors server/index.js
+      const sp = me.baseSpeed * (me.slowT>0?0.65:1) * (1 - adsT*LoadoutCore.adsSlow(me.wep.abilities));
       let dx = (-Math.sin(yaw))*f + Math.cos(yaw)*r;
       let dz = (-Math.cos(yaw))*f + (-Math.sin(yaw))*r;
       const ml = Math.hypot(dx,dz)||1;

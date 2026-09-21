@@ -282,6 +282,15 @@ console.log('\nspecific effects:');
      A 45u shot must land inside ~150ms or it reads as an ordinary bullet. */
   const flight45 = 45 / (set.bspd/9) * 1000;
   check('a 45u shot arrives in under 150ms', flight45 < 150, flight45.toFixed(0) + 'ms');
+  /* Scope mobility is the set's CEILING, where the speed is its floor. The LS-1
+     crit already one-shots at 190, so no set can raise its ceiling with damage:
+     a guaranteed crit measured at 12.2 kills/life against a field of 4.5-6.3. */
+  check('Ghost lifts the scope movement tax', C5.adsSlow(set.abilities) === 0,
+        'scoped speed x' + (1 - C5.adsSlow(set.abilities)).toFixed(2));
+  check('everyone else still pays it', C5.adsSlow(bare.abilities) === C5.ADS_SLOW,
+        'scoped speed x' + (1 - C5.adsSlow(bare.abilities)).toFixed(2));
+  check('adsSlow takes an array or a Set', C5.adsSlow(new Set(['pierce_all'])) === 0 &&
+        C5.adsSlow(new Set()) === C5.ADS_SLOW);
   // it must not leak onto every weapon
   const v = C5.computeStats('vkraptor', {});
   check('other weapons are untouched', v.bspd === C5.weaponById('vkraptor').bspd, String(v.bspd));

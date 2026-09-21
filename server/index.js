@@ -237,7 +237,9 @@ class ArenaRoom extends Room {
         // the client slows to 60% while aiming; mirror it or ADS guarantees drift
         const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
         const chill = p.slowT > 0 ? PVP.slowMul : 1;   // cryo
-        const spd = SPEED * Math.max(0.5, Math.min(1.6, (pl && pl.speedMul) || 1)) * (1 - ads * 0.4) * chill;
+        // Ghost Protocol lifts the scope movement tax entirely
+        const adsPen = LoadoutCore.adsSlow((pl && pl.abilities) || []);
+        const spd = SPEED * Math.max(0.5, Math.min(1.6, (pl && pl.speedMul) || 1)) * (1 - ads * adsPen) * chill;
         const nx = p.x + (inp.mx/Math.max(1,len)) * spd * dt;
         const nz = p.z + (inp.mz/Math.max(1,len)) * spd * dt;
         if(!this.collides(nx, p.z)) p.x = clamp(nx, PLAYER_R, AW - PLAYER_R);

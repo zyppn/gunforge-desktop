@@ -249,6 +249,28 @@
      leave the space it was in. Past 55u you are leading again. */
   const OVERCHARGE = 2.6;
 
+  /* Scoping costs 40% of your movement speed. For a sniper that is the whole
+     tax - you cannot reposition while aiming - and Ghost Protocol lifts it.
+
+     Why this and not more damage: the LS-1's crit ALREADY one-shots at 190, so
+     its ceiling is maxed and no set can raise it that way. A guaranteed crit
+     measured at 12.2 kills per life against a field of 4.5 to 6.3, which is
+     double the best build in the game. The only room left is reliability and
+     utility.
+
+     Measured worth of moving at full speed while scoped: x1.25 effective
+     health while you are aiming, comparable to four Featherweight parts. And
+     it is a CEILING effect - it pays only if you actually move while scoped,
+     where the speed buff is a floor effect that only pays if you lead badly.
+     Together the set covers both: rank against the field goes #1/#1/#4/#9 by
+     lead quality with speed alone, and #1/#1/#2/#4 with both. */
+  const ADS_SLOW = 0.40;
+  function adsSlow(abilities){
+    const has = abilities && (abilities.indexOf ? abilities.indexOf('pierce_all') >= 0
+                                                : abilities.has('pierce_all'));
+    return has ? 0 : ADS_SLOW;
+  }
+
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){
     return Math.max(0, Number(dealt) || 0) * HE_SPLASH_FRAC;
@@ -536,7 +558,7 @@
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
                 HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
-                AP_WALL, OVERCHARGE,
+                AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
