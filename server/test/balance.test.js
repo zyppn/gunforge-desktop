@@ -38,6 +38,19 @@ const rnd = () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
+/* Every name the rest of the codebase imports must actually resolve. Editing
+   this file by slicing out a block ate SHIELD_SOAK twice in one session - the
+   module still PARSED, it just threw on require. node --check does not catch
+   that; this does. */
+console.log('EXPORTS');
+for(const k of ['WEAPONS','SLOTS','SETS','weaponById','activeSets','computeStats',
+                'sanitizeEquipped','rollServerDrop','storeWindow','rollDailyStore',
+                'STORE_PRICE','STORE_SLOTS','FALLOFF','rangeMul','ADS_SPREAD',
+                'fireSpread','SPREAD_FLOOR','HE_SPLASH_FRAC','splashDamage',
+                'HOMING','SHIELD_SOAK','PART_POOL','RAR']){
+  check(k + ' is exported', C[k] !== undefined, typeof C[k]);
+}
+
 /* ---------------------------------------------------------------- harness */
 /* Probability one pellet connects, and the mean flight time of the ones that
    do. Same cone construction as tryFire: uniform +/-sprd per axis, normalised. */

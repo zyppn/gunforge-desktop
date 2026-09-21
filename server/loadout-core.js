@@ -129,18 +129,27 @@
      Fed the post-falloff, PRE-crit damage: a crit should double what it hits,
      not double the whole blast radius as well. */
   /* ---- Hornet Swarm (homing) --------------------------------------------
-     Measured max aim error that still lands 100% of shots, at 10u:
-       no set          3 degrees
-       old seek 12u / cone 52deg / turn 3.5     20 degrees
-       these values                              6 degrees
-     Seven times the aim tolerance of every other build in the game is not a
-     set bonus, it is an aimbot - you could point most of the way past someone
-     and still hit. These land it at roughly DOUBLE the natural tolerance at
-     every range, which is a rule you can state: the Swarm forgives a near
-     miss, it does not do the aiming.
+     Second pass, from play, after the first one was measured wrong. Hit rate
+     at 8u on a target strafing at 6 u/s, by how well the shot is led:
 
-     `vert` matters as much as the rest: at 4 the round snapped to chest height
-     on its own, so vertical aim was free. */
+                        no lead   quarter   half   good
+       no set              43%      65%      86%   100%
+       first nerf         100%     100%     100%   100%    <- could not miss
+       these values        67%      90%     100%   100%
+
+     Worth about twenty points when you lead badly and nothing once you are
+     already accurate, which is the shape a set should have: it rewards being
+     in its range, it does not replace aiming.
+
+     `turn` is the lever that matters - it is the authority the round has to
+     correct, and at 1.2 rad/s that authority was total. `seek` is the range
+     the set works at and wants to stay wide; cutting it instead just deletes
+     the set. `vert` is 0 because a round that snapped to chest height made
+     vertical aim free, which is not something to hand anyone.
+
+     The law is pure pursuit: it steers at where the target IS, so it can never
+     lead for you, and past its seek radius it would drag a well-led shot back
+     behind the target. That is why the authority has to stay low. */
   /* ---- Bulwark (killshield) ----------------------------------------------
      The fraction of an incoming hit a shield may absorb. It used to be all of
      it, which made the set an unbounded economy rather than a bonus: you gain
@@ -149,7 +158,7 @@
      about 14, so the shotgun set was simply immortality while you kept killing.
 
      Measured kills per life against a bare build, averaged over 15-50 damage
-     per fight: live 50.94x, this 2.28x. For scale a single Vampiric part is
+     per fight: before 50.94x, this 2.28x. For scale a single Vampiric part is
      2.36x and the 4-piece LEGENDARY Juggernaut set is 1.63x.
 
      Soaking only part of a hit is what removes the SHAPE of the problem -
@@ -160,9 +169,9 @@
 
   const HOMING = {
     seek: 8,      // acquisition radius, world units
-    cone: 0.35,   // only bend toward a target within this angle of travel, rad
-    turn: 1.2,    // rad/sec
-    vert: 1.5,    // pull toward chest height
+    cone: 0.26,   // only bend toward a target within this angle of travel, rad
+    turn: 0.45,   // rad/sec - the correction authority, and the real lever
+    vert: 0,      // no vertical assist - aim up and down yourself
   };
 
   const HE_SPLASH_FRAC = 0.60;

@@ -118,40 +118,65 @@ console.log('\nspecific effects:');
     shoot(x);
     if(x.a.hp >= 56) healed = true; }
   check('critheal tops the shooter up on a crit', healed); }
-/* Hornet Swarm must forgive a near miss, not do the aiming. Measured against
-   the real server: sweep the target sideways and find the largest offset that
-   still lands, with the set and without it. Seven times the plain tolerance is
-   what this set used to be - you could aim most of the way past someone. */
+/* Hornet Swarm, measured the way it is actually used: against a target that is
+   STRAFING, with the shot only partly led. The first version of this test fired
+   at a stationary target, which is not what homing is for - it passed while the
+   set was still turning a 58% hit rate into a 99% one at point blank. Aim at a
+   moving target, lead it badly on purpose, and count what lands. */
 {
-  const HIT = 0.75, N = 40;
-  const maxOffset = ability => {
-    let best = 0;
-    for(let off = 0; off <= 4.0; off += 0.1){
-      let hits = 0;
-      for(let i = 0; i < N; i++){
-        const x = scenario(ability, 'm17');
-        x.b.x = 20; x.b.z = 10 + off;        // 10u downrange, offset sideways
-        x.c.x = 99;                          // bystander well out of the way
-        shoot(x);
-        if(x.b.hp < 100) hits++;
+  // 8u at 30% lead is the point that discriminates: closer and everything hits
+  // regardless, further and nothing does. N is high because this is a coin-flip
+  // measurement against the live server, which cannot be seeded from here.
+  // 8u at 20% lead is where this discriminates: the set's whole value is
+  // rescuing a badly led shot inside its seek radius.
+  const SPD = 6, DIST = 8, LEAD = 0.2, N = 300;
+  const rate = ability => {
+    let hits = 0;
+    for(let i = 0; i < N; i++){
+      const x = scenario(ability, 'havoc9');
+      x.b.x = 10 + DIST; x.b.z = 10; x.c.x = 99;
+      const dir = i % 2 ? 1 : -1;
+      const speed = x.ld.bspd / 9;
+      const aimZ = dir * SPD * (DIST / speed) * LEAD;     // partial lead
+      x.r.inputs.set('A', { mx:0, mz:0, yaw:Math.atan2(aimZ, DIST), pitch:0, ads:0, fire:true });
+      x.r.fireT.set('A', -1);
+      x.r.tryFire('A', x.a, x.r.inputs.get('A'));
+      const dt = 1/30;
+      for(let k = 0; k < 60 && x.r.bullets.length; k++){
+        x.b.z += dir * SPD * dt;          // the target keeps strafing mid-flight
+        x.r.stepBullets(dt);
       }
-      if(hits / N >= HIT) best = off; else break;
+      if(x.b.hp < 100) hits++;
     }
-    return best;
+    return hits / N;
   };
-  const withSet = maxOffset('homing'), plain = maxOffset(null);
-  const ratio = plain > 0 ? withSet / plain : Infinity;
-  console.log('    max sideways offset still hitting (target 10u away): set ' +
-              withSet.toFixed(1) + 'u, plain ' + plain.toFixed(1) + 'u  ->  ' + ratio.toFixed(2) + 'x');
-  check('the Swarm forgives what a plain round misses', withSet > plain,
-        withSet.toFixed(1) + 'u vs ' + plain.toFixed(1) + 'u');
-  // Bound, not a target: 0.1u steps at 10u resolve to ~0.6 degrees, so the
-  // ratio carries a step of slack either way. It was SEVEN times before.
-  check('but it does NOT aim for you (under 3x the plain tolerance)', ratio < 3.0,
-        ratio.toFixed(2) + 'x');
+  /* Seeded, with common random numbers: both arms face identical spread and
+     crit draws, so the difference between them is the SET and not luck.
+     Unseeded this measured a 4 to 17 point gap run to run and the assertion
+     passed or failed at random. */
+  const realRandom = Math.random;
+  let _h = 0;
+  const seedRng = () => {
+    _h = 0x9E3779B9;
+    Math.random = () => {
+      _h = (_h + 0x6D2B79F5) | 0;
+      let t = Math.imul(_h ^ (_h >>> 15), 1 | _h);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  seedRng(); const withSet = rate('homing');
+  seedRng(); const plain   = rate(null);
+  Math.random = realRandom;
+  console.log('    strafing target at ' + DIST + 'u, ' + (LEAD*100) + '% lead:  set ' +
+              (withSet*100).toFixed(0) + '%, plain ' + (plain*100).toFixed(0) + '%');
+  check('the Swarm rescues a badly led shot', withSet > plain + 0.08,
+        (withSet*100).toFixed(0) + '% vs ' + (plain*100).toFixed(0) + '%');
+  // It used to read 100% here. A set that cannot miss is not a set.
+  check('but it is not a guaranteed hit', withSet < 0.92, (withSet*100).toFixed(0) + '%');
   const C3 = require('../loadout-core.js');
   check('homing constants are shared, not hardcoded',
-        C3.HOMING && C3.HOMING.seek > 0 && C3.HOMING.cone > 0 && C3.HOMING.turn > 0,
+        C3.HOMING && C3.HOMING.seek > 0 && C3.HOMING.turn > 0 && C3.HOMING.vert === 0,
         JSON.stringify(C3.HOMING));
 }
 
