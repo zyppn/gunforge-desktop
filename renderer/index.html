@@ -681,7 +681,7 @@ const SETS = [
    bonus:'SET · ABSOLUTION — +15% critical chance, and critical hits restore 10 HP.', effect:'critheal'},
   {id:'hornet',  weapon:'havoc9',   name:'Hornet Swarm',  need:3, rarity:'epic',
    pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'},
-   bonus:'SET · SEEKER SWARM — bullets curve toward enemies within 8m, forgiving a badly led shot.', effect:'homing'},
+   bonus:'SET · SEEKER SWARM — every second round is a seeker that curves onto enemies within 8m.', effect:'homing'},
   {id:'dragon',  weapon:'vkraptor', name:'Dragonfire',    need:2, rarity:'epic',
    pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'},
    bonus:'SET · EXHALE — your kills detonate in dragonfire, igniting nearby enemies.', effect:'fire_nova'},
@@ -2970,6 +2970,11 @@ function fire(e, dir){
   const oy = e.isPlayer ? EYE - 0.06 : (e.grunt ? 1.2 : 1.5);
   // ADS tightening lives in loadout-core so PvE, PvP and the armory agree.
   const sprd = LoadoutCore.fireSpread(w.spread, e.isPlayer ? adsT : (e.aimT||0));
+  // Hornet Swarm: one round in HOMING.every is a seeker, the rest fly straight.
+  // The seeker is drawn bigger and in the set's colour ON PURPOSE - the whole
+  // point of the cadence is that you can SEE the set working.
+  e.shotN = (e.shotN | 0) + 1;
+  const seeker = ab.has('homing') && (e.shotN % LoadoutCore.HOMING.every === 0);
   for(let i=0;i<w.pellets;i++){
     const d = dir.clone();
     d.x += (Math.random()-0.5)*2*sprd;
@@ -2977,8 +2982,10 @@ function fire(e, dir){
     d.z += (Math.random()-0.5)*2*sprd;
     d.normalize();
     const speed = e.isPlayer ? w.bspd/9 : w.bspd;
-    const color = e.isPlayer ? 0xF5C468 : (e.grunt ? 0xB0685E : 0xD8DEE6);
+    const color = seeker ? 0x9FE870
+                : e.isPlayer ? 0xF5C468 : (e.grunt ? 0xB0685E : 0xD8DEE6);
     const m = new THREE.Mesh(bulletGeo, bMat(color));
+    if(seeker) m.scale.setScalar(1.7);
     m.position.set(e.x + d.x*(e.r+0.35), oy, e.z + d.z*(e.r+0.35));
     scene.add(m);
     G.bullets.push({
@@ -2989,7 +2996,7 @@ function fire(e, dir){
       pierce: ab.has('pierce_all') ? 99 : (ab.has('pierce') ? 1 : 0),
       bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 3 : 0,   // one bounce was worth ~0
       burn: ab.has('incendiary'),
-      homing: ab.has('homing'),
+      homing: seeker,
       cryo: ab.has('cryo'), vamp: ab.has('vampiric'), expl: ab.has('explosive'),
       crit: Math.random() < (w.crit||0),
       hitset: new Set()
@@ -4224,7 +4231,8 @@ function startLiveMatch(){
       live.tracers = live.tracers || [];
       const wire = m.b || [];
       for(let i = 0; i + 5 < wire.length; i += 6){
-        const tm = new THREE.Mesh(bulletGeo, bMat(0xD8DEE6));  // enemy-fire colour, as in FFA
+        const tm = new THREE.Mesh(bulletGeo, bMat(m.s ? 0x9FE870 : 0xD8DEE6)); // seeker rounds read as the set
+        if(m.s) tm.scale.setScalar(1.7);
         tm.position.set(wire[i], wire[i+1], wire[i+2]);
         scene.add(tm);
         live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6 });

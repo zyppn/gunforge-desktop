@@ -129,27 +129,45 @@
      Fed the post-falloff, PRE-crit damage: a crit should double what it hits,
      not double the whole blast radius as well. */
   /* ---- Hornet Swarm (homing) --------------------------------------------
-     Second pass, from play, after the first one was measured wrong. Hit rate
-     at 8u on a target strafing at 6 u/s, by how well the shot is led:
+     Third pass. The set was reported as unnoticeable, and the measurement said
+     why: the Havoc-9 fights at 3-6u, where you already hit 94-100% WITHOUT the
+     set, so there was no headroom for a uniform nudge to work in. Turning the
+     dial up could not fix that - 100% is 100%.
 
-                        no lead   quarter   half   good
-       no set              43%      65%      86%   100%
-       first nerf         100%     100%     100%   100%    <- could not miss
-       these values        67%      90%     100%   100%
+     So the fix is not strength, it is legibility. One round in `every` is a
+     full-strength seeker and the rest fly perfectly straight. Same idea as the
+     player suggested: you SEE the set work, because two rounds go where you
+     pointed and the third visibly whips onto target.
 
-     Worth about twenty points when you lead badly and nothing once you are
-     already accurate, which is the shape a set should have: it rewards being
-     in its range, it does not replace aiming.
+     Hit rate at 8u on a target strafing at 6 u/s:
 
-     `turn` is the lever that matters - it is the authority the round has to
-     correct, and at 1.2 rad/s that authority was total. `seek` is the range
-     the set works at and wants to stay wide; cutting it instead just deletes
-     the set. `vert` is 0 because a round that snapped to chest height made
-     vertical aim free, which is not something to hand anyone.
+                            no lead   quarter   half
+       no set                  44%      65%      86%
+       1.4.28 (uniform nudge)  68%      89%     100%
+       this (1 in 2 seeks)     72%      82%      93%
 
-     The law is pure pursuit: it steers at where the target IS, so it can never
-     lead for you, and past its seek radius it would drag a well-led shot back
-     behind the target. That is why the authority has to stay low. */
+     Note the SHAPE, which is the point. Better than 1.4.28 at rescuing a shot
+     you would clearly have whiffed, WORSE at guaranteeing a near miss. The
+     "I pointed vaguely at him and it all landed" feeling came from near misses
+     being automatic, and this gives that up deliberately.
+
+     Cheaper, too: half the rounds skip the per-tick target scan entirely.
+
+     vert stays 0. The seeker rounds are strong enough horizontally; snapping
+     them to chest height as well would hand over vertical aim for free.
+
+     The law is pure pursuit - it steers at where the target IS, never where it
+     is going. That caps what it can do at range and is why `seek` stays tight:
+     widening it made a 16u shot go from 19% to 1%, because the round spends
+     the whole flight aiming behind a moving target. */
+  const HOMING = {
+    every: 2,     // 1 round in this many is a seeker; the rest fly straight
+    seek: 8,      // acquisition radius, world units
+    cone: 0.35,   // only bend toward a target within this angle of travel, rad
+    turn: 1.2,    // rad/sec - full authority, but only on the seeker rounds
+    vert: 0,      // no vertical assist - aim up and down yourself
+  };
+
   /* ---- Bulwark (killshield) ----------------------------------------------
      The fraction of an incoming hit a shield may absorb. It used to be all of
      it, which made the set an unbounded economy rather than a bonus: you gain
@@ -164,15 +182,12 @@
      Soaking only part of a hit is what removes the SHAPE of the problem -
      lowering the numbers just moves the break-even down, and decay made the
      set swing between 21x and 1.6x depending on how busy the lobby was. With
-     a soak you always lose some hp, at every damage level, in every lobby. */
-  const SHIELD_SOAK = 0.60;
+     a soak you always lose some hp, at every damage level, in every lobby.
 
-  const HOMING = {
-    seek: 8,      // acquisition radius, world units
-    cone: 0.26,   // only bend toward a target within this angle of travel, rad
-    turn: 0.45,   // rad/sec - the correction authority, and the real lever
-    vert: 0,      // no vertical assist - aim up and down yourself
-  };
+     (Deliberately placed AFTER the HOMING block: it sat between the Hornet
+     comment and HOMING, and editing that region by slice deleted this constant
+     three separate times in one session. The module still PARSED every time.) */
+  const SHIELD_SOAK = 0.60;
 
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){

@@ -134,6 +134,10 @@ console.log('\nspecific effects:');
     let hits = 0;
     for(let i = 0; i < N; i++){
       const x = scenario(ability, 'havoc9');
+      // Alternate the shot counter so half the trials are seeker rounds and
+      // half are not - that IS the set, and testing only the seekers would
+      // measure a weapon nobody fires.
+      x.r.shotN.set('A', i % 2);
       x.b.x = 10 + DIST; x.b.z = 10; x.c.x = 99;
       const dir = i % 2 ? 1 : -1;
       const speed = x.ld.bspd / 9;
@@ -178,6 +182,31 @@ console.log('\nspecific effects:');
   check('homing constants are shared, not hardcoded',
         C3.HOMING && C3.HOMING.seek > 0 && C3.HOMING.turn > 0 && C3.HOMING.vert === 0,
         JSON.stringify(C3.HOMING));
+  /* The cadence is the mechanic: one seeker in `every`, the rest dead straight.
+     If this silently became every-round again it would be the 1.4.27 aimbot
+     back, and the hit-rate check above would still pass. */
+  {
+    const y = scenario('homing', 'havoc9');
+    y.r.shotN.set('A', 0);
+    let seekers = 0;
+    for(let k = 0; k < 6; k++){
+      y.r.bullets.length = 0;
+      y.r.fireT.set('A', -1);
+      y.r.tryFire('A', y.a, y.r.inputs.get('A'));
+      if(y.r.bullets.some(b => b.homing)) seekers++;
+    }
+    check('one round in ' + C3.HOMING.every + ' is a seeker, the rest fly straight',
+          seekers === 6 / C3.HOMING.every, seekers + ' of 6');
+    const z = scenario(null, 'havoc9');
+    z.r.shotN.set('A', 0);
+    let any = 0;
+    for(let k = 0; k < 6; k++){
+      z.r.bullets.length = 0; z.r.fireT.set('A', -1);
+      z.r.tryFire('A', z.a, z.r.inputs.get('A'));
+      if(z.r.bullets.some(b => b.homing)) any++;
+    }
+    check('no set means no seekers at all', any === 0, any + ' of 6');
+  }
 }
 
 console.log('\n' + (fails ? fails + ' CHECK(S) FAILED' : 'ALL CHECKS PASSED'));

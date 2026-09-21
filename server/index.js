@@ -113,6 +113,7 @@ class ArenaRoom extends Room {
     this.spawns = MAPS[state.map].spawns;
     this.inputs = new Map();   // sessionId -> latest input
     this.fireT = new Map();    // sessionId -> next allowed fire time
+    this.shotN = new Map();    // sessionId -> shots fired, for the Swarm cadence
     this.loadouts = new Map(); // sessionId -> computed weapon stats (server-authoritative)
     this.playerIds = new Map(); // sessionId -> supabase players.id (verified)
     this.burnSrc = new Map();   // sessionId -> who set them alight (for kill credit)
@@ -350,6 +351,11 @@ class ArenaRoom extends Room {
     const ab = ld.abilities || [];
     const has = k => ab.indexOf(k) >= 0;
     const pellets = Math.max(1, ld.pellets || 1);
+    // Hornet Swarm fires one seeker in every HOMING.every rounds; the rest fly
+    // straight. Legibility, not strength - see loadout-core.
+    const shotN = (this.shotN.get(id) || 0) + 1;
+    this.shotN.set(id, shotN);
+    const seeker = has('homing') && (shotN % LoadoutCore.HOMING.every === 0);
     // Mirrors the client exactly: it builds its weapon with spread = L.spread * 0.55
     // and then tightens by (1 - adsT * 0.55) when aimed. The server used raw L.spread
     // and no ADS term at all, so it rolled a pattern ~1.8x wider than the one you saw
@@ -382,7 +388,7 @@ class ArenaRoom extends Room {
         dmg: ld.dmg, life: 1.6,
         pierce: has('pierce_all') ? 99 : (has('pierce') ? 1 : 0),
         bounce: has('ricochet') ? 3 : 0,   // a single bounce almost never produced a hit
-        homing: has('homing'),
+        homing: seeker,
         crit: Math.random() < (Number(ld.crit) || 0),   // build-dependent: stacked Deadeye + Saint
         hit: new Set(),
       };
@@ -393,7 +399,8 @@ class ArenaRoom extends Room {
       wire.push(+b.x.toFixed(2), +b.y.toFixed(2), +b.z.toFixed(2),
                 +b.vx.toFixed(2), +b.vy.toFixed(2), +b.vz.toFixed(2));
     }
-    this.broadcast('shot', { id, b: wire }, { except: this.clients.find(c => c.sessionId === id) });
+    this.broadcast('shot', { id, b: wire, s: seeker ? 1 : 0 },
+                   { except: this.clients.find(c => c.sessionId === id) });
   }
 
   /* ------------------------------------------------------------------
