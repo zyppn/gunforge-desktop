@@ -275,6 +275,13 @@ console.log('\nspecific effects:');
         Math.abs(set.bspd - bare.bspd * C5.OVERCHARGE) < 1e-9,
         bare.bspd + ' -> ' + set.bspd);
   check('no set, no overcharge', bare.bspd === C5.weaponById('ls1').bspd, String(bare.bspd));
+  /* It has to be big enough to FEEL like something. At x1.75 it was reported as
+     unnoticeable, and the build model could not see the difference either -
+     identical kills/life at x1.75, x2.2, x2.6 and x3.0, because that model
+     shoots stationary targets and travel time only matters against moving ones.
+     A 45u shot must land inside ~150ms or it reads as an ordinary bullet. */
+  const flight45 = 45 / (set.bspd/9) * 1000;
+  check('a 45u shot arrives in under 150ms', flight45 < 150, flight45.toFixed(0) + 'ms');
   // it must not leak onto every weapon
   const v = C5.computeStats('vkraptor', {});
   check('other weapons are untouched', v.bspd === C5.weaponById('vkraptor').bspd, String(v.bspd));

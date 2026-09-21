@@ -690,7 +690,7 @@ const SETS = [
    bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
   {id:'ghost',   weapon:'ls1',      name:'Ghost Protocol',need:2, rarity:'legendary',
    pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'},
-   bonus:'SET · GHOST PROTOCOL — rounds travel 75% faster and pass through everything.', effect:'pierce_all'},
+   bonus:'SET · GHOST PROTOCOL — rounds travel 160% faster and pass through everything.', effect:'pierce_all'},
   {id:'jugg',    weapon:'goliath',  name:'Juggernaut',    need:4, rarity:'legendary',
    pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'},
    bonus:'SET · UNSTOPPABLE — take 30% less damage while firing.', effect:'firing_resist'},
@@ -2982,11 +2982,20 @@ function fire(e, dir){
     d.z += (Math.random()-0.5)*2*sprd;
     d.normalize();
     const speed = e.isPlayer ? w.bspd/9 : w.bspd;
-    const color = seeker ? 0x9FE870
+    // Ghost Protocol reads as a railgun streak, not a faster dot. x2.6 speed is
+    // invisible on its own - the set was reported as "not feeling special" at
+    // x1.75 largely because nothing about it LOOKED different.
+    const ghost = ab.has('pierce_all');
+    const color = ghost  ? 0x8FE9FF
+                : seeker ? 0x9FE870
                 : e.isPlayer ? 0xF5C468 : (e.grunt ? 0xB0685E : 0xD8DEE6);
     const m = new THREE.Mesh(bulletGeo, bMat(color));
     if(seeker) m.scale.setScalar(1.7);
     m.position.set(e.x + d.x*(e.r+0.35), oy, e.z + d.z*(e.r+0.35));
+    if(ghost){                              // stretch it along the line of travel
+      m.scale.set(0.7, 0.7, 5.0);
+      m.lookAt(m.position.x + d.x, m.position.y + d.y, m.position.z + d.z);
+    }
     scene.add(m);
     G.bullets.push({
       mesh:m, vx:d.x*speed, vy:d.y*speed, vz:d.z*speed,
@@ -4240,8 +4249,10 @@ function startLiveMatch(){
       live.tracers = live.tracers || [];
       const wire = m.b || [];
       for(let i = 0; i + 5 < wire.length; i += 6){
-        const tm = new THREE.Mesh(bulletGeo, bMat(m.s ? 0x9FE870 : 0xD8DEE6)); // seeker rounds read as the set
+        const tm = new THREE.Mesh(bulletGeo, bMat(m.g ? 0x8FE9FF : m.s ? 0x9FE870 : 0xD8DEE6));
         if(m.s) tm.scale.setScalar(1.7);
+        if(m.g){ tm.scale.set(0.7, 0.7, 5.0);
+                 tm.lookAt(wire[i]+wire[i+3], wire[i+1]+wire[i+4], wire[i+2]+wire[i+5]); }
         tm.position.set(wire[i], wire[i+1], wire[i+2]);
         scene.add(tm);
         live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6 });

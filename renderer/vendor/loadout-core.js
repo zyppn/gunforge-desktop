@@ -233,9 +233,21 @@
        x1.75        100%    44%     0%
        x2.17        100%   100%    31%     <- hands you 35u for free
 
-     x1.75 makes mid-range sniping forgiving and leaves long range a skill.
-     With no lead at all it still fails past 25u. */
-  const OVERCHARGE = 1.75;
+     Shipped at x1.75 first and it was reported as not feeling special, which
+     was fair: nothing in the build model could even SEE the change - the LS-1
+     scored an identical 3.4 kills per life and identical ttk at x1.75, x2.2,
+     x2.6 and x3.0, because that model fires at a stationary target and travel
+     time only matters against a moving one. So x1.75 was caution against a
+     ceiling the data never showed.
+
+                    25u    35u    45u    55u
+       x1.75        100%    44%     0%     0%
+       x2.6         100%   100%   100%    28%
+
+     x2.6 is 2990 u/s: a 45u shot arrives in 0.135s, about four ticks. Still a
+     projectile, but one that crosses the arena before a strafing target can
+     leave the space it was in. Past 55u you are leading again. */
+  const OVERCHARGE = 2.6;
 
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){
