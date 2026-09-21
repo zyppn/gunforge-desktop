@@ -606,7 +606,9 @@ class ArenaRoom extends Room {
       });
     }
 
-    this.broadcast('kill', { killer: p.name, victim: t.name });
+    // killerId lets the victim's client read the killer's already-synced build
+    // (p.eq) for the eliminated-by card, with no extra round trip.
+    this.broadcast('kill', { killer: p.name, victim: t.name, killerId: id });
     if(p.kills >= this.state.target) this.endRound();
     this.clock.setTimeout(() => this.respawn(tid), 2500);
   }
