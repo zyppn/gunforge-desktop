@@ -687,7 +687,7 @@ const SETS = [
    bonus:'SET · EXHALE — your kills detonate in dragonfire, igniting nearby enemies.', effect:'fire_nova'},
   {id:'bulwark', weapon:'warden',   name:'Bulwark',       need:3, rarity:'epic',
    pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Chassis', optic:'Bulwark Ward'},
-   bonus:'SET · RAMPART — every kill grants a 25 HP shield.', effect:'killshield'},
+   bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
   {id:'ghost',   weapon:'ls1',      name:'Ghost Protocol',need:2, rarity:'legendary',
    pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'},
    bonus:'SET · WALLS MEAN NOTHING — shots pierce every enemy in a line.', effect:'pierce_all'},
@@ -3033,7 +3033,8 @@ function damage(t, amount, src, isCrit){
   if(t.dead) return;
   let dmg = amount * (isCrit?2:1);
   if(t.isPlayer && t.wep.abilities.has('firing_resist') && (G.elapsed - t.lastFire) < 0.45) dmg *= 0.7;
-  if(t.shield > 0){ const s = Math.min(t.shield, dmg); t.shield -= s; dmg -= s; }
+  // a shield soaks at most SHIELD_SOAK of a hit - mirrors damage() in server/index.js
+  if(t.shield > 0){ const s = Math.min(t.shield, dmg * LoadoutCore.SHIELD_SOAK); t.shield -= s; dmg -= s; }
   t.hp -= dmg;
   if(!t.isPlayer && !t.dead && src && src!==t && hostile(t, src)){
     t.alertSrc = src; t.alertT = 3;

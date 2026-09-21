@@ -141,6 +141,23 @@
 
      `vert` matters as much as the rest: at 4 the round snapped to chest height
      on its own, so vertical aim was free. */
+  /* ---- Bulwark (killshield) ----------------------------------------------
+     The fraction of an incoming hit a shield may absorb. It used to be all of
+     it, which made the set an unbounded economy rather than a bonus: you gain
+     25 shield per kill, so if a fight costs you 25 or less you take ZERO hp
+     damage and never die. At the Warden's 0.45s close-range TTK a fight costs
+     about 14, so the shotgun set was simply immortality while you kept killing.
+
+     Measured kills per life against a bare build, averaged over 15-50 damage
+     per fight: live 50.94x, this 2.28x. For scale a single Vampiric part is
+     2.36x and the 4-piece LEGENDARY Juggernaut set is 1.63x.
+
+     Soaking only part of a hit is what removes the SHAPE of the problem -
+     lowering the numbers just moves the break-even down, and decay made the
+     set swing between 21x and 1.6x depending on how busy the lobby was. With
+     a soak you always lose some hp, at every damage level, in every lobby. */
+  const SHIELD_SOAK = 0.60;
+
   const HOMING = {
     seek: 8,      // acquisition radius, world units
     cone: 0.35,   // only bend toward a target within this angle of travel, rad
@@ -434,7 +451,7 @@
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
-                HE_SPLASH_FRAC, splashDamage, HOMING,
+                HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node

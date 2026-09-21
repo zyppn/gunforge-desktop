@@ -160,7 +160,7 @@ function check(label, ok, detail){
   check('pierce_all hits the whole line', all.every(d => d > 0));
 }
 
-// ---------- 5. shields absorb before HP, and burn ignores them ----------
+// ---------- 5. shields absorb PART of a hit, and burn ignores them ----------
 {
   const r = mkRoom();
   const a = join(r, 'A', 'SHOOTER', {}, 'm17');
@@ -169,7 +169,15 @@ function check(label, ok, detail){
   b.shield = 25;
   fireAndSettle(r, 'A');
   console.log('\nSHIELD   after one shot: shield=' + b.shield.toFixed(1) + ' hp=' + b.hp.toFixed(1));
-  check('damage eats the shield before HP', b.hp === 100 && b.shield < 25);
+  // A shield takes SHIELD_SOAK of the hit and the rest reaches hp. It used to
+  // absorb the lot, which is what made Bulwark an unbounded economy.
+  const LC = require('../loadout-core.js');
+  check('the shield takes its share of the hit', b.shield < 25, 'shield=' + b.shield.toFixed(1));
+  check('but hp still takes the rest - a shield is not immunity', b.hp < 100,
+        'hp=' + b.hp.toFixed(1));
+  check('split matches SHIELD_SOAK',
+        Math.abs((25 - b.shield) / ((25 - b.shield) + (100 - b.hp)) - LC.SHIELD_SOAK) < 1e-6,
+        ((25 - b.shield)).toFixed(1) + ' shield vs ' + (100 - b.hp).toFixed(1) + ' hp');
   b.shield = 25; b.burnT = 1; r.state.phase = 'live';
   r.inputs.set('A', { mx:0, mz:0, yaw:0, pitch:0, ads:0, fire:false });
   const hp0 = b.hp; r.tick();

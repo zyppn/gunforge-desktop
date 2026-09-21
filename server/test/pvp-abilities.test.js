@@ -81,6 +81,30 @@ console.log('\nspecific effects:');
   s.r.loadouts.get('A').abilities.push('killshield');
   s.b.hp = 5; shoot(s);
   check('killshield grants a shield on the kill', s.b.dead && s.a.shield === 25, 'shield=' + s.a.shield); }
+
+/* The shield must never fully absorb a hit. Full absorption is what made
+   Bulwark unbounded: gain 25 per kill, spend <=25 per fight, take zero hp
+   damage forever. A shielded player losing no hp at all is the bug. */
+{
+  const x = scenario('killshield', 'm17');
+  x.a.shield = 50; x.a.hp = 100;
+  const before = x.a.hp;
+  x.r.damage(x.a, 20);
+  const hpLost = before - x.a.hp, shieldUsed = 50 - x.a.shield;
+  const C4 = require('../loadout-core.js');
+  check('a shield soaks only part of a hit', hpLost > 0,
+        '20 damage -> ' + hpLost.toFixed(1) + ' hp, ' + shieldUsed.toFixed(1) + ' shield');
+  check('it soaks exactly SHIELD_SOAK of it',
+        Math.abs(shieldUsed - 20*C4.SHIELD_SOAK) < 1e-9 &&
+        Math.abs(hpLost - 20*(1-C4.SHIELD_SOAK)) < 1e-9,
+        'soak=' + C4.SHIELD_SOAK);
+  // and the economy is bounded: a full shield cannot outlast repeated hits
+  const y = scenario('killshield', 'm17');
+  y.a.shield = 50; y.a.hp = 100;
+  let n = 0;
+  while(y.a.hp > 0 && n < 500){ y.r.damage(y.a, 20); n++; }
+  check('a full shield cannot make you immortal', n < 500, 'died after ' + n + ' hits of 20');
+}
 { const s = scenario(null, 'm17');
   s.r.loadouts.get('A').abilities.push('fire_nova');
   s.b.hp = 5; shoot(s);

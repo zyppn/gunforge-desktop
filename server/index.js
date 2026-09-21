@@ -534,8 +534,10 @@ class ArenaRoom extends Room {
      be farmed off overkill. */
   damage(t, amount){
     let left = amount;
+    // A shield soaks at most SHIELD_SOAK of a hit; the rest always reaches hp.
+    // Full absorption made Bulwark unbounded - see loadout-core.
     if(t.shield > 0){
-      const absorbed = Math.min(t.shield, left);
+      const absorbed = Math.min(t.shield, left * LoadoutCore.SHIELD_SOAK);
       t.shield -= absorbed; left -= absorbed;
     }
     t.hp -= left;
