@@ -216,7 +216,7 @@ class ArenaRoom extends Room {
             } else {
               p.dead = true; p.deaths++; p.burnT = 0; p.slowT = 0; p.shield = 0;
               this.broadcast('kill', { killer: 'THE FIRE', victim: p.name });
-              this.clock.setTimeout(() => this.respawn(id), 2500);
+              this.clock.setTimeout(() => this.respawn(id), LoadoutCore.RESPAWN_MS);
             }
           }
         }
@@ -610,7 +610,7 @@ class ArenaRoom extends Room {
     // (p.eq) for the eliminated-by card, with no extra round trip.
     this.broadcast('kill', { killer: p.name, victim: t.name, killerId: id });
     if(p.kills >= this.state.target) this.endRound();
-    this.clock.setTimeout(() => this.respawn(tid), 2500);
+    this.clock.setTimeout(() => this.respawn(tid), LoadoutCore.RESPAWN_MS);
   }
 
 

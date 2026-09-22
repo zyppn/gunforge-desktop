@@ -99,10 +99,12 @@
   /* Eliminated-by card. The killer's BUILD is the headline, not their name -
      this is a loot game, so the moment you die is the moment you most want
      what killed you. The parts are already synced (p.eq), so this is pure UI. */
-  #deathcard{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%);
-    width:340px;background:rgba(12,15,18,.93);border:1px solid var(--line);
-    padding:16px 18px 14px;opacity:0;pointer-events:none;transition:opacity .22s;
-    z-index:40;backdrop-filter:blur(3px)}
+  /* Bottom left, not the middle: the killcam is showing you the person who
+     killed you and the card must not sit on top of them. */
+  #deathcard{position:absolute;left:26px;bottom:88px;
+    width:326px;background:rgba(12,15,18,.93);border:1px solid var(--line);
+    padding:14px 16px 12px;opacity:0;pointer-events:none;transition:opacity .22s;
+    z-index:70;backdrop-filter:blur(3px)}
   #deathcard.on{opacity:1}
   #deathcard .dc-eyebrow{font-size:10px;letter-spacing:.18em;color:#8A96A0;text-transform:uppercase}
   #deathcard .dc-who{font-size:22px;font-weight:700;margin:2px 0 1px;letter-spacing:.02em}
@@ -124,6 +126,9 @@
   #deathcard .dc-rec{margin-top:9px;font-size:11px;color:#8A96A0;text-align:center;
     border-top:1px solid var(--line);padding-top:8px}
   #deathcard .dc-rec b{color:#DCE4EA}
+  #deathcard .dc-count{margin-top:9px;border-top:1px solid var(--line);padding-top:8px;
+    font-size:11px;letter-spacing:.14em;color:#8A96A0;text-transform:uppercase;text-align:center}
+  #deathcard .dc-count b{color:var(--brass);font-size:14px;font-weight:700}
   .part{border:1px solid var(--line);border-left:4px solid var(--r-common);background:var(--panel2);padding:11px 12px;font-size:12px;
     display:flex;flex-direction:column}
   .part .phead{display:flex;gap:10px;align-items:flex-start}
@@ -2871,7 +2876,10 @@ function rollBotLoadout(){
   const w = WEAPONS[Math.floor(Math.random()*WEAPONS.length)];
   const eq = {};
   for(const s of SLOTS){
-    if(Math.random() >= 0.4) continue; // most slots stay standard
+    // Was 0.4, which left the average bot with 2.4 of 6 slots filled and almost
+    // no abilities - the eliminated-by card was mostly empty rows, and it was
+    // telling the truth. Bots keep their dmg x0.72 / rof x1.35 handicap.
+    if(Math.random() >= 0.85) continue;
     const setOpts = SETS.filter(st => st.weapon===w.id && st.pieces[s]);
     if(setOpts.length && Math.random() < 0.12){
       const st = setOpts[0];
@@ -3013,12 +3021,24 @@ function showDeathCard(info){
     '<div class="dc-who">' + (info.name || 'UNKNOWN') + '</div>' +
     '<div class="dc-wep">' + (w ? '<b>' + w.name + '</b> · ' + w.type : 'Unknown weapon') + '</div>' +
     rows +
-    (rec ? '<div class="dc-rec">this match &nbsp; <b>' + rec[0] + ' – ' + rec[1] + '</b></div>' : '');
+    (rec ? '<div class="dc-rec">this match &nbsp; <b>' + rec[0] + ' – ' + rec[1] + '</b></div>' : '') +
+    '<div class="dc-count">respawning in <b id="dc-count">' +
+      (LoadoutCore.RESPAWN_MS/1000).toFixed(1) + '</b></div>';
   el.classList.add('on');
+  deathCardUntil = (typeof G !== 'undefined' && G ? G.elapsed : 0) + LoadoutCore.RESPAWN_MS/1000;
 }
 function hideDeathCard(){
   const el = document.getElementById('deathcard');
   if(el) el.classList.remove('on');
+  deathCardUntil = 0;
+}
+let deathCardUntil = 0;
+/* Driven from the render loop rather than a timer, so it stays honest if the
+   game is paused and never ticks on past a respawn. */
+function stepDeathCard(){
+  if(!deathCardUntil) return;
+  const n = document.getElementById('dc-count');
+  if(n) n.textContent = Math.max(0, deathCardUntil - G.elapsed).toFixed(1);
 }
 /* Only surfaced from the second meeting onward - "2-1" on a first encounter
    is noise, not information. */
@@ -3033,20 +3053,65 @@ function noteKill(killerName, iDied){
    A separate tumbling box rather than reparenting the real gun: the bot mesh
    hierarchy stays intact, so respawn is just making the original visible
    again and nothing can be left orphaned in the scene. */
-const dropGeo = new THREE.BoxGeometry(0.1, 0.09, 0.5);
 function dropWeapon(e){
   const u = e.mesh && e.mesh.userData;
   if(!u || !u.gun) return;
-  const w = new THREE.Vector3(); u.gun.getWorldPosition(w);
+  const w = new THREE.Vector3(), q = new THREE.Quaternion();
+  u.gun.getWorldPosition(w); u.gun.getWorldQuaternion(q);
   u.gun.visible = false;                       // restored in respawn()
-  const m = new THREE.Mesh(dropGeo, bMat(0x6E7A82));
-  m.position.copy(w); m.rotation.set(Math.random()*3, Math.random()*3, Math.random()*3);
+  // a CLONE of the actual weapon, not a grey box. Cloning keeps the mesh
+  // hierarchy intact - reparenting the real one leaves it orphaned if the
+  // entity is removed mid-fall.
+  const m = u.gun.clone(true);
+  m.visible = true;
+  m.traverse(o => { o.visible = true; });
+  m.position.copy(w); m.quaternion.copy(q);
   scene.add(m);
   const a = Math.random()*Math.PI*2;
   G.drops.push({ mesh:m, t:0,
     vx:Math.cos(a)*1.6, vy:1.4, vz:Math.sin(a)*1.6,
     rx:(Math.random()-0.5)*9, ry:(Math.random()-0.5)*9, rz:(Math.random()-0.5)*9 });
   if(G.drops.length > 24) { scene.remove(G.drops[0].mesh); G.drops.shift(); }
+}
+/* Killcam. While you are dead the camera swings off your corpse and onto the
+   person who killed you, over the shoulder, and tracks them until you respawn.
+   It costs no tempo: you were already sitting dead for RESPAWN_MS with nothing
+   to look at. The target is read live every frame, so it keeps following them
+   as they move, and it degrades to your corpse if they leave or the kill came
+   from something with no body (burn, splash, the environment). */
+function startKillcam(target){
+  if(!target) return;
+  G.killcam = { t:target, age:0, cam:null };
+}
+function stepKillcam(dt){
+  const kc = G.killcam;
+  if(!kc || !kc.t) return;
+  const t = kc.t;
+  if(typeof t.x !== 'number' || typeof t.z !== 'number') return;
+  kc.age += dt;
+  // sit behind and above them, facing the way they are facing
+  const face = (typeof t.faceCur === 'number' ? t.faceCur
+              : typeof t.yaw === 'number' ? t.yaw : 0);
+  const want = new THREE.Vector3(t.x - Math.cos(face)*3.4, 2.9, t.z - Math.sin(face)*3.4);
+  if(!kc.cam){ kc.cam = want.clone(); }
+  // ease in over the first moment so it does not cut hard off your own corpse
+  const k = Math.min(1, dt * (kc.age < 0.5 ? 4 : 9));
+  kc.cam.lerp(want, k);
+  camera.position.copy(kc.cam);
+  camera.lookAt(t.x, 1.25, t.z);
+}
+
+/* Cancel any death animation still running on this entity and put the mesh
+   back the way it was. Without this a respawn that lands mid-animation leaves
+   the body half sunk into the floor with the dying loop still writing to it -
+   and worse, the loop finishes later and hides a player who is alive. */
+function clearDying(e){
+  if(!e.mesh) return;
+  for(let i=G.dying.length-1;i>=0;i--) if(G.dying[i].mesh === e.mesh) G.dying.splice(i,1);
+  e.mesh.rotation.x = 0;
+  e.mesh.position.y = 0;
+  e.mesh.visible = true;
+  if(e.mesh.userData && e.mesh.userData.gun) e.mesh.userData.gun.visible = true;
 }
 function stepDrops(dt){
   for(let i=G.drops.length-1;i>=0;i--){
@@ -3061,7 +3126,9 @@ function stepDrops(dt){
       if(Math.abs(d.vy) < 0.35) d.vy = 0;
     }
     d.mesh.rotation.x += d.rx*dt; d.mesh.rotation.y += d.ry*dt; d.mesh.rotation.z += d.rz*dt;
-    if(d.t > 6){ scene.remove(d.mesh); G.drops.splice(i,1); }
+    // sink it away rather than leaving litter on the floor for the whole match
+    if(d.t > 3.4) d.mesh.position.y -= dt*1.4;
+    if(d.t > 4.4){ scene.remove(d.mesh); G.drops.splice(i,1); }
   }
 }
 
@@ -3218,6 +3285,7 @@ function kill(t, src){
       noteKill(src.name, true);
       showDeathCard({ name:src.name, wid:src.wid || (src.wep && src.wep.wid),
         eq:src.eq, dist:Math.hypot(src.x - t.x, src.z - t.z) });
+      startKillcam(src);
     } else if(src.isPlayer && !t.isPlayer){
       noteKill(t.name, false);
     }
@@ -3234,12 +3302,12 @@ function kill(t, src){
     return;
   }
   if(G.mode==='camp' && t.isPlayer){ endMatch(false); return; }
-  t.respawnT = G.elapsed + 2.5;
+  t.respawnT = G.elapsed + LoadoutCore.RESPAWN_MS/1000;
 }
 function respawn(e){
   e.dead=false; e.hp=e.maxhp; e.shield=0; e.ammo=e.wep.mag; e.reloading=false;
-  if(e.mesh && e.mesh.userData.gun) e.mesh.userData.gun.visible = true;   // dropped on death
-  if(e.isPlayer) hideDeathCard();
+  clearDying(e);                       // a half-sunk corpse must not outlive its owner
+  if(e.isPlayer){ hideDeathCard(); G.killcam = null; }
   e.burnT=0; e.slowT=0; e.burnSrc=null; e.target=null; e.alertSrc=null; e.alertT=0;
   e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0; e.wantAim=false; e.aimT=0;
   const s = farSpawn(G.map, e.team); e.x=s[0]; e.z=s[1];
@@ -3526,7 +3594,7 @@ function startMatch(){
   G = {
     running:true, mode:setupSel.mode, map, ents:[], bullets:[], fx:[],
     time: setupSel.mode==='camp' ? 0 : 180, elapsed:0, recoil:0,
-    teamScore:{blue:0, red:0}, wave:0, waveBreak:1.2, over:false, feed:[], dying:[], drops:[],
+    teamScore:{blue:0, red:0}, wave:0, waveBreak:1.2, over:false, feed:[], dying:[], drops:[], killcam:null,
     last: performance.now(),
     kickPitch: 0, kickYaw: 0, shake: 0
   };
@@ -3996,6 +4064,8 @@ function tick(now){
   }
   camera.rotation.y = yaw + G.kickYaw;
   camera.rotation.x = pitch + G.kickPitch;
+  stepKillcam(dt);
+  stepDeathCard();
   G.recoil = Math.max(0, G.recoil - dt*5);
   G.kickPitch *= Math.max(0, 1 - 9*dt);   // the barrel settles
   G.kickYaw   *= Math.max(0, 1 - 9*dt);
@@ -4304,7 +4374,7 @@ function startLiveMatch(){
   G = {
     running:true, mode:'live', map, ents:[], bullets:[], fx:[],
     time: 300, elapsed:0, recoil:0,
-    teamScore:{blue:0,red:0}, wave:0, waveBreak:0, over:false, feed:[], dying:[], drops:[],
+    teamScore:{blue:0,red:0}, wave:0, waveBreak:0, over:false, feed:[], dying:[], drops:[], killcam:null,
     last: performance.now(),
     kickPitch: 0, kickYaw: 0, shake: 0
   };
@@ -4379,6 +4449,7 @@ function startLiveMatch(){
         if(k && k.eq) DC_SLOTS.forEach(sl => { const q = k.eq.get ? k.eq.get(sl) : k.eq[sl]; if(q) eq[sl] = q; });
         showDeathCard({ name:m.killer, wid:(k && k.wid) || null, eq,
           dist:k ? Math.hypot(k.x - G.me.x, k.z - G.me.z) : null });
+        startKillcam(k);            // k is live state - it keeps tracking them
       }
     });
     room.onMessage('shot', m => {
@@ -4621,12 +4692,14 @@ function liveTick(dt){
       me.dead = true;
       // guard: only announce on the living->dead edge, and at most once per death,
       // so a state re-sync can't re-fire it every patch
-      if(!live.deadAnnounced){ live.deadAnnounced = true; toast('DOWN — RESPAWNING'); }
+      // no toast: the eliminated-by card says the same thing with more in it,
+      // and the two were drawing over each other
+      live.deadAnnounced = true;
     }
     if(!sp.dead && me.dead){
       me.dead = false; me.hp = sp.hp; me.x = sp.x; me.z = sp.z; live.lastHp = sp.hp;
       live.deadAnnounced = false;
-      hideDeathCard();
+      hideDeathCard(); G.killcam = null;
       liveResetWeapon();
     }
     if(!me.dead){

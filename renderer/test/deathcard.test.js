@@ -27,6 +27,9 @@ const el = { innerHTML:'', classList:{ _on:false, add(){ this._on = true; }, rem
 const sandbox = {
   document: { getElementById: id => id === 'deathcard' ? el : null },
   WEAPONS: core.WEAPONS, ABILITIES, Math,
+  LoadoutCore: core,                 // the card reads RESPAWN_MS for its countdown
+  G: { elapsed: 0 },
+  deathCardUntil: 0,
   DC_SLOTS: ['frame','barrel','magazine','foregrip','stock','optic'],
   headToHead: new Map(),
 };
@@ -87,8 +90,24 @@ console.log('\nHEAD TO HEAD  (only from the second meeting)');
   check('an unnamed killer is not tallied', (sandbox.noteKill(null, true), sandbox.headToHead.size === 1));
 }
 
+console.log('\nRESPAWN COUNTDOWN');
+{
+  sandbox.G.elapsed = 100;
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'m17', eq:{} });
+  const secs = (core.RESPAWN_MS/1000).toFixed(1);
+  check('the card carries the respawn countdown', el.innerHTML.includes('respawning in'));
+  check('  seeded with the shared RESPAWN_MS', el.innerHTML.includes('>' + secs + '<'), secs + 's');
+  check('  and a deadline is armed off the game clock',
+        Math.abs(sandbox.deathCardUntil - (100 + core.RESPAWN_MS/1000)) < 1e-9,
+        String(sandbox.deathCardUntil));
+  check('4.5s is long enough to read six parts', core.RESPAWN_MS >= 4000,
+        core.RESPAWN_MS + 'ms');
+}
+
 console.log('\nHIDE');
-{ sandbox.hideDeathCard(); check('hiding clears the visible class', !el.classList._on); }
+{ sandbox.hideDeathCard();
+  check('hiding clears the visible class', !el.classList._on);
+  check('  and disarms the countdown', sandbox.deathCardUntil === 0); }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all death card checks passed'));
 process.exit(fails ? 1 : 0);

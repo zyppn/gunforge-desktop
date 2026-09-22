@@ -336,5 +336,19 @@ function check(label, ok, detail){
   check('looking up sends the round up, not into the floor', up > 0, 'vy=' + up.toFixed(2));
 }
 
+/* Respawn length is shared with the client (the killcam and the eliminated-by
+   card both run for exactly this long), and there are TWO paths on the server:
+   a normal kill and death by burn with no attacker to credit. One of them was
+   left at the old hardcoded 2500 when the constant was introduced. */
+{
+  const LC = require('../loadout-core.js');
+  const src = require('fs').readFileSync(require('path').join(__dirname, '../index.js'), 'utf8');
+  const hard = (src.match(/respawn\([^)]*\),\s*\d+\)/g) || []);
+  check('no hardcoded respawn delay survives', hard.length === 0, hard.join(' | ') || 'none');
+  const viaConst = (src.match(/respawn\([^)]*\),\s*LoadoutCore\.RESPAWN_MS\)/g) || []).length;
+  check('every respawn path uses RESPAWN_MS', viaConst >= 2, viaConst + ' call sites');
+  check('RESPAWN_MS is long enough to read the card', LC.RESPAWN_MS >= 4000, LC.RESPAWN_MS + 'ms');
+}
+
 console.log('\n' + (fails ? fails + ' CHECK(S) FAILED' : 'ALL CHECKS PASSED'));
 process.exit(fails ? 1 : 0);

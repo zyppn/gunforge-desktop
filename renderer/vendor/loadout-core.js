@@ -271,6 +271,13 @@
     return has ? 0 : ADS_SLOW;
   }
 
+  /* How long you stay dead. Shared, because the server owns respawn in live
+     matches and the client owns it offline - if these drift, one mode gets a
+     killcam that outlives the corpse. 4.5s rather than 2.5s: the eliminated-by
+     card has a weapon, six parts and their abilities on it, and 2.5s is not
+     enough time to read that. */
+  const RESPAWN_MS = 4500;
+
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){
     return Math.max(0, Number(dealt) || 0) * HE_SPLASH_FRAC;
@@ -558,7 +565,7 @@
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
                 HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
-                AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow,
+                AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node
