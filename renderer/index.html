@@ -2242,7 +2242,29 @@ function vmBarrel(p, w, frontZ){
     collar(0.028);
     vmCyl(dark(), 0.025, 0.012, frontZ - len + 0.007); // muzzle ring
   }
-  else if(n.includes('Heavy') || n.includes('Jugg')){
+  else if(n.includes('Jugg')){
+    /* Split off Heavy. Sharing it gave the four-piece LEGENDARY set a
+       0.034-radius tube, and at the LMG's 0.4 base that is a 7:1 pencil -
+       the weediest-looking thing on the part sheet. This one is thick,
+       ribbed for cooling, and ends in a real brake. */
+    len = base*1.15;
+    vmCyl(m, 0.048, len, frontZ - len/2);
+    for(let i = 1; i <= 4; i++){                                    // cooling ribs
+      // 0.006 on a 0.048 barrel, not 0.008 on six: six fat ones read as a
+      // drill bit rather than a barrel.
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.051, 0.006, 6, 14), dark());
+      rib.position.set(0, 0.02, frontZ - len*(0.14 + i*0.17)); VMT.add(rib);
+    }
+    collar(0.056);
+    vmBox(m, 0.110, 0.110, 0.10, 0, 0.02, frontZ - len - 0.040);    // brake block
+    for(const sx of [-0.0552, 0.0552])                              // side ports
+      vmBox(voidM(), 0.004, 0.070, 0.070, sx, 0.02, frontZ - len - 0.040);
+    for(const sy of [-0.0552, 0.0552])                              // top and bottom ports
+      vmBox(voidM(), 0.070, 0.004, 0.070, 0, 0.02 + sy, frontZ - len - 0.040);
+    vmCyl(voidM(), 0.030, 0.022, frontZ - len - 0.090);             // bore
+    tipPad = 0.098;
+  }
+  else if(n.includes('Heavy')){
     len = base*1.25;
     vmCyl(m, 0.034, len, frontZ - len/2);
     collar(0.04);
@@ -2466,9 +2488,22 @@ function vmForegrip(p, w, frontZ, bodyD, bodyH){
     }
     vmBox(steel(), 0.03, 0.01, 0.03, 0, mountY - 0.06, z); // cross brace
   } else if(n.includes('Brace')){
-    hang(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, 0.11), m), 0.07);
-    for(const sx of [-0.036, 0.036]) for(const dz of [-0.04, 0.04])
-      vmBox(steel(), 0.008, 0.008, 0.008, sx, mountY - 0.008, z + dz); // rivets along the mount line
+    /* Was a bare 0.09 x 0.07 x 0.11 box with four rivets - the plainest object
+       in the game, on an EPIC set piece. Now a shield brace: a narrow core with
+       splayed armour wings, banded and riveted. */
+    rail(0.062, 0.12);
+    hang(new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.072, 0.10), m), 0.072);
+    for(const sx of [-1, 1]){                                   // pauldron wings
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.058, 0.094), tone(0.86));
+      wing.position.set(sx*0.026, mountY - 0.042, z);           // 0.026 so the inner face bites into the core
+      wing.rotation.z = -sx*0.20;
+      VMT.add(wing);
+    }
+    vmBox(dark(), 0.054, 0.012, 0.106, 0, mountY - 0.026, z);   // upper armour band
+    vmBox(dark(), 0.050, 0.010, 0.096, 0, mountY - 0.064, z);   // lower armour band
+    for(const sx of [-0.034, 0.034]) for(const dz of [-0.034, 0.034])
+      vmBox(steel(), 0.007, 0.007, 0.007, sx, mountY - 0.046, z + dz);   // wing rivets
+    vmBox(steel(), 0.022, 0.008, 0.014, 0, mountY - 0.079, z - 0.040);   // front deflector lip
   } else {
     rail(0.05, 0.062);
     hang(new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), m), 0.06);
@@ -2520,11 +2555,26 @@ function vmStock(p, w, rearZ, bodyH){
     vmBox(m, 0.052, 0.09, 0.02, 0, -0.01, rearZ + 0.155);   // 0.052, not the rails' 0.05: equal widths put the side faces on one plane
     vmBox(steel(), 0.012, 0.012, 0.012, 0, 0.03, rearZ + 0.008);  // joint bolts
     vmBox(steel(), 0.012, 0.012, 0.012, 0, -0.028, rearZ + 0.148);
-  } else if(n.includes('Chassis') || n.includes('Frame')){
+  } else if(n.includes('Chassis')){
+    /* Was one 0.09 x 0.11 x 0.12 slab. Three stepped plates of different widths
+       give it a silhouette; the seam bands and rivet lines give it a surface.
+       Every step differs in at least one dimension so no two faces share a plane. */
+    // One body with a spine and a proud recoil pad. The first attempt stepped
+    // narrow-wide-narrow and the middle plate read as a pair of flanges.
+    vmBox(m, 0.090, 0.106, 0.104, 0, -0.005, rearZ + 0.052);      // body
+    vmBox(dark(), 0.094, 0.013, 0.092, 0, 0.046, rearZ + 0.050);  // dorsal spine
+    vmBox(dark(), 0.094, 0.011, 0.086, 0, -0.055, rearZ + 0.050); // under rail
+    vmBox(m, 0.078, 0.118, 0.030, 0, -0.005, rearZ + 0.117);      // recoil pad, taller and narrower
+    vmBox(dark(), 0.056, 0.064, 0.005, 0, -0.005, rearZ + 0.133); // recessed back panel
+    for(const sx of [-0.040, 0.040]) for(const dz of [0.022, 0.062, 0.098])
+      vmBox(steel(), 0.007, 0.007, 0.007, sx, 0.020, rearZ + dz);   // rivet lines
+    for(const sx of [-0.040, 0.040]) for(const dz of [0.022, 0.062, 0.098])
+      vmBox(steel(), 0.007, 0.007, 0.007, sx, -0.032, rearZ + dz);
+  } else if(n.includes('Frame')){
     vmBox(m, 0.09, 0.11, 0.12, 0, -0.005, rearZ + 0.06);
-    vmBox(dark(), 0.066, 0.07, 0.005, 0, -0.005, rearZ + 0.121); // recessed back panel (0.066: 0.07 matched the block's sides)
+    vmBox(dark(), 0.066, 0.07, 0.005, 0, -0.005, rearZ + 0.121);
     for(const sx of [-0.036, 0.036]) for(const dy of [-0.04, 0.032])
-      vmBox(steel(), 0.008, 0.008, 0.008, sx, dy, rearZ + 0.004); // chassis rivets
+      vmBox(steel(), 0.008, 0.008, 0.008, sx, dy, rearZ + 0.004);
   } else {
     vmBox(m, 0.07, 0.085, 0.116, 0, -0.01, rearZ + 0.06);  // 0.116, not 0.12: equal depth shared the outer block's front and back planes
     vmBox(dark(), 0.072, 0.005, 0.122, 0, 0.024, rearZ + 0.06); // seam
