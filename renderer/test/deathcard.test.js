@@ -130,6 +130,78 @@ console.log('\nRESPAWN COUNTDOWN');
         core.RESPAWN_MS + 'ms');
 }
 
+console.log('\nTHE CARD CANNOT OUTLIVE ITS COUNTDOWN');
+{
+  const countEl = { textContent:'' };
+  sandbox.document.getElementById = id => id === 'deathcard' ? el
+                                        : id === 'dc-count' ? countEl : null;
+  vm.runInContext(lift('stepDeathCard'), sandbox);
+  sandbox.G.elapsed = 0;
+  sandbox.showDeathCard({ name:'RIVAL', wid:'m17', eq:{} });
+  sandbox.G.elapsed = 2;
+  sandbox.stepDeathCard();
+  check('ticks down off the game clock', countEl.textContent === '2.5', countEl.textContent);
+  check('  and stays up while it does', el.classList._on);
+  sandbox.G.elapsed = core.RESPAWN_MS/1000;
+  sandbox.stepDeathCard();
+  check('never shows a negative countdown', countEl.textContent === '0.0', countEl.textContent);
+  /* Campaign stranded the card at "0.0" forever: it is single-life, so the
+     respawn that would have taken the card down never came. The gate below
+     stops it being shown at all - this is the backstop for everything else. */
+  sandbox.G.elapsed = core.RESPAWN_MS/1000 + 2;
+  sandbox.stepDeathCard();
+  check('takes itself down if no respawn ever arrives', !el.classList._on);
+  check('  and disarms the deadline', sandbox.deathCardUntil === 0);
+  sandbox.stepDeathCard();
+  check('  and is a no-op from then on', true);
+}
+
+/* The card is a PvP object: it names who killed you, what they were holding
+   and how your record against them stands. Campaign has none of those - one
+   life, no respawn, and grunts with no loadout at all. */
+console.log('\nCAMPAIGN GETS NO DEATH CARD');
+{
+  const spy = { shown:0, cam:0, ended:0, notes:[] };
+  const mk = o => Object.assign({ x:0, z:0, hp:100, maxhp:100, kills:0, deaths:0,
+    dead:false, burnT:0, slowT:0, shield:0, wep:{ abilities:new Set() } }, o);
+  const box = {
+    Math, Set, G:null, LoadoutCore:core,
+    spawnBurst(){}, sfx(){}, feed(){}, damage(){}, hostile(){ return false; },
+    startDeathAnim(){}, endMatch(){ spy.ended++; },
+    noteKill(n){ spy.notes.push(n); },
+    showDeathCard(){ spy.shown++; }, startKillcam(){ spy.cam++; },
+  };
+  vm.createContext(box);
+  vm.runInContext(lift('kill'), box);
+
+  const me = mk({ isPlayer:true, name:'ZYPPN' });
+  const grunt = mk({ name:'Hostile', grunt:true });
+  box.G = { mode:'camp', elapsed:0, ents:[me, grunt], teamScore:{blue:0,red:0}, me };
+  box.kill(me, grunt);
+  check('a hostile killing you shows no card', spy.shown === 0, spy.shown + ' cards');
+  check('  and no killcam', spy.cam === 0);
+  check('  the run ends instead', spy.ended === 1);
+  check('  and "Hostile" never enters the head-to-head', spy.notes.length === 0,
+        JSON.stringify(spy.notes));
+
+  spy.notes.length = 0;
+  box.G.ents = [me, grunt];
+  box.kill(grunt, me);
+  check('killing hostiles builds no record either', spy.notes.length === 0,
+        JSON.stringify(spy.notes));
+
+  spy.shown = spy.cam = spy.ended = 0; spy.notes.length = 0;
+  const me2 = mk({ isPlayer:true, name:'ZYPPN', team:'me' });
+  const bot = mk({ name:'RIVAL', team:'b0', wid:'ls1', eq:{} });
+  box.G = { mode:'ffa', elapsed:0, ents:[me2, bot], teamScore:{blue:0,red:0}, me:me2 };
+  box.kill(me2, bot);
+  check('a real opponent in FFA still gets the full treatment',
+        spy.shown === 1 && spy.cam === 1, spy.shown + ' cards, ' + spy.cam + ' killcams');
+  check('  tallied under their name', spy.notes[0] === 'RIVAL');
+  check('  and the match carries on', spy.ended === 0);
+  check('  with a respawn armed', Math.abs(me2.respawnT - core.RESPAWN_MS/1000) < 1e-9);
+}
+
 console.log('\nHIDE');
 { sandbox.hideDeathCard();
   check('hiding clears the visible class', !el.classList._on);
@@ -142,8 +214,15 @@ console.log('\nHIDE');
   console.log('\nWIRING');
   const starts = (html.match(/\$\('#killfeed'\)\.innerHTML=''/g) || []).length;
   const resets = (html.match(/resetHeadToHead\(\);/g) || []).length;
+  const hides = (html.match(/hideDeathCard\(\);/g) || []).length;
   check('every match start clears the head-to-head', starts > 0 && resets >= starts,
         starts + ' match starts, ' + resets + ' resets');
+  /* Campaign left a card on screen that the NEXT match then opened with. A
+     match start owes the screen a clean slate, and so does a match end. */
+  check('every match start also clears the card', hides >= starts + 1,
+        starts + ' match starts, ' + hides + ' hides');
+  check('and the teardown drops the card and the killcam',
+        /G\.running = false;[\s\S]{0,120}hideDeathCard\(\); G\.killcam = null/.test(html));
   /* Offline and live each had their own copy of "this body died", and they
      drifted: live still pushed the OLD 0.32s duration and never dropped a
      weapon, and its respawn reset the transform without cancelling the entry,

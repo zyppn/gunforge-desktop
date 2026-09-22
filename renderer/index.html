@@ -3051,8 +3051,12 @@ let deathCardUntil = 0;
    game is paused and never ticks on past a respawn. */
 function stepDeathCard(){
   if(!deathCardUntil) return;
+  const left = deathCardUntil - G.elapsed;
   const n = document.getElementById('dc-count');
-  if(n) n.textContent = Math.max(0, deathCardUntil - G.elapsed).toFixed(1);
+  if(n) n.textContent = Math.max(0, left).toFixed(1);
+  // Backstop. A respawn takes the card down; if one never comes the card must
+  // not sit at "0.0" forever, which is exactly what campaign used to do.
+  if(left < -1) hideDeathCard();
 }
 /* Only surfaced from the second meeting onward - "2-1" on a first encounter
    is noise, not information. */
@@ -3311,12 +3315,18 @@ function kill(t, src){
     }
     if(G.mode==='tdm' && !t.grunt) G.teamScore[src.team==='blue'?'blue':'red']++;
     feed(src.name+'  ⟿  '+t.name, src.isPlayer || t.isPlayer);
-    if(t.isPlayer && !src.isPlayer){
+    // Campaign is single-life: dying ENDS the run, so there is no respawn to
+    // count down to and nothing that would ever take the card back down - it
+    // used to hang on screen straight into the next match. Grunts are also
+    // camp-only and carry no wid/eq, so the card would be six empty rows and
+    // a head-to-head record against the word "Hostile".
+    const cardworthy = G.mode !== 'camp' && !(src && src.grunt) && !(t && t.grunt);
+    if(t.isPlayer && !src.isPlayer && cardworthy){
       noteKill(src.name, true);
       showDeathCard({ name:src.name, wid:src.wid || (src.wep && src.wep.wid),
         eq:src.eq, hp:src.hp, dist:Math.hypot(src.x - t.x, src.z - t.z) });
       startKillcam(src);
-    } else if(src.isPlayer && !t.isPlayer){
+    } else if(src.isPlayer && !t.isPlayer && cardworthy){
       noteKill(t.name, false);
     }
   }
@@ -3656,6 +3666,7 @@ function startMatch(){
   }
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
   resetHeadToHead();   // the record is per match, not per session
+  hideDeathCard();     // and neither is the card - nothing carries into a new match
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
   sizeRenderer();
@@ -4201,6 +4212,7 @@ function abandonMatch(){
 function endMatch(campWin){
   if(!G || !G.running) return;
   G.running = false; paused = false; settingsOpen = false;
+  hideDeathCard(); G.killcam = null;   // the loop stops here; nothing else would
   $('#pauseov').classList.remove('on');
   $('#setov').classList.remove('on');
   releasePointer(); leaveFullscreen();
@@ -4426,6 +4438,7 @@ function startLiveMatch(){
   live = { room:null, myId:null, remotes:new Map(), sendT:0, lastHp:100, results:false, rewarded:false };
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
   resetHeadToHead();   // the record is per match, not per session
+  hideDeathCard();     // and neither is the card - nothing carries into a new match
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
   sizeRenderer();
