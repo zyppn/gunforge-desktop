@@ -2156,21 +2156,8 @@ function buildGunModel(wid, eqOpt){
 
   // slot components — standard geometry, or replaced by the equipped part's variant
   const tipZ = vmBarrel(eq.barrel, w, frontZ);
-  /* The receiver's underside is a SHARED BUDGET. The foregrip, the magwell and the frame's
-     pistol grip are all fixed-size objects placed at fractions of a receiver depth that
-     varies 2.3x across the roster, and on the M17 that is 144mm of rail for up to 278mm of
-     hardware. Sizing the magazine alone against the leftovers made it absorb the whole
-     squeeze - a drum came out at 31% next to a Bulwark Brace. Size the PAIR against the
-     rail they actually have, so a short receiver takes a little off each. */
-  const railRear = bodyZ + bodyD*0.28 - 0.060;   // vmFrame's pistol grip, tilted 0.28 rad
-  const fgD = foregripDepth(eq.foregrip, w), magD = magazineDepth(eq.magazine);
-  const fit = Math.min(1, (railRear - frontZ - 0.012) / Math.max(1e-6, fgD + magD));
-  const fgZ = Math.max(frontZ + fgD*fit/2 + 0.004,                       // never off the muzzle end
-                Math.min(frontZ + bodyD*0.22,                            // where it has always gone
-                         railRear - magD*fit - fgD*fit/2 - 0.012));      // leaving the magwell room
-  const magZ = Math.min(bodyZ + bodyD*0.05, railRear - magD*fit/2 - 0.004);
-  vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY, fgZ, fit);
-  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY, magZ, fit);
+  const gripRear = vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY);
+  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY, gripRear);
   vmStock(eq.stock, w, rearZ, bodyH, fr.rearMidY, bodyD);
   vmOptic(eq.optic, w, bodyZ, bodyH, bodyD, fr.topY);
 
@@ -2401,11 +2388,28 @@ function vmBarrel(p, w, frontZ){
   }
   return frontZ - len - tipPad;
 }
-function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY, zOpt, fitOpt){
+/* Magazines taper with the receiver, the same rule stocks follow: a 158mm drum is more
+   than half the length of the M17's whole 260mm body, and a pistol magazine reading
+   smaller than an LMG's is what anyone would expect. Then place it in the rail that is
+   actually left between the foregrip and the frame's pistol grip - which on a pistol can
+   still be too short for a drum, so the last resort is to centre the squeeze rather than
+   let either neighbour bury it. */
+function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY, gripRear){
   if(botY === undefined) botY = -bodyH/2;   // locker thumbnails build parts bare
+  const k = fitScale(bodyD);
+  const nm = p ? p.name : '';
+  // half-depth of the well, including the rearward swing of a tilted body
+  const hd = ((nm.includes('Drum') || nm.includes('Heart')) ? 0.079
+            : nm.includes('Belt')     ? 0.056
+            : nm.includes('Extended') ? 0.058
+            : 0.048) * k;
+  const gripFront = bodyZ + bodyD*0.28 - 0.060;   // vmFrame's grip: 0.08 deep, tilted 0.28
+  const front = (typeof gripRear === 'number') ? gripRear : bodyZ - bodyD/2;
+  let z = Math.min(bodyZ + bodyD*0.05,            // where magazines have always gone
+                   gripFront - hd - 0.004);       // slid forward only to clear the pistol grip
+  if(z - hd < front) z = (front + gripFront) / 2; // and if that runs into the foregrip, split it
   const host = VMT, G = new THREE.Group();
-  G.position.set(0, botY, (typeof zOpt === 'number') ? zOpt : bodyZ + bodyD*0.05);
-  G.scale.setScalar((typeof fitOpt === 'number') ? fitOpt : 1);
+  G.position.set(0, botY, z); G.scale.setScalar(k);
   VMT = G;
   try { vmMagazineBody(p, w); }
   finally { VMT = host; host.add(G); }
@@ -2506,31 +2510,28 @@ function vmMagazineBody(p, w){
     basePlate(b, 0.05, 0.062, h);
   }
 }
-/* Natural front-to-back size of the two things that share the receiver's underside rail.
-   buildGunModel needs both BEFORE either is built, to size them against the rail. */
-function foregripDepth(p, w){
-  const n = p ? p.name : '';
-  if(!p) return w.type === 'Pistol' ? 0 : 0.10;
-  if(n.includes('Angled')) return 0.092;   // the hung body swings back through 0.5 rad
-  if(n.includes('Brace'))  return 0.120;
-  if(n.includes('Vertical') || n.includes('Skeleton') || n.includes('Claw')) return 0.060;
-  return 0.062;
-}
-function magazineDepth(p){
-  const n = p ? p.name : '';
-  if(n.includes('Drum') || n.includes('Heart')) return 0.158;
-  if(n.includes('Extended')) return 0.116;   // includes the rearward swing of the tilted body
-  if(n.includes('Belt'))     return 0.112;
-  return 0.096;
-}
-function vmForegrip(p, w, frontZ, bodyD, bodyH, botY, zOpt, fitOpt){
+/* The foregrip is full size and stays where it has always sat. It is the part your hand is
+   on and the most forward thing on the gun, so tapering it and sliding it toward the muzzle
+   to buy the magazine room read as a toy hanging off the end of the barrel - worse than the
+   crowding it was solving. Returns its rear edge; the magazine works around it. */
+function vmForegrip(p, w, frontZ, bodyD, bodyH, botY){
   if(botY === undefined) botY = -bodyH/2;
   const host = VMT, G = new THREE.Group();
-  G.position.set(0, botY, (typeof zOpt === 'number') ? zOpt : frontZ + bodyD*0.22);
-  G.scale.setScalar((typeof fitOpt === 'number') ? fitOpt : fitScale(bodyD));
+  G.position.set(0, botY, frontZ + bodyD*0.22);
   VMT = G;
   try { vmForegripBody(p, w); }
   finally { VMT = host; host.add(G); }
+  G.updateMatrixWorld(true);
+  let bb = new THREE.Box3().setFromObject(G);
+  // Nothing on the underside rail should reach past the muzzle end of the receiver. The
+  // Angled Grip's forward rake put it 13mm proud on the M17 and the Bulwark Brace 3mm,
+  // which is what reads as a grip hanging off the front rather than bolted under it.
+  if(!bb.isEmpty() && bb.min.z < frontZ){
+    G.position.z += frontZ - bb.min.z;
+    G.updateMatrixWorld(true);
+    bb = new THREE.Box3().setFromObject(G);
+  }
+  return bb.isEmpty() ? frontZ : bb.max.z;
 }
 function vmForegripBody(p, w){
   const m = partMat(p), n = p ? p.name : '';
