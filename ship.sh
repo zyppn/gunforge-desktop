@@ -6,6 +6,7 @@
 #   ./ship.sh 1.5.0        exact version
 #   ./ship.sh --server     deploy the server only, no version bump
 #   ./ship.sh --client     release the client only, no server deploy
+#   ./ship.sh --no-wait    do not wait for the installer build
 #
 # Connection settings live in .deploy.conf (gitignored). First run asks for them.
 set -euo pipefail
@@ -13,10 +14,11 @@ cd "$(dirname "$0")"
 say(){ printf '\n\033[1;33m==> %s\033[0m\n' "$*"; }
 die(){ printf '\n\033[1;31mx  %s\033[0m\n' "$*" >&2; exit 1; }
 
-DO_CLIENT=1; DO_SERVER=1; BUMP="patch"
+DO_CLIENT=1; DO_SERVER=1; DO_WAIT=1; BUMP="patch"
 for a in "$@"; do case "$a" in
   --server) DO_CLIENT=0 ;;
   --client) DO_SERVER=0 ;;
+  --no-wait) DO_WAIT=0 ;;
   -*) die "unknown flag $a" ;;
   *)  BUMP="$a" ;;
 esac; done
@@ -136,7 +138,36 @@ REMOTE
   echo "  box on $REMOTE_SHA, arena up ${UP}s"
 fi
 
+# ---------------------------------------------------------------- installers
+# There is nothing to "publish": the workflow creates the release with
+# draft:false before any build runs, so v$NEXT is live the moment it is tagged.
+# What is worth waiting for is whether the three installers actually landed on
+# it - a release that exists with no assets, or missing latest*.yml, is a broken
+# auto-update for everyone who already has the app.
+if [ "$DO_CLIENT" -eq 1 ] && [ "$DO_WAIT" -eq 1 ]; then
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    say "Installers  v$NEXT"
+    echo "  waiting for the build (ctrl-C is safe, it keeps running on GitHub)"
+    sleep 8
+    RUN="$(gh run list --workflow="Build and release" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+    if [ -n "$RUN" ]; then gh run watch "$RUN" --exit-status >/dev/null 2>&1 || true; fi
+    ASSETS="$(gh release view "v$NEXT" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+    if [ "${ASSETS:-0}" -gt 0 ]; then
+      echo "  v$NEXT is live with $ASSETS assets:"
+      gh release view "v$NEXT" --json assets --jq '.assets[].name' | sed 's/^/    /'
+      gh release view "v$NEXT" --json assets --jq '.assets[].name' | grep -q 'latest.*yml' \
+        || echo "  !! no latest*.yml — auto-update will not see this release"
+    else
+      echo "  !! v$NEXT has no assets yet — check https://github.com/zyppn/gunforge-desktop/actions"
+    fi
+  else
+    echo "  (install the gh CLI and I can watch the build for you: brew install gh && gh auth login)"
+  fi
+fi
+
 say "Shipped"
-[ "$DO_CLIENT" -eq 1 ] && echo "  build: https://github.com/zyppn/gunforge-desktop/actions"
-[ "$DO_CLIENT" -eq 1 ] && echo "  then publish the release at https://github.com/zyppn/gunforge-desktop/releases"
+if [ "$DO_CLIENT" -eq 1 ]; then
+  echo "  v$NEXT — already published, nothing to click"
+  echo "  https://github.com/zyppn/gunforge-desktop/releases/tag/v$NEXT"
+fi
 exit 0
