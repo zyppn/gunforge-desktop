@@ -2998,7 +2998,7 @@ function nearestEnemy(e){
    `eq` arrives here as a plain object in both modes - the live handler flattens
    the MapSchema before calling, so this function never has to know which. */
 const DC_SLOTS = ['frame','barrel','magazine','foregrip','stock','optic'];
-const headToHead = new Map();          // killer name -> [their kills, your kills]
+const headToHead = new Map();          // name -> [YOUR kills on them, theirs on you]
 function showDeathCard(info){
   const el = document.getElementById('deathcard'); if(!el) return;
   const w = WEAPONS.find(x => x.id === info.wid);
@@ -3021,7 +3021,10 @@ function showDeathCard(info){
     '<div class="dc-who">' + (info.name || 'UNKNOWN') + '</div>' +
     '<div class="dc-wep">' + (w ? '<b>' + w.name + '</b> · ' + w.type : 'Unknown weapon') + '</div>' +
     rows +
-    (rec ? '<div class="dc-rec">this match &nbsp; <b>' + rec[0] + ' – ' + rec[1] + '</b></div>' : '') +
+    // Yours first and labelled on both sides. "1 – 7" with no labels is a
+    // coin-flip read, and the wrong guess is the demoralising one.
+    (rec ? '<div class="dc-rec">YOU <b>' + rec[0] + '</b> – <b>' + rec[1] + '</b> ' +
+           (info.name || '') + '</div>' : '') +
     '<div class="dc-count">respawning in <b id="dc-count">' +
       (LoadoutCore.RESPAWN_MS/1000).toFixed(1) + '</b></div>';
   el.classList.add('on');
@@ -3042,12 +3045,16 @@ function stepDeathCard(){
 }
 /* Only surfaced from the second meeting onward - "2-1" on a first encounter
    is noise, not information. */
-function noteKill(killerName, iDied){
-  if(!killerName) return;
-  const r = headToHead.get(killerName) || [0,0];
-  r[iDied ? 0 : 1]++;
-  headToHead.set(killerName, r);
+function noteKill(name, iDied){
+  if(!name) return;
+  const r = headToHead.get(name) || [0,0];
+  r[iDied ? 1 : 0]++;            // [0] is always YOURS - the card reads yours first
+  headToHead.set(name, r);
 }
+/* Per MATCH, not per session. This lived for the lifetime of the page, so it
+   accumulated across every match and across offline and live together - a
+   fresh match would open showing a record built up over an evening. */
+function resetHeadToHead(){ headToHead.clear(); }
 
 /* --- dropped weapons ---------------------------------------------------
    A separate tumbling box rather than reparenting the real gun: the bot mesh
@@ -3626,6 +3633,7 @@ function startMatch(){
     for(let i=0;i<4;i++) addBot(names[i+3], 'red', 0xE05A4E, i+3);
   }
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
+  resetHeadToHead();   // the record is per match, not per session
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
   sizeRenderer();
@@ -4389,6 +4397,7 @@ function startLiveMatch(){
   yaw = 0; pitch = 0;
   live = { room:null, myId:null, remotes:new Map(), sendT:0, lastHp:100, results:false, rewarded:false };
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
+  resetHeadToHead();   // the record is per match, not per session
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
   sizeRenderer();

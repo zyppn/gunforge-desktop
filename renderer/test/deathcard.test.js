@@ -35,7 +35,8 @@ const sandbox = {
 };
 const vm = require('vm');
 vm.createContext(sandbox);
-vm.runInContext(lift('showDeathCard') + ';' + lift('hideDeathCard') + ';' + lift('noteKill'), sandbox);
+vm.runInContext([lift('showDeathCard'), lift('hideDeathCard'),
+                 lift('noteKill'), lift('resetHeadToHead')].join(';'), sandbox);
 
 console.log('A FULL BUILD');
 {
@@ -76,18 +77,32 @@ console.log('\nMISSING AND UNKNOWN DATA');
   check('  and says UNKNOWN', el.innerHTML.includes('UNKNOWN'));
 }
 
-console.log('\nHEAD TO HEAD  (only from the second meeting)');
+console.log('\nHEAD TO HEAD  (yours first, and per MATCH)');
 {
-  sandbox.headToHead.clear();
-  sandbox.noteKill('RIVAL', true);                       // they killed you once
+  sandbox.resetHeadToHead();
+  sandbox.noteKill('RIVAL', true);                       // they killed you
   sandbox.showDeathCard({ name:'RIVAL', wid:'m17', eq:{} });
-  check('shows 1 - 0 once a record exists', el.innerHTML.includes('1 – 0'),
-        (el.innerHTML.match(/dc-rec.*?<\/div>/s) || ['none'])[0].replace(/<[^>]*>/g,'').trim());
-  sandbox.noteKill('RIVAL', false);                      // you got them back
-  sandbox.noteKill('RIVAL', true);
+  let h = el.innerHTML;
+  /* Order matters more than it looks. "1 - 7" with no labels is a coin-flip
+     read and the wrong guess is the demoralising one, so the card says YOU
+     first and names them second. */
+  check('reads YOU 0 - 1 RIVAL after one death', h.includes('YOU <b>0</b> – <b>1</b> RIVAL'),
+        (h.match(/dc-rec[^>]*>(.*?)<\/div>/s) || ['?'])[0].replace(/<[^>]*>/g,'').trim());
+  sandbox.noteKill('RIVAL', false); sandbox.noteKill('RIVAL', false);
   sandbox.showDeathCard({ name:'RIVAL', wid:'m17', eq:{} });
-  check('tallies both directions', el.innerHTML.includes('2 – 1'));
-  check('an unnamed killer is not tallied', (sandbox.noteKill(null, true), sandbox.headToHead.size === 1));
+  h = el.innerHTML;
+  check('your kills land on YOUR side', h.includes('YOU <b>2</b> – <b>1</b> RIVAL'));
+  check('an unnamed killer is not tallied',
+        (sandbox.noteKill(null, true), sandbox.headToHead.size === 1));
+
+  /* This is the bug that shipped: the map lived for the lifetime of the page,
+     so a fresh match opened showing a record accumulated over an evening -
+     across offline and live matches together. */
+  sandbox.resetHeadToHead();
+  sandbox.showDeathCard({ name:'RIVAL', wid:'m17', eq:{} });
+  check('a new match starts the record from nothing', !el.innerHTML.includes('dc-rec'),
+        'no record row after reset');
+  check('  and the map is actually empty', sandbox.headToHead.size === 0);
 }
 
 console.log('\nRESPAWN COUNTDOWN');
@@ -108,6 +123,17 @@ console.log('\nHIDE');
 { sandbox.hideDeathCard();
   check('hiding clears the visible class', !el.classList._on);
   check('  and disarms the countdown', sandbox.deathCardUntil === 0); }
+
+/* Structural: the reset has to be wired into EVERY match start, not just the
+   one I happened to be looking at. This is the check that would have caught
+   the record accumulating across a whole evening. */
+{
+  const starts = (html.match(/\$\('#killfeed'\)\.innerHTML=''/g) || []).length;
+  const resets = (html.match(/resetHeadToHead\(\);/g) || []).length;
+  console.log('\nWIRING');
+  check('every match start clears the head-to-head', starts > 0 && resets >= starts,
+        starts + ' match starts, ' + resets + ' resets');
+}
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all death card checks passed'));
 process.exit(fails ? 1 : 0);
