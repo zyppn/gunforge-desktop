@@ -448,7 +448,10 @@ class ArenaRoom extends Room {
       wire.push(+b.x.toFixed(2), +b.y.toFixed(2), +b.z.toFixed(2),
                 +b.vx.toFixed(2), +b.vy.toFixed(2), +b.vz.toFixed(2));
     }
-    this.broadcast('shot', { id, b: wire, s: seeker ? 1 : 0, g: has('pierce_all') ? 1 : 0 },
+    // f: Exhale. Without it every other player sees a Dragon build fire plain rounds,
+    // which is how the local-only tracer work shipped half-done the first time.
+    this.broadcast('shot', { id, b: wire, s: seeker ? 1 : 0, g: has('pierce_all') ? 1 : 0,
+                             f: has('fire_nova') ? 1 : 0 },
                    { except: this.clients.find(c => c.sessionId === id) });
   }
 
