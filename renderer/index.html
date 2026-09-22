@@ -2622,7 +2622,11 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
      AROUND the scope ring; reticles live at the FAR glass so they render hairline. */
   const m = partMat(p), n = p ? p.name : '';
   // Mount off whatever the frame actually builds to, never the nominal receiver height.
-  const y = Math.max(bodyH/2, (typeof frameTop === 'number' ? frameTop : bodyH/2)), z = bodyZ + bodyD*0.1;
+  // The Math.max floor here defeated exactly that: the Polymer frame's 0.88x body tops
+  // out at 0.44*bodyH, so flooring at bodyH/2 parked every optic 6.6mm above the surface
+  // it is supposed to be bolted to. Every frame reports topY, and the bare default
+  // reports bodyH/2, so the floor was only ever hiding the mismatch.
+  const y = (typeof frameTop === 'number' ? frameTop : bodyH/2), z = bodyZ + bodyD*0.1;
   const rc = p ? RCOL[p.rarity] : 0xC9D4DE;
   const glowM = (c, op) => new THREE.MeshBasicMaterial({color:c, transparent:true, opacity:op, depthWrite:false, side:THREE.DoubleSide});
   const strip = (wd, ht, c, op, px, py, pz) => {
@@ -2685,6 +2689,11 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
       ctr2.position.set(0, cy, z - 0.0385); VMT.add(ctr2);
       const glass = new THREE.Mesh(new THREE.CircleGeometry(0.042, 16), glowM(0x9FB2C2, 0.1));
       glass.position.set(0, cy, z - 0.051); glassPane(glass, 0.1);
+      // scope rings. Without them the tube hung on the bare STANDOFF with nothing under it.
+      for(const dz of [-0.032, 0.032]){
+        const h = (cy - 0.049) - y;
+        if(h > 0.002) vmBox(mat(0x1B232C), 0.022, h, 0.014, 0, y + h/2, z + dz);
+      }
       setAim(0, cy, z, 0.26, 48);
     } else {
       vmBox(mat(0x1B232C), 0.014, 0.045, 0.014, 0, y+0.022, bodyZ - bodyD*0.3); // taller post
@@ -2716,6 +2725,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     const ret = new THREE.Mesh(new THREE.TorusGeometry(0.009, 0.0012, 6, 16), glowM(rc, 0.95));
     ret.position.set(0, cy, z - 0.006); VMT.add(ret);
     strip(0.0035, 0.0035, rc, 1, 0, cy, z - 0.007);
+    riser(0.072, 0.046, cy - 0.0275);   // mount shoe spanning both side plates
     setAim(0, cy, z, 0.22, 24);
   } else if(n.includes('ACOG') || n.includes('Lens')){
     const long = n.includes('Lens');
@@ -2765,6 +2775,7 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     slitGlass.position.set(0, cy, z - 0.02); glassPane(slitGlass, 0.14);
     strip(hw*1.6, 0.0012, 0x9BE8FF, 0.9, 0, cy, z - 0.021);
     strip(0.0016, 0.012, 0x9BE8FF, 0.95, 0, cy, z - 0.022);
+    riser(0.056, 0.044, cy - hh - bz);  // armour shoe: the window used to hang on nothing
     setAim(0, cy, z, 0.26, 24);
   } else {
     // unknown optics: hollow window frame, never a solid block in your face
