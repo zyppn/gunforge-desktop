@@ -2503,26 +2503,30 @@ function vmStock(p, w, rearZ, bodyH){
     vmCyl(steel(), 0.006, 0.012, rearZ + 0.100, -0.066);
   } else if(n.includes('Marksman') || n.includes('Spine')){
     vmBox(m, 0.06, 0.08, 0.18, 0, -0.015, rearZ + 0.09);
-    vmBox(m, 0.05, 0.03, 0.09, 0, 0.04, rearZ + 0.1); // riser sits ON the body now
+    vmBox(m, 0.05, 0.03, 0.09, 0, 0.0392, rearZ + 0.1); // riser sinks INTO the body; sitting exactly ON it made the faces coplanar
     const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.012, 10), steel());
     wheel.rotation.z = Math.PI/2; wheel.position.set(0.033, 0.04, rearZ + 0.1); VMT.add(wheel);
-    for(const dz of [0.155, 0.17]) vmBox(tone(0.8), 0.06, 0.08, 0.004, 0, -0.015, rearZ + dz); // butt spacers, flush
+    // PROUD, not flush. At the body's exact 0.06 x 0.08 cross-section all four
+    // side faces were coplanar with it, so the depth buffer could not order them
+    // and they z-fought into a jittering stripe. Standing them 0.001 out also
+    // makes them read as butt-pad bands instead of hiding inside the body.
+    for(const dz of [0.155, 0.17]) vmBox(tone(0.8), 0.062, 0.082, 0.004, 0, -0.015, rearZ + dz);
   } else if(n.includes('CQB')){
     vmBox(m, 0.065, 0.075, 0.06, 0, -0.005, rearZ + 0.03);
     vmCyl(dark(), 0.016, 0.045, rearZ + 0.008, -0.002); // buffer tube
   } else if(n.includes('Skeleton') || n.includes('Shell')){
     vmBox(m, 0.05, 0.016, 0.16, 0, 0.03, rearZ + 0.08);
     vmBox(m, 0.05, 0.016, 0.15, 0, -0.05, rearZ + 0.075).rotation.x = 0.35;
-    vmBox(m, 0.05, 0.09, 0.02, 0, -0.01, rearZ + 0.155);
+    vmBox(m, 0.052, 0.09, 0.02, 0, -0.01, rearZ + 0.155);   // 0.052, not the rails' 0.05: equal widths put the side faces on one plane
     vmBox(steel(), 0.012, 0.012, 0.012, 0, 0.03, rearZ + 0.008);  // joint bolts
     vmBox(steel(), 0.012, 0.012, 0.012, 0, -0.028, rearZ + 0.148);
   } else if(n.includes('Chassis') || n.includes('Frame')){
     vmBox(m, 0.09, 0.11, 0.12, 0, -0.005, rearZ + 0.06);
-    vmBox(dark(), 0.07, 0.07, 0.005, 0, -0.005, rearZ + 0.121); // recessed back panel
+    vmBox(dark(), 0.066, 0.07, 0.005, 0, -0.005, rearZ + 0.121); // recessed back panel (0.066: 0.07 matched the block's sides)
     for(const sx of [-0.036, 0.036]) for(const dy of [-0.04, 0.032])
       vmBox(steel(), 0.008, 0.008, 0.008, sx, dy, rearZ + 0.004); // chassis rivets
   } else {
-    vmBox(m, 0.07, 0.085, 0.12, 0, -0.01, rearZ + 0.06);
+    vmBox(m, 0.07, 0.085, 0.116, 0, -0.01, rearZ + 0.06);  // 0.116, not 0.12: equal depth shared the outer block's front and back planes
     vmBox(dark(), 0.072, 0.005, 0.122, 0, 0.024, rearZ + 0.06); // seam
   }
 }
