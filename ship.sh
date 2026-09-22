@@ -38,13 +38,21 @@ if [ ! -f "$CONF" ] && [ "$DO_SERVER" -eq 1 ]; then
 WHY
   read -r -p "  ssh target : " H
   [ -n "$H" ] || die "no ssh target — ./ship.sh --client releases the client alone"
+  read -r -p "  identity file, blank if your ssh config handles it : " K
   read -r -p "  repo path on that box [~/gunforge-desktop] : " P; P="${P:-~/gunforge-desktop}"
-  read -r -p "  service name [gunforge] : " S; S="${S:-gunforge}"
-  printf 'DEPLOY_HOST=%q\nDEPLOY_PATH=%q\nDEPLOY_SVC=%q\nDEPLOY_PORT=2567\n' "$H" "$P" "$S" > "$CONF"
+  read -r -p "  systemd unit [gunforge] : " S; S="${S:-gunforge}"
+  # NOT %q: it escapes a leading ~ to \~, which then expands to nothing on either end
+  { echo "DEPLOY_HOST=\"$H\""; echo "DEPLOY_KEY=\"$K\""; echo "DEPLOY_PATH=\"$P\"";
+    echo "DEPLOY_SVC=\"$S\""; echo "DEPLOY_PORT=2567"; } > "$CONF"
   echo "  saved to $CONF (gitignored) — you won't be asked again"
 fi
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
+# the unit is named gunforge.service; accept either spelling and normalise
+DEPLOY_SVC="${DEPLOY_SVC:-gunforge}"; DEPLOY_SVC="${DEPLOY_SVC%.service}"
+# -t because the restart needs sudo, and sudo needs a tty
+SSH=(ssh -t)
+[ -n "${DEPLOY_KEY:-}" ] && SSH+=(-i "${DEPLOY_KEY/#\~/$HOME}")
 
 # ---------------------------------------------------------------- preflight
 say "Preflight"
@@ -90,41 +98,39 @@ echo "  $BRANCH at $LOCAL"
 # ---------------------------------------------------------------- server
 if [ "$DO_SERVER" -eq 1 ]; then
   say "Server  $DEPLOY_HOST"
-  ssh "$DEPLOY_HOST" "bash -se" <<REMOTE
+  # Everything the box does, in one round trip, ending in the proof it worked.
+  # /health reports uptime in seconds, so a small "up" is evidence the process
+  # actually RESTARTED - reachable is not the same as restarted, and a deploy that
+  # pulled but left the old process running is the failure this exists to catch.
+  OUT="$("${SSH[@]}" "$DEPLOY_HOST" "bash -se" <<REMOTE
 set -euo pipefail
-cd "$DEPLOY_PATH"
+cd ${DEPLOY_PATH}
 git fetch --quiet origin
-git reset --hard --quiet "origin/$BRANCH"
-# only reinstall when the lockfile actually moved
-if ! git diff --quiet HEAD@{1} HEAD -- package-lock.json 2>/dev/null; then
-  echo "  lockfile changed — npm ci"
-  npm ci --omit=dev --silent
+git reset --hard --quiet origin/$BRANCH
+if ! git diff --quiet 'HEAD@{1}' HEAD -- package-lock.json 2>/dev/null; then
+  npm ci --omit=dev --silent && echo "  lockfile moved — dependencies reinstalled"
 fi
-# restart through whatever is actually managing it
-if command -v pm2 >/dev/null 2>&1 && pm2 describe "$DEPLOY_SVC" >/dev/null 2>&1; then
-  pm2 restart "$DEPLOY_SVC" --update-env >/dev/null && echo "  restarted via pm2"
-elif systemctl list-unit-files 2>/dev/null | grep -q "^$DEPLOY_SVC.service"; then
-  sudo systemctl restart "$DEPLOY_SVC" && echo "  restarted via systemd"
-else
-  echo "  !! no pm2 process or systemd unit named '$DEPLOY_SVC' — restart it yourself" >&2
-  exit 3
-fi
+sudo systemctl restart $DEPLOY_SVC.service
+for i in \$(seq 1 15); do
+  H=\$(curl -sf --max-time 2 localhost:$DEPLOY_PORT/health || true)
+  [ -n "\$H" ] && break
+  sleep 1
+done
+echo "SHA=\$(git rev-parse --short HEAD)"
+echo "HEALTH=\$H"
 REMOTE
+)"
+  echo "$OUT" | grep '^  ' || true
+  REMOTE_SHA="$(printf '%s' "$OUT" | sed -n 's/^SHA=//p' | tr -d '\r')"
+  HEALTH="$(printf '%s' "$OUT" | sed -n 's/^HEALTH=//p' | tr -d '\r')"
 
   say "Verify"
-  # The box must be running the commit we just pushed. A deploy that silently kept
-  # the old code is the failure this whole script exists to prevent.
-  REMOTE_SHA="$(ssh "$DEPLOY_HOST" "cd $DEPLOY_PATH && git rev-parse --short HEAD")"
-  [ "$REMOTE_SHA" = "$LOCAL" ] || die "box is on $REMOTE_SHA, expected $LOCAL — deploy did not take"
-  echo "  box on $REMOTE_SHA"
-  HOSTONLY="${DEPLOY_HOST#*@}"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    if (exec 3<>"/dev/tcp/$HOSTONLY/$DEPLOY_PORT") 2>/dev/null; then
-      echo "  $HOSTONLY:$DEPLOY_PORT accepting connections"; break
-    fi
-    [ "$i" -eq 10 ] && die "port $DEPLOY_PORT never came back up"
-    sleep 1
-  done
+  [ -n "$HEALTH" ] || die "no /health response — the arena did not come back up"
+  [ "$REMOTE_SHA" = "$LOCAL" ] || die "box is on $REMOTE_SHA, expected $LOCAL — the pull did not take"
+  UP="$(printf '%s' "$HEALTH" | sed -n 's/.*"up":"\([0-9]*\)s".*/\1/p')"
+  [ -n "$UP" ] && [ "$UP" -lt 60 ] \
+    || die "arena reports up=${UP:-?}s — it answered, but it never restarted"
+  echo "  box on $REMOTE_SHA, arena up ${UP}s"
 fi
 
 say "Shipped"
