@@ -109,5 +109,21 @@ ok('RESIST_TAIL is exported from loadout-core', typeof LC.RESIST_TAIL === 'numbe
      !r.lastShotAt.has(id) && !r.magLeft.has(id) && !r.reloadUntil.has(id));
 }
 
+/* 8. the card has to describe the behaviour the code actually has. The old copy said
+      "while firing" full stop, which was true of the version this replaced and is now
+      an understatement - the set reads as weaker than it is, which is the same problem
+      in a different place. */
+{
+  const html = require('fs').readFileSync(path.join(SRV, '..', 'renderer', 'index.html'), 'utf8');
+  const m = html.match(/bonus:'([^']*UNSTOPPABLE[^']*)'/);
+  ok('the set card exists', !!m);
+  if(m){
+    const copy = m[1].toLowerCase();
+    ok('the card still states the 30%', /30% less damage/.test(copy));
+    ok('the card mentions reloading, because the code covers it', /reload/.test(copy));
+    ok('the card mentions the gap between bursts', /burst/.test(copy));
+  }
+}
+
 console.log(fails ? '\n  jugg.test.js: ' + fails + ' FAILED' : '  jugg.test.js: all passed');
 process.exit(fails ? 1 : 0);
