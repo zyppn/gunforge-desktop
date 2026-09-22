@@ -50,8 +50,11 @@ fi
 [ -f "$CONF" ] && . "$CONF"
 # the unit is named gunforge.service; accept either spelling and normalise
 DEPLOY_SVC="${DEPLOY_SVC:-gunforge}"; DEPLOY_SVC="${DEPLOY_SVC%.service}"
-# -t because the restart needs sudo, and sudo needs a tty
-SSH=(ssh -t)
+# No -t: the remote script arrives on stdin as a heredoc, so ssh cannot allocate a
+# tty anyway and only prints a warning about it. That means sudo has to be passwordless
+# for this user - which it is, or the restart in the run that proved this out would
+# have hung. If that ever changes, this needs a different shape, not a -t.
+SSH=(ssh)
 [ -n "${DEPLOY_KEY:-}" ] && SSH+=(-i "${DEPLOY_KEY/#\~/$HOME}")
 
 # ---------------------------------------------------------------- preflight
