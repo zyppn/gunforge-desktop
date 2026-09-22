@@ -64,6 +64,17 @@ console.log('A FULL BUILD');
   check('no head-to-head on a first meeting', !h.includes('dc-rec'));
 }
 
+console.log('\nHEALTH REMAINING  (how close you came)');
+{
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'ls1', eq:{}, hp:33.4 });
+  check('shows the killer\'s remaining health', el.innerHTML.includes('health remaining'));
+  check('  rounded to a whole percent', el.innerHTML.includes('>33%<'), '33.4 -> 33%');
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'ls1', eq:{}, hp:-4 });
+  check('  never negative', el.innerHTML.includes('>0%<'));
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'ls1', eq:{} });
+  check('  omitted when unknown, not shown as 0', !el.innerHTML.includes('health remaining'));
+}
+
 console.log('\nMISSING AND UNKNOWN DATA');
 {
   sandbox.showDeathCard({ name:'NOBODY', wid:'nosuchgun', eq:{ frame:{name:'Polymer Frame',rarity:'rare'} }, dist:null });
@@ -128,11 +139,24 @@ console.log('\nHIDE');
    one I happened to be looking at. This is the check that would have caught
    the record accumulating across a whole evening. */
 {
+  console.log('\nWIRING');
   const starts = (html.match(/\$\('#killfeed'\)\.innerHTML=''/g) || []).length;
   const resets = (html.match(/resetHeadToHead\(\);/g) || []).length;
-  console.log('\nWIRING');
   check('every match start clears the head-to-head', starts > 0 && resets >= starts,
         starts + ' match starts, ' + resets + ' resets');
+  /* Offline and live each had their own copy of "this body died", and they
+     drifted: live still pushed the OLD 0.32s duration and never dropped a
+     weapon, and its respawn reset the transform without cancelling the entry,
+     which is what left bodies half buried. One push site keeps them honest. */
+  const pushes = (html.match(/G\.dying\.push\(/g) || []).length;
+  check('only one place starts a death animation', pushes === 1, pushes + ' push sites');
+  const clears = (html.match(/clearDyingMesh\(/g) || []).length;
+  check('and both respawn paths cancel it', clears >= 3, clears + ' call sites');
+  /* Your own gun and combat HUD must come off screen while the camera is on
+     someone else. */
+  check('the viewmodel is hidden while dead', /vm\.visible = !me\.dead/.test(html));
+  check('the HUD gets a dead state', /classList\.toggle\('dead'/.test(html) &&
+        /#hud\.dead #hudbr/.test(html));
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all death card checks passed'));

@@ -110,6 +110,9 @@
   #deathcard .dc-who{font-size:22px;font-weight:700;margin:2px 0 1px;letter-spacing:.02em}
   #deathcard .dc-wep{font-size:12px;color:#C8D2DA;margin-bottom:11px}
   #deathcard .dc-wep b{color:#F5C468;font-weight:600}
+  #deathcard .dc-hp{font-size:10px;letter-spacing:.16em;color:#8A96A0;text-transform:uppercase;
+    margin:-6px 0 10px}
+  #deathcard .dc-hp b{color:#DCE4EA;font-size:15px;letter-spacing:0;font-weight:700;margin-left:6px}
   #deathcard .dc-dist{float:right;font-size:12px;color:#8A96A0;font-weight:600}
   #deathcard .dc-slot{display:flex;justify-content:space-between;gap:10px;
     border-left:3px solid var(--r-common);background:rgba(255,255,255,.028);
@@ -185,6 +188,11 @@
   #gamewrap{position:relative;border:1px solid var(--line);background:#000;user-select:none}
   #cv{display:block;width:100%;height:auto;cursor:crosshair}
   #hud{position:absolute;inset:0;pointer-events:none;font-size:12px}
+  /* While dead, everything about YOUR state comes off screen. The scoreboard,
+     killfeed and the card itself stay. */
+  #hud.dead #crosshair, #hud.dead #hudbl, #hud.dead #hudbr,
+  #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov{
+    opacity:0 !important; transition:opacity .18s}
   #hudtop{position:absolute;top:8px;left:0;right:0;display:flex;justify-content:center;gap:18px;text-shadow:0 1px 2px #000}
   #hudtop .box{background:rgba(10,14,19,.75);border:1px solid var(--line);padding:4px 12px}
   #timer{font-family:var(--disp);font-size:16px;letter-spacing:2px;color:#fff}
@@ -3020,6 +3028,9 @@ function showDeathCard(info){
     '</div>' +
     '<div class="dc-who">' + (info.name || 'UNKNOWN') + '</div>' +
     '<div class="dc-wep">' + (w ? '<b>' + w.name + '</b> · ' + w.type : 'Unknown weapon') + '</div>' +
+    // how close you came - the most useful single number on the card
+    (info.hp != null ? '<div class="dc-hp">health remaining<b>' +
+       Math.max(0, Math.round(info.hp)) + '%</b></div>' : '') +
     rows +
     // Yours first and labelled on both sides. "1 – 7" with no labels is a
     // coin-flip read, and the wrong guess is the demoralising one.
@@ -3060,9 +3071,10 @@ function resetHeadToHead(){ headToHead.clear(); }
    A separate tumbling box rather than reparenting the real gun: the bot mesh
    hierarchy stays intact, so respawn is just making the original visible
    again and nothing can be left orphaned in the scene. */
-function dropWeapon(e){
-  const u = e.mesh && e.mesh.userData;
-  if(!u || !u.gun) return;
+function dropWeapon(e){ dropWeaponFromMesh(e.mesh); }
+function dropWeaponFromMesh(mesh){
+  const u = mesh && mesh.userData;
+  if(!u || !u.gun || !u.gun.visible) return;
   const w = new THREE.Vector3(), q = new THREE.Quaternion();
   u.gun.getWorldPosition(w); u.gun.getWorldQuaternion(q);
   u.gun.visible = false;                       // restored in respawn()
@@ -3112,13 +3124,24 @@ function stepKillcam(dt){
    back the way it was. Without this a respawn that lands mid-animation leaves
    the body half sunk into the floor with the dying loop still writing to it -
    and worse, the loop finishes later and hides a player who is alive. */
+/* One entry point for "this body just died", so the offline and live paths
+   cannot drift. They already had: live pushed its own entry at the OLD 0.32s
+   duration and never dropped a weapon. */
+function startDeathAnim(mesh, grunt){
+  if(!mesh) return;
+  for(let i=G.dying.length-1;i>=0;i--) if(G.dying[i].mesh === mesh) G.dying.splice(i,1);
+  G.dying.push({mesh, t:0, dur:0.60, dir:(Math.random()<0.5?1:-1), grunt:!!grunt});
+  dropWeaponFromMesh(mesh);
+}
+function clearDyingMesh(mesh){
+  if(!mesh) return;
+  for(let i=G.dying.length-1;i>=0;i--) if(G.dying[i].mesh === mesh) G.dying.splice(i,1);
+  mesh.rotation.x = 0; mesh.position.y = 0; mesh.visible = true;
+  if(mesh.userData && mesh.userData.gun) mesh.userData.gun.visible = true;
+}
 function clearDying(e){
   if(!e.mesh) return;
-  for(let i=G.dying.length-1;i>=0;i--) if(G.dying[i].mesh === e.mesh) G.dying.splice(i,1);
-  e.mesh.rotation.x = 0;
-  e.mesh.position.y = 0;
-  e.mesh.visible = true;
-  if(e.mesh.userData && e.mesh.userData.gun) e.mesh.userData.gun.visible = true;
+  clearDyingMesh(e.mesh);
 }
 function stepDrops(dt){
   for(let i=G.drops.length-1;i>=0;i--){
@@ -3291,7 +3314,7 @@ function kill(t, src){
     if(t.isPlayer && !src.isPlayer){
       noteKill(src.name, true);
       showDeathCard({ name:src.name, wid:src.wid || (src.wep && src.wep.wid),
-        eq:src.eq, dist:Math.hypot(src.x - t.x, src.z - t.z) });
+        eq:src.eq, hp:src.hp, dist:Math.hypot(src.x - t.x, src.z - t.z) });
       startKillcam(src);
     } else if(src.isPlayer && !t.isPlayer){
       noteKill(t.name, false);
@@ -3301,8 +3324,7 @@ function kill(t, src){
     const u = t.mesh.userData;
     u.hbGroup.visible = false;
     u.shSphere.visible = false;
-    G.dying.push({mesh:t.mesh, t:0, dur:0.60, dir:(Math.random()<0.5?1:-1), grunt:t.grunt});
-    dropWeapon(t);
+    startDeathAnim(t.mesh, t.grunt);
   }
   if(t.grunt){
     G.ents = G.ents.filter(e=>e!==t);
@@ -4074,6 +4096,12 @@ function tick(now){
   camera.rotation.x = pitch + G.kickPitch;
   stepKillcam(dt);
   stepDeathCard();
+  /* Dead means dead: your hands, your ammo and your health bar have no business
+     on screen while the camera is watching someone else. The scoreboard and
+     killfeed stay - you still want to know where the round is. */
+  if(vm) vm.visible = !me.dead;
+  const hudEl = document.getElementById('hud');
+  if(hudEl) hudEl.classList.toggle('dead', !!me.dead);
   G.recoil = Math.max(0, G.recoil - dt*5);
   G.kickPitch *= Math.max(0, 1 - 9*dt);   // the barrel settles
   G.kickYaw   *= Math.max(0, 1 - 9*dt);
@@ -4457,6 +4485,7 @@ function startLiveMatch(){
         const eq = {};
         if(k && k.eq) DC_SLOTS.forEach(sl => { const q = k.eq.get ? k.eq.get(sl) : k.eq[sl]; if(q) eq[sl] = q; });
         showDeathCard({ name:m.killer, wid:(k && k.wid) || null, eq,
+          hp:k ? k.hp : null,
           dist:k ? Math.hypot(k.x - G.me.x, k.z - G.me.z) : null });
         startKillcam(k);            // k is live state - it keeps tracking them
       }
@@ -4747,12 +4776,13 @@ function liveTick(dt){
       r.wasDead = true;
       u.hbGroup.visible = false;
       spawnBurst(r.cx, r.cz, 0xE05A4E);
-      G.dying.push({mesh:r.mesh, t:0, dur:0.32, dir:(Math.random()<0.5?1:-1), grunt:false});
+      startDeathAnim(r.mesh, false);
     } else if(!t.dead && r.wasDead){
       r.wasDead = false;
       r.cx = t.x; r.cz = t.z; r.lastX = t.x; r.lastZ = t.z;
-      r.mesh.visible = true;
-      r.mesh.rotation.x = 0; r.mesh.position.y = 0;
+      // resetting the transform was not enough: the dying entry survived and
+      // the loop kept re-sinking the mesh, which is the half-buried body.
+      clearDyingMesh(r.mesh);
       u.hbGroup.visible = true;
     }
     if(t.dead) return;
