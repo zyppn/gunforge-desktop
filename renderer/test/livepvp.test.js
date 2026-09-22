@@ -61,5 +61,25 @@ ok('only when damage actually landed', /if\(dmg > 0 && id !== tid\)/.test(srv));
 ok('the auction surfaces the migration-009 abort specifically',
    /AUCTION NEEDS MIGRATION 009/.test(html));
 
+/* 8. the flinch. Offline and live each had their own copy and they had drifted: the live
+      one was missing the yaw kick and the damage vignette entirely. */
+ok('one flinch function', (html.match(/function playerFlinch/g) || []).length === 1);
+// grep for the NAME and it matches the comment that explains why the name is gone -
+// the second time this exact mistake has been made in this suite. Check for a
+// definition and a call instead, which prose cannot satisfy.
+ok('the old live-only copy is not defined', !/function damageFlinchOnly/.test(html));
+ok('and nothing calls it', !/damageFlinchOnly\(/.test(html));
+ok('the offline damage path calls it', /if\(t\.isPlayer\) playerFlinch\(dmg\)/.test(html));
+ok('the live path calls the same one', /playerFlinch\(live\.lastHp - sp\.hp\)/.test(html));
+{
+  // the whole effect must live inside that one function, or a caller can be short-changed
+  const i = html.indexOf('function playerFlinch');
+  const blk = html.slice(i, i + 620);
+  for(const part of ['G.shake', 'G.kickPitch', 'G.kickYaw', "$('#vign')", "sfx('hurt')"])
+    ok('playerFlinch still does ' + part, blk.includes(part));
+}
+ok('the flinch maths exists in exactly one place',
+   (html.match(/Math\.min\(1, dmg \/ 30\)/g) || []).length === 1);
+
 console.log(fails ? '\n  livepvp.test.js: ' + fails + ' FAILED' : '  livepvp.test.js: all passed');
 process.exit(fails ? 1 : 0);

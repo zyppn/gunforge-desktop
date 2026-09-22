@@ -3350,6 +3350,24 @@ function dropWeaponFromMesh(mesh){
    G.ents alone finds nothing, and the round flies dead straight on your screen while the
    server's authoritative copy homes perfectly onto the target and hits it. Remotes are
    reported at their SMOOTHED position, which is where their body is actually drawn. */
+/* Taking a hit: quick rattle, small view punch, red edge. Scaled by the damage that
+   reached HP, which is what both callers pass - offline the post-shield figure from
+   damage(), live the drop in the synced hp.
+
+   This existed twice. damage() had the full effect; the live path had its own copy called
+   damageFlinchOnly which had the shake and the pitch but neither the YAW nor the red
+   vignette, so being shot in a real match punched straight up with no sideways rattle and
+   no damage flash. Nothing errored - the live copy just quietly did less. One function
+   now, because a second copy is how it drifted in the first place. */
+function playerFlinch(dmg){
+  sfx('hurt');
+  const hitF = Math.min(1, dmg / 30);
+  G.shake     = Math.min(1, G.shake + 0.12 + hitF * 0.25);
+  G.kickPitch = Math.min(0.085, G.kickPitch + 0.006 + hitF * 0.008);
+  G.kickYaw  += (Math.random() - 0.5) * (0.005 + hitF * 0.006);
+  const v = $('#vign');
+  if(v){ v.style.opacity = 0.9; clearTimeout(v._t); v._t = setTimeout(() => { v.style.opacity = 0; }, 160); }
+}
 /* The hitmarker. Offline this is raised from damage(); in a live match the server owns
    damage, so it is raised from the server's hit confirmation instead. One function, so
    the two can never drift into showing different things. */
@@ -3580,15 +3598,7 @@ function damage(t, amount, src, isCrit){
   if(!t.isPlayer && !t.dead && src && src!==t && hostile(t, src)){
     t.alertSrc = src; t.alertT = 3;
   }
-  if(t.isPlayer){
-    sfx('hurt');
-    // flinch: quick rattle + small view punch, scaled to the hit (Warzone-style)
-    const hitF = Math.min(1, dmg / 30);
-    G.shake = Math.min(1, G.shake + 0.12 + hitF * 0.25);
-    G.kickPitch = Math.min(0.085, G.kickPitch + 0.006 + hitF * 0.008);
-    G.kickYaw += (Math.random()-0.5) * (0.005 + hitF * 0.006);
-    const v = $('#vign'); v.style.opacity = 0.9; setTimeout(()=>{ v.style.opacity = 0; }, 160);
-  }
+  if(t.isPlayer) playerFlinch(dmg);
   if(src && src.isPlayer && src!==t) showHitmark(isCrit);
   if(src){
     if(src.wep && src.wep.abilities.has('vampiric') && src!==t){
@@ -5205,7 +5215,7 @@ function liveTick(dt){
   // ---- server authority over my HP / life / (gross) position ----
   if(sp){
     if(sp.hp < live.lastHp && !me.dead){
-      damageFlinchOnly(live.lastHp - sp.hp);
+      playerFlinch(live.lastHp - sp.hp);
     }
     /* Lifesteal and Sanctuary flash the bar from damage(), which the client never runs
        for ITSELF in a live match - the server owns that damage and all we get is a new
@@ -5359,12 +5369,6 @@ function liveTick(dt){
   }
 }
 
-function damageFlinchOnly(dmg){
-  sfx('hurt');
-  const hitF = Math.min(1, dmg / 30);
-  G.shake = Math.min(1, G.shake + 0.12 + hitF * 0.25);
-  G.kickPitch = Math.min(0.085, G.kickPitch + 0.006 + hitF * 0.008);
-}
 
 function liveLeave(){
   if(live){
