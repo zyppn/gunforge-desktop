@@ -115,6 +115,12 @@ class ArenaRoom extends Room {
     this.inputs = new Map();   // sessionId -> latest input
     this.fireT = new Map();    // sessionId -> next allowed fire time
     this.shotN = new Map();    // sessionId -> shots fired, for the Swarm cadence
+    /* Juggernaut uptime, derived server-side so no new client field has to be trusted.
+       lastShotAt gives the trailing window; magLeft counts down from the loadout's mag
+       so the server knows on its own when a reload must be happening, and for how long. */
+    this.lastShotAt = new Map();  // sessionId -> ms of the last accepted shot
+    this.magLeft = new Map();     // sessionId -> rounds left before the mag runs dry
+    this.reloadUntil = new Map(); // sessionId -> ms until the derived reload finishes
     this.loadouts = new Map(); // sessionId -> computed weapon stats (server-authoritative)
     this.playerIds = new Map(); // sessionId -> supabase players.id (verified)
     this.burnSrc = new Map();   // sessionId -> who set them alight (for kill credit)
@@ -192,6 +198,9 @@ class ArenaRoom extends Room {
     }
     this.inputs.delete(client.sessionId);
     this.fireT.delete(client.sessionId);
+    this.lastShotAt.delete(client.sessionId);
+    this.magLeft.delete(client.sessionId);
+    this.reloadUntil.delete(client.sessionId);
     this.loadouts.delete(client.sessionId);
     this.playerIds.delete(client.sessionId);
   }
@@ -335,6 +344,7 @@ class ArenaRoom extends Room {
       p.x = s[0]; p.z = s[1];
     });
     this.fireT.clear();
+    this.lastShotAt.clear(); this.magLeft.clear(); this.reloadUntil.clear();
     this.bullets.length = 0;    // rounds in flight don't survive the round
     this.state.timeLeft = 300;
     this.state.phase = this.clients.length >= 2 ? 'live' : 'waiting';
@@ -353,12 +363,31 @@ class ArenaRoom extends Room {
      the hit corridor, ricochet reflects the ray off one wall — so none of this
      needs a projectile system. See PVP for the tuning values.
      ------------------------------------------------------------------ */
+  /* True while the target counts as "firing": trigger down, inside the trailing window
+     that covers the gap between bursts, or inside a reload the server derived from its
+     own shot accounting. Every term comes from server state or an input the server
+     already trusted, so none of this is forgeable into permanent damage reduction. */
+  firingResistOn(tid){
+    const inp = this.inputs.get(tid);
+    if(inp && inp.fire) return true;
+    const now = Date.now();
+    if(now - (this.lastShotAt.get(tid) || 0) < LoadoutCore.RESIST_TAIL) return true;
+    return now < (this.reloadUntil.get(tid) || 0);
+  }
   tryFire(id, p, inp){
     if(this.state.phase !== 'live') return; // no damage during waiting or results
     const now = Date.now();
     const ld = this.loadouts.get(id) || { rof:140, dmg:12, pellets:1, spread:0.05, bspd:560, abilities:[] };
     if((this.fireT.get(id) || 0) > now) return;
     this.fireT.set(id, now + ld.rof);
+    /* Ammo accounting for the Juggernaut window only - this does NOT gate firing.
+       The client stays the authority on ammo; making the server refuse shots here
+       would desync the two and eat rounds the player saw leave the barrel. */
+    this.lastShotAt.set(id, now);
+    const magSize = Math.max(1, ld.mag || 1);
+    let left = this.magLeft.has(id) ? this.magLeft.get(id) : magSize;
+    if(--left <= 0){ left = magSize; this.reloadUntil.set(id, now + (ld.reload || 0)); }
+    this.magLeft.set(id, left);
 
     const ab = ld.abilities || [];
     const has = k => ab.indexOf(k) >= 0;
@@ -554,9 +583,14 @@ class ArenaRoom extends Room {
     // get the bonus - the first hit lights, every one after it burns hotter.
     if(has('fire_nova') && t.burnT > 0) dmg *= 1 + LoadoutCore.DRAGON.molten;
 
-    // Juggernaut: 30% reduction while the target is firing
-    const tInp = this.inputs.get(tid);
-    if(tAb.indexOf('firing_resist') >= 0 && tInp && tInp.fire) dmg *= 0.7;
+    /* Juggernaut: 30% reduction while the target is FIRING. This used to read the raw
+       fire input at the instant of the hit, and the client sends fire:false for the whole
+       reload - so on the Goliath, which has the longest reload in the game at 2.6s, a
+       four-piece legendary set switched off for 2.6s at the exact moment you were most
+       exposed. Measured across trigger-uptime assumptions, the set goes from 4th of 12 at
+       full uptime to 8th at 60%, i.e. worse than not running it. It now holds through the
+       gaps between bursts and through the reload the server derives for itself. */
+    if(tAb.indexOf('firing_resist') >= 0 && this.firingResistOn(tid)) dmg *= 0.7;
 
     dmg = this.damage(t, dmg);
 

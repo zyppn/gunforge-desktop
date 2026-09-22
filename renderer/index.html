@@ -3481,7 +3481,10 @@ function startReload(e){
 function damage(t, amount, src, isCrit){
   if(t.dead) return;
   let dmg = amount * (isCrit?2:1);
-  if(t.isPlayer && t.wep.abilities.has('firing_resist') && (G.elapsed - t.lastFire) < 0.45) dmg *= 0.7;
+  // Same window the server uses, from the same constant, and reloading counts as firing:
+  // the Goliath's 2.6s reload used to switch this set off at its most exposed moment.
+  if(t.isPlayer && t.wep.abilities.has('firing_resist') &&
+     ((G.elapsed - t.lastFire) < LoadoutCore.RESIST_TAIL/1000 || t.reloading)) dmg *= 0.7;
   // a shield soaks at most SHIELD_SOAK of a hit - mirrors damage() in server/index.js
   if(t.shield > 0){ const s = Math.min(t.shield, dmg * LoadoutCore.SHIELD_SOAK); t.shield -= s; dmg -= s; }
   t.hp -= dmg;

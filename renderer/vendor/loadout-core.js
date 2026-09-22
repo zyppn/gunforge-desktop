@@ -205,7 +205,12 @@
      whole lobby burns forever. */
   const DRAGON = { molten: 0.15, spreadR: 4, spreadDur: 1.5, spreadEvery: 0.5 };
 
-  const SHIELD_SOAK = 0.75;
+  /* Juggernaut holds its resist for this long after the last shot, so the gaps between
+   bursts do not switch a four-piece legendary set on and off. Shared, because the PvP
+   and offline paths implemented this window differently and the same set measurably
+   played stronger in campaign than in a real match. */
+const RESIST_TAIL = 450;   // ms
+const SHIELD_SOAK = 0.75;
 
   /* The shield POOL, which is the lever that actually adds mitigation. The
      absorb is `min(shield, hit * SOAK)` and the pool drops by what it absorbs,
@@ -600,7 +605,7 @@
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR, DRAGON,
                 BULWARK,
-                HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
+                HE_SPLASH_FRAC, splashDamage, HOMING, RESIST_TAIL, SHIELD_SOAK,
                 AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
