@@ -23,16 +23,28 @@ esac; done
 
 # ---------------------------------------------------------------- config
 CONF=".deploy.conf"
-if [ ! -f "$CONF" ]; then
-  say "First run — where does the arena server live?"
-  read -r -p "  ssh target (e.g. ubuntu@193.122.220.129) : " H
-  read -r -p "  repo path on that box (e.g. ~/gunforge-desktop) : " P
+if [ ! -f "$CONF" ] && [ "$DO_SERVER" -eq 1 ]; then
+  say "First run — how do I reach the arena server?"
+  cat <<'WHY'
+  Asked once, then saved. These are the values you already use by hand:
+
+    ssh target   what you type after "ssh". Oracle images default to
+                 ubuntu@<ip> on Ubuntu, opc@<ip> on Oracle Linux.
+                 Not sure? ^C and run:  history | grep -i ssh
+    repo path    where you cd to on the box before "git pull"
+    service      the pm2 name or systemd unit that runs the arena
+
+  Just want the app out right now? ^C and run:  ./ship.sh --client
+WHY
+  read -r -p "  ssh target : " H
+  [ -n "$H" ] || die "no ssh target — ./ship.sh --client releases the client alone"
+  read -r -p "  repo path on that box [~/gunforge-desktop] : " P; P="${P:-~/gunforge-desktop}"
   read -r -p "  service name [gunforge] : " S; S="${S:-gunforge}"
   printf 'DEPLOY_HOST=%q\nDEPLOY_PATH=%q\nDEPLOY_SVC=%q\nDEPLOY_PORT=2567\n' "$H" "$P" "$S" > "$CONF"
   echo "  saved to $CONF (gitignored) — you won't be asked again"
 fi
 # shellcheck disable=SC1090
-. "$CONF"
+[ -f "$CONF" ] && . "$CONF"
 
 # ---------------------------------------------------------------- preflight
 say "Preflight"
