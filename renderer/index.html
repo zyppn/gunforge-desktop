@@ -191,7 +191,7 @@
   /* While dead, everything about YOUR state comes off screen. The scoreboard,
      killfeed and the card itself stay. */
   #hud.dead #crosshair, #hud.dead #hudbl, #hud.dead #hudbr,
-  #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov{
+  #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov, #hud.dead #bracov{
     opacity:0 !important; transition:opacity .18s}
   #hudtop{position:absolute;top:8px;left:0;right:0;display:flex;justify-content:center;gap:18px;text-shadow:0 1px 2px #000}
   #hudtop .box{background:rgba(10,14,19,.75);border:1px solid var(--line);padding:4px 12px}
@@ -250,6 +250,10 @@
     background:radial-gradient(ellipse at center, transparent 55%, rgba(255,150,60,.45) 100%)}
   #frostov{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .25s;
     background:radial-gradient(ellipse at center, transparent 50%, rgba(120,190,255,.5) 100%)}
+  /* UNSTOPPABLE: a thin brass rim, not a vignette - every other full-screen tint in
+     here means something is hurting you, and this one means the opposite. */
+  #bracov{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .12s;
+    box-shadow:inset 0 0 0 3px rgba(245,196,104,.5), inset 0 0 34px rgba(245,196,104,.16)}
   #lowhp{position:absolute;inset:0;pointer-events:none;opacity:0;
     background:radial-gradient(ellipse at center, transparent 60%, rgba(180,20,15,.4) 100%);
     animation:pulse 1.2s infinite}
@@ -304,7 +308,7 @@
     <div id="gamewrap">
       <canvas id="cv"></canvas>
       <div id="hud">
-        <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div>
+        <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div><div id="bracov"></div>
         <div id="crosshair"></div>
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
         <div id="hudtop">
@@ -2173,8 +2177,13 @@ function buildViewmodel(){
     ? {ax:built.aim.x, ay:built.aim.y, az:built.aim.z, dist:built.ads.dist, fovDrop:built.ads.fovDrop}
     : {ax:0, ay:0.05, az:-0.28, dist:0.22, fovDrop:24};
   // muzzle flash tracks the actual built barrel tip
-  muzzle = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.16),
-    new THREE.MeshBasicMaterial({color:0xFFD27A, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide}));
+  // EXHALE burns at the muzzle too, so your own first-person view sells it as fire
+  // rather than as a differently coloured dot leaving the barrel.
+  const exhale = !!(P.equippedWeapon && LoadoutCore.activeSets &&
+    (LoadoutCore.activeSets(P.equippedWeapon, equippedParts(P.equippedWeapon)) || [])
+      .some(st => st.effect === 'fire_nova'));
+  muzzle = new THREE.Mesh(new THREE.PlaneGeometry(exhale ? 0.2 : 0.16, exhale ? 0.2 : 0.16),
+    new THREE.MeshBasicMaterial({color: exhale ? 0xFF7A2A : 0xFFD27A, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide}));
   muzzle.position.set(0, 0.02, built.tipZ - 0.05);
   muzzleBaseY = muzzle.position.y;   // updateViewmodelPose drops it from here when aimed
   muzzleLight = new THREE.PointLight(0xFFC46A, 0, 6);
@@ -3414,8 +3423,12 @@ function fire(e, dir){
     // invisible on its own - the set was reported as "not feeling special" at
     // x1.75 largely because nothing about it LOOKED different.
     const ghost = ab.has('pierce_all');
+    // EXHALE reads as a fat ember rather than a tracer: where Ghost is a thin 5x
+    // streak, this is short and thick, so the two never get confused at a glance.
+    const drake = ab.has('fire_nova');
     const color = ghost  ? 0x8FE9FF
                 : seeker ? 0x9FE870
+                : drake  ? 0xFF7A2A
                 : e.isPlayer ? 0xF5C468 : (e.grunt ? 0xB0685E : 0xD8DEE6);
     const m = new THREE.Mesh(bulletGeo, bMat(color));
     if(seeker) m.scale.setScalar(1.7);
@@ -3423,8 +3436,16 @@ function fire(e, dir){
     if(ghost){                              // stretch it along the line of travel
       m.scale.set(0.7, 0.7, 5.0);
       m.lookAt(m.position.x + d.x, m.position.y + d.y, m.position.z + d.z);
+    } else if(drake){
+      m.scale.set(1.35, 1.35, 2.1);
+      m.lookAt(m.position.x + d.x, m.position.y + d.y, m.position.z + d.z);
     }
     scene.add(m);
+    // fire off the muzzle. Spawned from the same point the round leaves, so it works
+    // for the player, bots and remotes without any of them needing their own path.
+    if(drake) spawnFlame(m.position.x + (Math.random()-0.5)*0.12,
+                         oy + (Math.random()-0.5)*0.12,
+                         m.position.z + (Math.random()-0.5)*0.12);
     G.bullets.push({
       mesh:m, vx:d.x*speed, vy:d.y*speed, vz:d.z*speed,
       dmg:w.dmg, owner:e, life:1.6,
@@ -3483,8 +3504,7 @@ function damage(t, amount, src, isCrit){
   let dmg = amount * (isCrit?2:1);
   // Same window the server uses, from the same constant, and reloading counts as firing:
   // the Goliath's 2.6s reload used to switch this set off at its most exposed moment.
-  if(t.isPlayer && t.wep.abilities.has('firing_resist') &&
-     ((G.elapsed - t.lastFire) < LoadoutCore.RESIST_TAIL/1000 || t.reloading)) dmg *= 0.7;
+  if(t.isPlayer && firingResistOn(t)) dmg *= 0.7;
   // a shield soaks at most SHIELD_SOAK of a hit - mirrors damage() in server/index.js
   if(t.shield > 0){ const s = Math.min(t.shield, dmg * LoadoutCore.SHIELD_SOAK); t.shield -= s; dmg -= s; }
   t.hp -= dmg;
@@ -3616,6 +3636,14 @@ function stepContagion(dt){
       spawnBurst(o.x, o.z, 0xFF7A2A);
     }
   }
+}
+/* UNSTOPPABLE's window, offline. Same shape the server derives for itself: the
+   trigger, the tail that covers the gap between bursts, and the reload - the Goliath's
+   2.6s reload used to switch a four-piece legendary set off at its most exposed moment.
+   One predicate, so the damage path, the spark and the HUD can never disagree. */
+function firingResistOn(e){
+  if(!e || !e.wep || !e.wep.abilities || !e.wep.abilities.has('firing_resist')) return false;
+  return (G.elapsed - (e.lastFire || -9999)) < LoadoutCore.RESIST_TAIL/1000 || !!e.reloading;
 }
 function damageOverTime(e, amt){
   e.hp -= amt;
@@ -4311,8 +4339,20 @@ function tick(now){
           // before the ignite below, so the round that STARTS the fire does not
           // also get the bonus - the first hit lights, the rest burn hotter.
           const molten = (b.dragon && e.burnT > 0) ? 1 + LoadoutCore.DRAGON.molten : 1;
+          // UNSTOPPABLE is the one set whose whole effect is invisible: the target
+          // simply takes less. Mitigated rounds spark steel-blue and undersized, so
+          // the shooter can SEE the plating eat the hit instead of wondering why the
+          // health bar is not moving.
+          const braced = e.wep && e.wep.abilities && e.wep.abilities.has('firing_resist')
+                      && firingResistOn(e);
+          // NB: the 0.7 is NOT applied here. damage() is the single place that owns it,
+          // and multiplying in both would have quietly given the player 0.49x.
           damage(e, b.dmg * fall * molten * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
-          spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
+          if(braced){
+            spawnSpark(p.x, p.y, p.z, 0x9FC2E8);
+            spawnSpark(p.x + (Math.random()-0.5)*0.2, p.y + (Math.random()-0.5)*0.2,
+                       p.z + (Math.random()-0.5)*0.2, 0xDCE6F0);
+          } else spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
           if((b.burn || b.dragon) && !e.dead){
             e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; e.burnSpread = false;
           }
@@ -4447,6 +4487,7 @@ function hud(){
   $('#reloadtag').textContent = me.reloading ? 'RELOADING...' : (me.ammo===0?'PRESS R':'');
   $('#lowhp').style.opacity = (!me.dead && me.hp < 32) ? 1 : 0;
   $('#burnov').style.opacity = (!me.dead && me.burnT > 0) ? 1 : 0;
+  $('#bracov').style.opacity = (!me.dead && firingResistOn(me)) ? 1 : 0;
   $('#frostov').style.opacity = (!me.dead && me.slowT > 0) ? 1 : 0;
 }
 
