@@ -4046,61 +4046,75 @@ function tick(now){
         }
       }
     }
-    let nx = p.x + b.vx*dt, ny = p.y + b.vy*dt, nz = p.z + b.vz*dt;
-    let dead = false;
-    // bounds + floor
-    if(nx<0.05||nx>AW-0.05){ if(b.bounce>0){b.bounce--; b.vx*=-1;} else dead=true; }
-    if(nz<0.05||nz>AD-0.05){ if(b.bounce>0){b.bounce--; b.vz*=-1;} else dead=true; }
-    if(ny<0.03){ if(b.bounce>0){b.bounce--; b.vy*=-1;} else dead=true; }
-    if(ny>9) dead=true;
-    if(!dead) for(const w of G.map.walls){
-      if(nx>w.x && nx<w.x+w.w && nz>w.z && nz<w.z+w.d && ny < w.h){
-        if(b.wall > 0){                    // AP Rounds burn wall budget
-          b.wall -= Math.hypot(b.vx, b.vy, b.vz) * dt;
-          b.thruWall = true;
-          if(b.wall <= 0) dead = true;
-        } else if(b.bounce>0){
-          b.bounce--;
-          const fromX = p.x <= w.x || p.x >= w.x+w.w;
-          if(fromX) b.vx*=-1; else b.vz*=-1;
-        } else dead = true;
-        break;
+    /* Substep, exactly as stepBullets() does in server/index.js. This loop used
+       to advance a whole frame between collision tests, so a fast round stepped
+       straight over a person: at 60fps an LS-1 covers 2.13u and a Ghost round
+       5.54u against a target 1.36u wide. Everything else sat at "marginal" -
+       about one test inside the target - so on a slow machine or a dropped
+       frame every weapon tunnelled, which is why it looked random rather than
+       like a bug. Cap each step well under the smallest thing a bullet can hit
+       and collision stops depending on frame rate. */
+    const travel = Math.hypot(b.vx, b.vy, b.vz) * dt;
+    const steps = Math.max(1, Math.ceil(travel / 0.3));
+    const sdt = dt / steps;
+    let gone = false;
+    for(let sIdx = 0; sIdx < steps && !gone; sIdx++){
+      let nx = p.x + b.vx*sdt, ny = p.y + b.vy*sdt, nz = p.z + b.vz*sdt;
+      let dead = false;
+      // bounds + floor
+      if(nx<0.05||nx>AW-0.05){ if(b.bounce>0){b.bounce--; b.vx*=-1;} else dead=true; }
+      if(nz<0.05||nz>AD-0.05){ if(b.bounce>0){b.bounce--; b.vz*=-1;} else dead=true; }
+      if(ny<0.03){ if(b.bounce>0){b.bounce--; b.vy*=-1;} else dead=true; }
+      if(ny>9) dead=true;
+      if(!dead) for(const w of G.map.walls){
+        if(nx>w.x && nx<w.x+w.w && nz>w.z && nz<w.z+w.d && ny < w.h){
+          if(b.wall > 0){                    // AP Rounds burn wall budget
+            b.wall -= Math.hypot(b.vx, b.vy, b.vz) * sdt;
+            b.thruWall = true;
+            if(b.wall <= 0) dead = true;
+          } else if(b.bounce>0){
+            b.bounce--;
+            const fromX = p.x <= w.x || p.x >= w.x+w.w;
+            if(fromX) b.vx*=-1; else b.vz*=-1;
+          } else dead = true;
+          break;
+        }
       }
-    }
-    if(dead){ spawnSpark(p.x,p.y,p.z, 0x9BA8B0); scene.remove(b.mesh); G.bullets.splice(i,1); continue; }
-    p.set(p.x + b.vx*dt, p.y + b.vy*dt, p.z + b.vz*dt);
-    // entity hits
-    for(const e of G.ents){
-      if(e.dead || e===b.owner || b.hitset.has(e.id)) continue;
-      if(!hostile(b.owner, e)) continue;
-      const top = e.isPlayer ? 1.9 : (e.grunt ? 1.7 : 2.0);
-      const dx=e.x-p.x, dz=e.z-p.z;
-      if(p.y > 0 && p.y < top && dx*dx+dz*dz < (e.r+0.18)*(e.r+0.18)){
-        b.hitset.add(e.id);
-        // Range falloff (LS-1 only today) - mirrors applyHit in server/index.js
-        const fall = LoadoutCore.rangeMul(b.wid, Math.hypot(p.x - b.ox, p.z - b.oz));
-        // Dragon: burning flesh takes more, but only from whoever lit it. Read
-        // before the ignite below, so the round that STARTS the fire does not
-        // also get the bonus - the first hit lights, the rest burn hotter.
-        const molten = (b.dragon && e.burnT > 0) ? 1 + LoadoutCore.DRAGON.molten : 1;
-        damage(e, b.dmg * fall * molten * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
-        spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
-        if((b.burn || b.dragon) && !e.dead){
-          e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; e.burnSpread = false;
-        }
-        if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);
-        if(b.expl){
-          spawnBurst(p.x, p.z, 0xF08A3C);
-          const dExp = Math.hypot(p.x-G.me.x, p.z-G.me.z);
-          sfx('boom', Math.max(0.1, 1 - dExp/30));
-          for(const o of G.ents){
-            if(o.dead || o===e || !hostile(b.owner,o)) continue;
-            // HE Payload scales off the damage that triggered it - mirrors applyHit
-            if((o.x-p.x)**2+(o.z-p.z)**2 < 9) damage(o, LoadoutCore.splashDamage(b.dmg * fall), b.owner, false);
+      if(dead){ spawnSpark(p.x,p.y,p.z, 0x9BA8B0); scene.remove(b.mesh); G.bullets.splice(i,1); gone = true; break; }
+      p.set(p.x + b.vx*sdt, p.y + b.vy*sdt, p.z + b.vz*sdt);
+      // entity hits
+      for(const e of G.ents){
+        if(e.dead || e===b.owner || b.hitset.has(e.id)) continue;
+        if(!hostile(b.owner, e)) continue;
+        const top = e.isPlayer ? 1.9 : (e.grunt ? 1.7 : 2.0);
+        const dx=e.x-p.x, dz=e.z-p.z;
+        if(p.y > 0 && p.y < top && dx*dx+dz*dz < (e.r+0.18)*(e.r+0.18)){
+          b.hitset.add(e.id);
+          // Range falloff (LS-1 only today) - mirrors applyHit in server/index.js
+          const fall = LoadoutCore.rangeMul(b.wid, Math.hypot(p.x - b.ox, p.z - b.oz));
+          // Dragon: burning flesh takes more, but only from whoever lit it. Read
+          // before the ignite below, so the round that STARTS the fire does not
+          // also get the bonus - the first hit lights, the rest burn hotter.
+          const molten = (b.dragon && e.burnT > 0) ? 1 + LoadoutCore.DRAGON.molten : 1;
+          damage(e, b.dmg * fall * molten * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
+          spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
+          if((b.burn || b.dragon) && !e.dead){
+            e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; e.burnSpread = false;
           }
+          if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);
+          if(b.expl){
+            spawnBurst(p.x, p.z, 0xF08A3C);
+            const dExp = Math.hypot(p.x-G.me.x, p.z-G.me.z);
+            sfx('boom', Math.max(0.1, 1 - dExp/30));
+            for(const o of G.ents){
+              if(o.dead || o===e || !hostile(b.owner,o)) continue;
+              // HE Payload scales off the damage that triggered it - mirrors applyHit
+              if((o.x-p.x)**2+(o.z-p.z)**2 < 9) damage(o, LoadoutCore.splashDamage(b.dmg * fall), b.owner, false);
+            }
+          }
+          if(b.pierce>0){ b.pierce--; } else { scene.remove(b.mesh); G.bullets.splice(i,1); gone = true; }
+          break;
         }
-        if(b.pierce>0){ b.pierce--; } else { scene.remove(b.mesh); G.bullets.splice(i,1); }
-        break;
       }
     }
   }
