@@ -7,3 +7,6 @@ dist/
 
 # the desktop app drops chat downloads here, inside the repo
 Claude outputs/
+
+# ship.sh connection settings — machine-local
+.deploy.conf
