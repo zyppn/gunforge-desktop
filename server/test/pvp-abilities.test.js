@@ -169,52 +169,6 @@ console.log('\nDragon set - EXHALE:');
   check('plain Incendiary never spreads', s.b.burnT > 0 && s.c.burnT === 0,
         'b=' + s.b.burnT.toFixed(2) + ' c=' + s.c.burnT); }
 
-{ /* The defensive half. B shoots A; A holds the set. Measured against a
-     control identical except that B is not alight. */
-  const mk = (bBurning) => {
-    const r = new Captured(); r.onCreate({ map:'foundry' });
-    const join = (sid, w) => { const c = { sessionId:sid, send(){} }; r.clients.push(c);
-      r.onJoin(c, { name:'OP'+(++CS), wid:w, equipped:{} }); return r.state.players.get(sid); };
-    const a = join('A','m17'), b = join('B','m17');
-    a.x = 10; a.z = 10; b.x = 14; b.z = 10;
-    r.state.phase = 'live';
-    r.inputs.set('A', { mx:0,mz:0,yaw:0,pitch:0,ads:0,fire:false });
-    r.inputs.set('B', { mx:0,mz:0,yaw:Math.PI,pitch:0,ads:0,fire:true });
-    b.yaw = Math.PI;
-    r.loadouts.get('A').abilities.push('fire_nova');   // the DEFENDER holds the set
-    if(bBurning){ b.burnT = 3; r.burnSrc.set('B','A'); }   // A lit B
-    a.hp = 100; b.hp = 1000;                                // B must survive to shoot
-    r.fireT.set('B', -1); r.tryFire('B', b, r.inputs.get('B'));
-    for(let i=0;i<80 && r.bullets.length;i++) r.stepBullets(1/30);
-    return 100 - a.hp;
-  };
-  const plain = mk(false), onFire = mk(true);
-  const ratio = onFire / plain;
-  check('an enemy burning YOUR fire hits you ' + (LC.DRAGON.guard*100).toFixed(0) + '% softer',
-        plain > 0 && Math.abs(ratio - (1 - LC.DRAGON.guard)) < 0.02,
-        'plain=' + plain.toFixed(1) + ' onFire=' + onFire.toFixed(1) + ' ratio=' + ratio.toFixed(3)); }
-
-{ /* GUARD on the guard: someone ELSE'S fire does not shield you, or two Dragon
-     players would both feed off one blaze. */
-  const r = new Captured(); r.onCreate({ map:'foundry' });
-  const join = (sid) => { const c = { sessionId:sid, send(){} }; r.clients.push(c);
-    r.onJoin(c, { name:'OP'+(++CS), wid:'m17', equipped:{} }); return r.state.players.get(sid); };
-  const a = join('A'), b = join('B'), c2 = join('C');
-  a.x=10; a.z=10; b.x=14; b.z=10; c2.x=30; c2.z=30;
-  r.state.phase='live';
-  r.inputs.set('A',{mx:0,mz:0,yaw:0,pitch:0,ads:0,fire:false});
-  r.inputs.set('B',{mx:0,mz:0,yaw:Math.PI,pitch:0,ads:0,fire:true});
-  b.yaw = Math.PI;
-  r.inputs.set('C',{mx:0,mz:0,yaw:0,pitch:0,ads:0,fire:false});
-  r.loadouts.get('A').abilities.push('fire_nova');
-  b.burnT = 3; r.burnSrc.set('B','C');        // C lit B, not A
-  a.hp = 100; b.hp = 1000;
-  r.fireT.set('B',-1); r.tryFire('B', b, r.inputs.get('B'));
-  for(let i=0;i<80 && r.bullets.length;i++) r.stepBullets(1/30);
-  const took = 100 - a.hp;
-  check('  but someone else\'s fire does not shield you', took > 12,
-        'took ' + took.toFixed(1) + ' (a clean m17 hit is 13)'); }
-
 { /* GUARD: the shooter cannot set themselves alight. */
   const s = scenario(null, 'm17');
   s.r.loadouts.get('A').abilities.push('fire_nova');

@@ -195,20 +195,10 @@
          is the part that pays the set's TTK cost (measured -5% vs no set)
        - the fire spreads, checked across the whole burn instead of one instant:
          42% of ignitions catch someone, against the nova's 13%
-     GUARD is the defensive half, and it is the reason the set is worth taking
-     at all. Set pieces roll no ability, so running the set costs two perks -
-     in practice Vampiric and Featherweight, which are survivability, not
-     damage. Buying that back with MORE damage needed molten at 55% before a
-     symmetric duel reached even, which would have been brutal against anyone
-     not running sustain. Buying it back on the axis it is actually lost costs
-     10%: a symmetric duel against an all-legendary Vampiric + Featherweight
-     build lands at 55.6% (85% lead) and 45.6% (70% lead), and the set stays
-     ahead inside 17u while falling behind at 35u. A real choice, both ways.
-
      SPREAD_DUR is shorter than a direct burn and spread fire never spreads
      again - without that, one ignition chain-reacts through a choke and the
      whole lobby burns forever. */
-  const DRAGON = { molten: 0.15, guard: 0.10, spreadR: 4, spreadDur: 1.5, spreadEvery: 0.5 };
+  const DRAGON = { molten: 0.15, spreadR: 4, spreadDur: 1.5, spreadEvery: 0.5 };
 
   const SHIELD_SOAK = 0.60;
 

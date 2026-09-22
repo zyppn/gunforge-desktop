@@ -557,13 +557,6 @@ class ArenaRoom extends Room {
     const tInp = this.inputs.get(tid);
     if(tAb.indexOf('firing_resist') >= 0 && tInp && tInp.fire) dmg *= 0.7;
 
-    // Dragon, defensive half: a man on fire cannot hold his aim. Gated exactly
-    // like molten - only a fire the DEFENDER lit counts, so two Dragon players
-    // cannot both feed off one blaze.
-    if(tAb.indexOf('fire_nova') >= 0 && p.burnT > 0 && this.burnSrc.get(id) === tid){
-      dmg *= 1 - LoadoutCore.DRAGON.guard;
-    }
-
     dmg = this.damage(t, dmg);
 
     // The set carries its own ignition, so it is never a worse Incendiary and
