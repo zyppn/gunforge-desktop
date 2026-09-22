@@ -21,6 +21,7 @@ process.env.PORT = '0';
 require(path.join(SRV, 'index.js'));
 Module._load = orig;
 
+const LC = require(path.join(SRV, 'loadout-core.js'));
 let CS = 0, fails = 0;
 function scenario(ability, wid, extra){
   const r = new Captured(); r.onCreate({ map:'foundry' });
@@ -109,6 +110,73 @@ console.log('\nspecific effects:');
   s.r.loadouts.get('A').abilities.push('fire_nova');
   s.b.hp = 5; shoot(s);
   check('fire_nova ignites bystanders around the corpse', s.b.dead && s.c.burnT > 0, 'c.burnT=' + s.c.burnT); }
+/* ---- Dragon set (EXHALE) -------------------------------------------------
+   The old set was a one-frame blast on a kill: measured at 0.14 enemies caught,
+   one kill in seven, for the price of two ability slots. Three parts now, and
+   the two GUARDS below matter more than the happy path - without them one
+   ignition chain-reacts through a choke and the whole lobby burns forever. */
+console.log('\nDragon set - EXHALE:');
+{ const s = scenario(null, 'm17');
+  s.r.loadouts.get('A').abilities.push('fire_nova');
+  shoot(s);
+  check('the set ignites on its own, with no Incendiary', s.b.burnT > 0, 'b.burnT=' + s.b.burnT);
+  check('  and credits the person who lit them', s.r.burnSrc.get('B') === 'A');
+  check('  a direct hit is not flagged as spread', !s.r.burnSpread.has('B')); }
+
+{ /* molten: the FIRST hit lights, every one after it burns hotter. Measured
+     against a control that is identical except the target is not alight. */
+  const cold = scenario(null, 'm17'); cold.r.loadouts.get('A').abilities.push('fire_nova');
+  cold.b.hp = 100; shoot(cold);
+  const firstHit = 100 - cold.b.hp;
+  const hot = scenario(null, 'm17'); hot.r.loadouts.get('A').abilities.push('fire_nova');
+  hot.b.hp = 100; hot.b.burnT = 3; hot.r.burnSrc.set('B', 'A'); shoot(hot);
+  const burningHit = 100 - hot.b.hp;
+  const ratio = burningHit / firstHit;
+  check('a burning target takes ' + (LC.DRAGON.molten*100).toFixed(0) + '% more',
+        Math.abs(ratio - (1 + LC.DRAGON.molten)) < 0.02, 'ratio=' + ratio.toFixed(3));
+  check('  the round that STARTS the fire gets no bonus', firstHit > 0 && ratio > 1.05,
+        'first=' + firstHit.toFixed(1) + ' burning=' + burningHit.toFixed(1)); }
+
+{ /* contagion. C sits 1.5u from B, inside the 4u spread. */
+  const s = scenario(null, 'm17');
+  s.r.loadouts.get('A').abilities.push('fire_nova');
+  shoot(s);
+  check('nobody catches before the cadence elapses', s.c.burnT === 0);
+  for(let i = 0; i < 20; i++) s.r.tick();
+  check('the fire spreads to an enemy near the burning one', s.c.burnT > 0, 'c.burnT=' + s.c.burnT);
+  check('  a spread burn is shorter than a direct one',
+        s.c.burnT <= LC.DRAGON.spreadDur + 1e-6, 'c.burnT=' + s.c.burnT.toFixed(2));
+  check('  and is flagged, so it cannot spread onward', s.r.burnSpread.has('C')); }
+
+{ /* GUARD: no chain reaction. Line four players up 3u apart - inside each
+     other's spread radius - and only B is lit directly. Without the flag the
+     fire walks the whole line. */
+  const s = scenario(null, 'm17');
+  s.r.loadouts.get('A').abilities.push('fire_nova');
+  const d = (() => { const c = { sessionId:'D', send(){} }; s.r.clients.push(c);
+    s.r.onJoin(c, { name:'OPD', wid:'m17', equipped:{} }); return s.r.state.players.get('D'); })();
+  s.r.inputs.set('D', { mx:0, mz:0, yaw:0, pitch:0, ads:0, fire:false });
+  s.b.x = 14; s.b.z = 10; s.c.x = 17; s.c.z = 10; d.x = 20; d.z = 10;   // 3u apart
+  shoot(s);
+  for(let i = 0; i < 40; i++) s.r.tick();
+  check('fire does NOT chain past the first neighbour', d.burnT === 0,
+        'd.burnT=' + d.burnT + ' (c=' + s.c.burnT.toFixed(2) + ')'); }
+
+{ /* GUARD: without the set, nothing spreads at all. */
+  const s = scenario('incendiary', 'm17');
+  shoot(s);
+  for(let i = 0; i < 20; i++) s.r.tick();
+  check('plain Incendiary never spreads', s.b.burnT > 0 && s.c.burnT === 0,
+        'b=' + s.b.burnT.toFixed(2) + ' c=' + s.c.burnT); }
+
+{ /* GUARD: the shooter cannot set themselves alight. */
+  const s = scenario(null, 'm17');
+  s.r.loadouts.get('A').abilities.push('fire_nova');
+  s.a.x = 15; s.a.z = 11;                     // stand right next to the target
+  shoot(s);
+  for(let i = 0; i < 20; i++) s.r.tick();
+  check('your own fire never catches you', s.a.burnT === 0, 'a.burnT=' + s.a.burnT); }
+
 { const s = scenario('deadeye', 'm17');
   s.r.loadouts.get('A').abilities.push('critheal');
   s.a.hp = 50;

@@ -187,6 +187,19 @@
      (Deliberately placed AFTER the HOMING block: it sat between the Hornet
      comment and HOMING, and editing that region by slice deleted this constant
      three separate times in one session. The module still PARSED every time.) */
+  /* Dragon set (EXHALE). The old set was a one-frame blast on a kill, which
+     measured at 0.14 enemies caught - one kill in seven did anything at all,
+     for the price of two ability slots. Three parts now:
+       - the set ignites on its own, so it is never "Incendiary but worse"
+       - a burning target takes MOLTEN more from the person who lit it, which
+         is the part that pays the set's TTK cost (measured -5% vs no set)
+       - the fire spreads, checked across the whole burn instead of one instant:
+         42% of ignitions catch someone, against the nova's 13%
+     SPREAD_DUR is shorter than a direct burn and spread fire never spreads
+     again - without that, one ignition chain-reacts through a choke and the
+     whole lobby burns forever. */
+  const DRAGON = { molten: 0.15, spreadR: 4, spreadDur: 1.5, spreadEvery: 0.5 };
+
   const SHIELD_SOAK = 0.60;
 
   /* ---- AP Rounds ---------------------------------------------------------
@@ -563,7 +576,7 @@
 
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
-                FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR,
+                FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR, DRAGON,
                 HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
                 AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive

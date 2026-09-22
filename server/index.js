@@ -117,6 +117,10 @@ class ArenaRoom extends Room {
     this.loadouts = new Map(); // sessionId -> computed weapon stats (server-authoritative)
     this.playerIds = new Map(); // sessionId -> supabase players.id (verified)
     this.burnSrc = new Map();   // sessionId -> who set them alight (for kill credit)
+    this.burnSpread = new Set();// sessionIds whose CURRENT burn arrived by contagion.
+                                // Spread fire must not spread again, or one ignition
+                                // chain-reacts through a choke and never stops.
+    this.spreadT = 0;           // accumulator for the Dragon contagion cadence
     this.bullets = [];          // live projectiles — see stepBullets()
     this.rewarded = false;      // guard: rewards granted once per round
 
@@ -171,6 +175,7 @@ class ArenaRoom extends Room {
     p.x = s[0]; p.z = s[1]; p.yaw = 0;
     p.hp = 100; p.kills = 0; p.deaths = 0; p.dead = false;
     p.burnT = 0; p.slowT = 0; p.shield = 0;
+    this.burnSpread.delete(client.sessionId);
     this.state.players.set(client.sessionId, p);
     this.broadcast('presence', { name: p.name, on: true }, { except: client });
     if(this.clients.length >= 2 && this.state.phase === 'waiting') this.state.phase = 'live';
@@ -207,6 +212,7 @@ class ArenaRoom extends Room {
         if(p.slowT > 0) p.slowT = Math.max(0, p.slowT - dt);
         if(p.burnT > 0){
           p.burnT = Math.max(0, p.burnT - dt);
+          if(p.burnT <= 0) this.burnSpread.delete(id);
           p.hp -= PVP.burnDps * dt;          // burn bypasses shields, like the offline game
           if(p.hp <= 0){
             const srcId = this.burnSrc.get(id);
@@ -215,12 +221,14 @@ class ArenaRoom extends Room {
               this.killPlayer(srcId, src, p, id, this.loadouts.get(srcId) || {});
             } else {
               p.dead = true; p.deaths++; p.burnT = 0; p.slowT = 0; p.shield = 0;
+              this.burnSpread.delete(id);
               this.broadcast('kill', { killer: 'THE FIRE', victim: p.name });
               this.clock.setTimeout(() => this.respawn(id), LoadoutCore.RESPAWN_MS);
             }
           }
         }
       });
+      this.spreadContagion(dt);
     }
 
     this.state.players.forEach((p, id) => {
@@ -318,6 +326,7 @@ class ArenaRoom extends Room {
   resetMatch(){
     this.rewarded = false;
     let i = 0;
+    this.burnSpread.clear();
     this.state.players.forEach(p => {
       p.kills = 0; p.deaths = 0; p.hp = 100; p.dead = false;
       p.burnT = 0; p.slowT = 0; p.shield = 0;
@@ -539,13 +548,23 @@ class ArenaRoom extends Room {
     const crit = b ? !!b.crit : (Math.random() < (Number(ld.crit) || 0));
     if(crit) dmg *= PVP.critMul;
 
+    // Dragon: burning flesh takes more, but only from the person burning it.
+    // Read BEFORE the ignite below, so the round that lights them does not also
+    // get the bonus - the first hit lights, every one after it burns hotter.
+    if(has('fire_nova') && t.burnT > 0) dmg *= 1 + LoadoutCore.DRAGON.molten;
+
     // Juggernaut: 30% reduction while the target is firing
     const tInp = this.inputs.get(tid);
     if(tAb.indexOf('firing_resist') >= 0 && tInp && tInp.fire) dmg *= 0.7;
 
     dmg = this.damage(t, dmg);
 
-    if(has('incendiary')){ t.burnT = Math.max(t.burnT, PVP.burnDur); this.burnSrc.set(tid, id); }
+    // The set carries its own ignition, so it is never a worse Incendiary and
+    // does not eat one of the four ability slots it leaves you.
+    if(has('incendiary') || has('fire_nova')){
+      t.burnT = Math.max(t.burnT, PVP.burnDur); this.burnSrc.set(tid, id);
+      this.burnSpread.delete(tid);          // a direct hit outranks a spread burn
+    }
     if(has('cryo'))       t.slowT = Math.max(t.slowT, PVP.slowDur);
     if(has('vampiric'))   this.heal(p, dmg * PVP.vampFrac);
     if(crit && has('critheal')) this.heal(p, PVP.critHeal);   // Saint set
@@ -588,10 +607,49 @@ class ArenaRoom extends Room {
     });
   }
 
+  /* Dragon contagion. Fire leaps from a burning player to enemies near them,
+     checked on a slow cadence rather than every tick: at 30Hz a per-tick check
+     would re-apply thirty times a second for no gain.
+
+     Two guards keep it from running away. Fire that ARRIVED by spreading never
+     spreads again (burnSpread), so a crowded choke cannot chain-react; and a
+     spread burn is shorter than one you lit yourself, so standing near a
+     burning enemy is a nudge rather than a sentence. */
+  spreadContagion(dt){
+    const D = LoadoutCore.DRAGON;
+    this.spreadT += dt;
+    if(this.spreadT < D.spreadEvery) return;
+    this.spreadT = 0;
+    // collect first: igniting inside the outer walk would let a player caught
+    // this pass immediately spread it on in the same pass.
+    const seeds = [];
+    this.state.players.forEach((p, id) => {
+      if(p.dead || p.burnT <= 0) return;
+      if(this.burnSpread.has(id)) return;          // spread fire does not spread
+      const srcId = this.burnSrc.get(id);
+      if(!srcId || srcId === id) return;
+      const ld = this.loadouts.get(srcId);
+      if(!ld || (ld.abilities || []).indexOf('fire_nova') < 0) return;
+      seeds.push({ x: p.x, z: p.z, victim: id, srcId });
+    });
+    if(!seeds.length) return;
+    for(const s of seeds){
+      this.state.players.forEach((o, oid) => {
+        if(oid === s.victim || oid === s.srcId || o.dead) return;
+        if(o.burnT > 0) return;                    // already alight; do not refresh
+        if(Math.hypot(o.x - s.x, o.z - s.z) > D.spreadR) return;
+        o.burnT = D.spreadDur;
+        this.burnSrc.set(oid, s.srcId);            // kill credit still goes to the lighter
+        this.burnSpread.add(oid);
+      });
+    }
+  }
+
   killPlayer(id, p, t, tid, ld){
     if(t.dead) return;
     const ab = ld.abilities || [];
     t.dead = true; t.deaths++; t.burnT = 0; t.slowT = 0; t.shield = 0;
+    this.burnSpread.delete(tid);
     p.kills++;
 
     if(ab.indexOf('killshield') >= 0) p.shield = Math.min(50, p.shield + PVP.killShield);  // Bulwark
@@ -626,6 +684,7 @@ class ArenaRoom extends Room {
     }
     p.x = best[0]; p.z = best[1]; p.hp = 100; p.dead = false;
     p.burnT = 0; p.slowT = 0; p.shield = 0;
+    this.burnSpread.delete(id);
     this.burnSrc.delete(id);
   }
 }

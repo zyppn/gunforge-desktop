@@ -726,7 +726,7 @@ const SETS = [
    bonus:'SET · SEEKER SWARM — every second round is a seeker that curves onto enemies within 8m.', effect:'homing'},
   {id:'dragon',  weapon:'vkraptor', name:'Dragonfire',    need:2, rarity:'epic',
    pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'},
-   bonus:'SET · EXHALE — your kills detonate in dragonfire, igniting nearby enemies.', effect:'fire_nova'},
+   bonus:'SET · EXHALE — your rounds ignite, burning enemies take 15% more from you, and the fire spreads to anyone near them.', effect:'fire_nova'},
   {id:'bulwark', weapon:'warden',   name:'Bulwark',       need:3, rarity:'epic',
    pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Chassis', optic:'Bulwark Ward'},
    bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
@@ -2929,7 +2929,7 @@ function mkEnt(o){
     baseSpeed:5.6, isPlayer:false, grunt:false, mesh:null,
     ammo:10, fireT:0, reloading:false, reloadT:0, lastFire:-9999,
     dead:false, respawnT:0, kills:0, deaths:0,
-    burnT:0, slowT:0, strafe:(Math.random()<0.5?1:-1), repathT:0, wanderA:Math.random()*6.28,
+    burnT:0, slowT:0, burnSpread:false, strafe:(Math.random()<0.5?1:-1), repathT:0, wanderA:Math.random()*6.28,
     lastX:null, lastZ:null, walkPhase:Math.random()*6.28, walkAmp:0,
     path:null, pathT:0, pathGoal:null, stuckT:0, stepAcc:0,
     target:null, retargetT:0, alertSrc:null, alertT:0, reactT:0, seenT:0,
@@ -3225,6 +3225,7 @@ function fire(e, dir){
       thruWall: false,
       bounce: (ab.has('ricochet')||ab.has('ricochet_all')) ? 3 : 0,   // one bounce was worth ~0
       burn: ab.has('incendiary'),
+      dragon: ab.has('fire_nova'),     // the set ignites on its own, and burns hotter
       homing: seeker,
       cryo: ab.has('cryo'), vamp: ab.has('vampiric'), expl: ab.has('explosive'),
       crit: Math.random() < (w.crit||0),
@@ -3298,7 +3299,7 @@ function damage(t, amount, src, isCrit){
 }
 function kill(t, src){
   t.dead = true; t.deaths++;
-  t.burnT = 0; t.slowT = 0; t.burnSrc = null; t.reloading = false;
+  t.burnT = 0; t.slowT = 0; t.burnSrc = null; t.burnSpread = false; t.reloading = false;
   t.target = null; t.alertSrc = null; t.alertT = 0; t.path = null;
   spawnBurst(t.x, t.z, t.grunt ? 0x8A4640 : 0xE8A33D);
   if(src && src!==t){
@@ -3351,7 +3352,7 @@ function respawn(e){
   e.dead=false; e.hp=e.maxhp; e.shield=0; e.ammo=e.wep.mag; e.reloading=false;
   clearDying(e);                       // a half-sunk corpse must not outlive its owner
   if(e.isPlayer){ hideDeathCard(); G.killcam = null; }
-  e.burnT=0; e.slowT=0; e.burnSrc=null; e.target=null; e.alertSrc=null; e.alertT=0;
+  e.burnT=0; e.slowT=0; e.burnSrc=null; e.burnSpread=false; e.target=null; e.alertSrc=null; e.alertT=0;
   e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0; e.wantAim=false; e.aimT=0;
   const s = farSpawn(G.map, e.team); e.x=s[0]; e.z=s[1];
   e.lastX=e.x; e.lastZ=e.z;
@@ -3359,6 +3360,45 @@ function respawn(e){
     e.mesh.visible = true; e.mesh.rotation.x = 0;
     e.mesh.position.set(e.x, 0, e.z); // sync immediately — no one-frame teleport
     e.mesh.userData.hbGroup.visible = true;
+  }
+}
+/* Dragon contagion - mirrors spreadContagion() in server/index.js. Fire leaps
+   from a burning enemy to others near them, checked on a slow cadence rather
+   than every frame: at 60fps a per-frame check would re-apply sixty times a
+   second for nothing.
+
+   Two guards stop it running away. Fire that ARRIVED by spreading never spreads
+   again, so a crowded room cannot chain-react; and a spread burn is shorter
+   than one lit directly, so standing near a burning enemy is a nudge rather
+   than a sentence. */
+function stepContagion(dt){
+  const D = LoadoutCore.DRAGON;
+  G.spreadT = (G.spreadT || 0) + dt;
+  if(G.spreadT < D.spreadEvery) return;
+  G.spreadT = 0;
+  // Collect first. Igniting inside the walk would let someone caught this pass
+  // spread it onward in the same pass, which is the chain reaction by another name.
+  const seeds = [];
+  for(const e of G.ents){
+    if(e.dead || e.burnT <= 0 || e.burnSpread) continue;
+    const src = e.burnSrc;
+    if(!src || src === e || src.dead) continue;
+    if(!(src.wep && src.wep.abilities && src.wep.abilities.has('fire_nova'))) continue;
+    seeds.push({ x:e.x, z:e.z, victim:e, src });
+  }
+  if(!seeds.length) return;
+  const r2 = D.spreadR * D.spreadR;
+  for(const sd of seeds){
+    for(const o of G.ents){
+      if(o === sd.victim || o === sd.src || o.dead) continue;
+      if(o.burnT > 0) continue;                 // already alight - do not refresh
+      if(!hostile(sd.src, o)) continue;
+      if((o.x - sd.x)**2 + (o.z - sd.z)**2 > r2) continue;
+      o.burnT = D.spreadDur;
+      o.burnSrc = sd.src;                       // kill credit stays with the lighter
+      o.burnSpread = true;
+      spawnBurst(o.x, o.z, 0xFF7A2A);
+    }
   }
 }
 function damageOverTime(e, amt){
@@ -3875,6 +3915,8 @@ function tick(now){
     }
   } else if(!G.deadShown){ G.deadShown = true; banner('DOWN — REDEPLOYING'); }
 
+  if(G.mode !== 'live') stepContagion(dt);   // live: the server owns every burn
+
   // entities
   for(const e of G.ents){
     if(e.dead){
@@ -3890,7 +3932,7 @@ function tick(now){
     // would double the damage and let a local death fire against server state.
     const svStatus = (G.mode === 'live');
     if(e.burnT > 0){
-      if(!svStatus){ e.burnT -= dt; damageOverTime(e, 4*dt); }
+      if(!svStatus){ e.burnT -= dt; damageOverTime(e, 4*dt); if(e.burnT <= 0) e.burnSpread = false; }
       if(!e.isPlayer){
         e.flameT -= dt;
         if(e.flameT <= 0){
@@ -4036,9 +4078,15 @@ function tick(now){
         b.hitset.add(e.id);
         // Range falloff (LS-1 only today) - mirrors applyHit in server/index.js
         const fall = LoadoutCore.rangeMul(b.wid, Math.hypot(p.x - b.ox, p.z - b.oz));
-        damage(e, b.dmg * fall * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
+        // Dragon: burning flesh takes more, but only from whoever lit it. Read
+        // before the ignite below, so the round that STARTS the fire does not
+        // also get the bonus - the first hit lights, the rest burn hotter.
+        const molten = (b.dragon && e.burnT > 0) ? 1 + LoadoutCore.DRAGON.molten : 1;
+        damage(e, b.dmg * fall * molten * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
         spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
-        if(b.burn && !e.dead){ e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; }
+        if((b.burn || b.dragon) && !e.dead){
+          e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; e.burnSpread = false;
+        }
         if(b.cryo && !e.dead) e.slowT = Math.max(e.slowT, 1.5);
         if(b.expl){
           spawnBurst(p.x, p.z, 0xF08A3C);

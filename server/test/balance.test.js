@@ -47,7 +47,8 @@ for(const k of ['WEAPONS','SLOTS','SETS','weaponById','activeSets','computeStats
                 'sanitizeEquipped','rollServerDrop','storeWindow','rollDailyStore',
                 'STORE_PRICE','STORE_SLOTS','FALLOFF','rangeMul','ADS_SPREAD',
                 'fireSpread','SPREAD_FLOOR','HE_SPLASH_FRAC','splashDamage',
-                'HOMING','SHIELD_SOAK','PART_POOL','RAR']){
+                'HOMING','SHIELD_SOAK','DRAGON','AP_WALL','OVERCHARGE','ADS_SLOW',
+                'adsSlow','RESPAWN_MS','PART_POOL','RAR']){
   check(k + ' is exported', C[k] !== undefined, typeof C[k]);
 }
 
