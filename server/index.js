@@ -218,7 +218,12 @@ class ArenaRoom extends Room {
           if(p.hp <= 0){
             const srcId = this.burnSrc.get(id);
             const src = srcId && this.state.players.get(srcId);
-            if(src && !src.dead && srcId !== id){
+            // NOT "&& !src.dead". Setting someone alight and then dying before they burn
+            // out still killed them, and crediting THE FIRE for it reads as the game
+            // losing track of a kill you earned. Trading fire with an Incendiary or a
+            // Dragon build is exactly when both players are near death, so this was the
+            // common case rather than an edge one.
+            if(src && srcId !== id){
               this.killPlayer(srcId, src, p, id, this.loadouts.get(srcId) || {});
             } else {
               p.dead = true; p.deaths++; p.burnT = 0; p.slowT = 0; p.shield = 0;
@@ -660,7 +665,8 @@ class ArenaRoom extends Room {
     this.burnSpread.delete(tid);
     p.kills++;
 
-    if(ab.indexOf('killshield') >= 0)                                                   // Bulwark
+    // A corpse banking a shield it loses on respawn anyway just flickers the HUD.
+    if(ab.indexOf('killshield') >= 0 && !p.dead)                                        // Bulwark
       p.shield = Math.min(LoadoutCore.BULWARK.cap, p.shield + LoadoutCore.BULWARK.perKill);
     if(ab.indexOf('fire_nova') >= 0){                                                      // Dragon
       this.state.players.forEach((o, oid) => {

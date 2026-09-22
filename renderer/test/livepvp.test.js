@@ -1,0 +1,52 @@
+/* Five PvP-only bugs, four of which were the same shape: logic written against the
+   OFFLINE world silently does nothing in a live match, because there the server owns
+   state, the client never runs damage() on itself, and every other player lives in
+   live.remotes rather than G.ents. Nothing here throws offline, so nothing catches it
+   except playing a real match. These pin the live paths specifically. */
+const fs = require('fs'), path = require('path');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const srv  = fs.readFileSync(path.join(__dirname, '..', '..', 'server', 'index.js'), 'utf8');
+let fails = 0;
+const ok = (n, c) => { if(!c){ console.error('  FAIL  ' + n); fails++; } };
+
+/* 1. a burn kill belongs to whoever lit it, even if they died first */
+ok('burn credit does not require the lighter to be alive',
+   !/if\(src && !src\.dead && srcId !== id\)/.test(srv));
+ok('burn credit still refuses self-ignite', /src && srcId !== id/.test(srv));
+ok('a dead killer does not bank a shield', /killshield'\) >= 0 && !p\.dead/.test(srv));
+
+/* 2. the killcam follows the body that is DRAWN, not the 30Hz schema behind it */
+ok('killcam takes a remote id', /function startKillcam\(target, rid\)/.test(html));
+ok('the live death path passes it', /startKillcam\(k, m\.killerId\)/.test(html));
+ok('it reads the smoothed position', /const tx = r \? r\.cx : t\.x, tz = r \? r\.cz : t\.z/.test(html));
+ok('and looks at the smoothed position too', /camera\.lookAt\(tx, 1\.25, tz\)/.test(html));
+// the previous version of this grepped the whole block for "cyaw" and matched the COMMENT
+// explaining why cyaw is not used - an assertion that passes on prose is no assertion
+ok('but keeps the schema yaw, whose convention this maths expects',
+   /const face = \(typeof t\.faceCur === 'number' \? t\.faceCur/.test(html)
+   && !/face = r && typeof r\.cyaw/.test(html));
+
+/* 3. seekers had nothing to seek: in live, G.ents holds only you */
+ok('there is one candidate list', (html.match(/function seekCandidates/g) || []).length === 1);
+ok('the bullet loop uses it', /for\(const e2 of seekCandidates\(b\.owner\)\)/.test(html));
+ok('it includes live remotes', /live\.remotes\.forEach\(\(r, rid\)[\s\S]{0,200}out\.push/.test(html));
+ok('it reports their smoothed position', /out\.push\(\{ id:rid, x:r\.cx, z:r\.cz \}\)/.test(html));
+ok('the loop no longer scans G.ents directly for seekers',
+   !/for\(const e2 of G\.ents\)/.test(html));
+
+/* 4. health bars are UI and must not be eaten by fog */
+{
+  const i = html.indexOf('const hbG = new THREE.Group()');
+  const block = html.slice(i, i + 700);
+  ok('both bar materials opt out of fog', (block.match(/fog:false/g) || []).length === 2);
+}
+
+/* 5. the heal flash has to come off the synced number, not off damage() */
+ok('live detects a heal from hp rising', /sp\.hp > live\.lastHp \+ 0\.01/.test(html));
+ok('and flashes the same bar the offline path does',
+   /sp\.hp > live\.lastHp[\s\S]{0,80}pulseHud\('#hpbar', 'mend'\)/.test(html));
+ok('a respawn refill is not treated as a heal',
+   /sp\.hp > live\.lastHp \+ 0\.01 && !me\.dead && !sp\.dead/.test(html));
+
+console.log(fails ? '\n  livepvp.test.js: ' + fails + ' FAILED' : '  livepvp.test.js: all passed');
+process.exit(fails ? 1 : 0);

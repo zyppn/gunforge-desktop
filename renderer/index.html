@@ -3098,8 +3098,12 @@ function botMesh(color, grunt, gunInfo){
   }
   // hp bar (billboard planes)
   const hbG = new THREE.Group();
-  const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.09), new THREE.MeshBasicMaterial({color:0x000000, transparent:true, opacity:0.6, depthWrite:false, side:THREE.DoubleSide}));
-  const fg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.09), new THREE.MeshBasicMaterial({color:0x5FBF6E, depthWrite:false, side:THREE.DoubleSide}));
+  /* fog:false. A health bar is UI that happens to live in the world, and three.js fogs
+     MeshBasicMaterial by default - so every bar washed toward the fog colour with
+     distance. It reads as "muddier in PvP" because PvP fights happen further out than
+     bot fights do; the code was never mode-dependent, the engagement range was. */
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.09), new THREE.MeshBasicMaterial({color:0x000000, transparent:true, opacity:0.6, depthWrite:false, fog:false, side:THREE.DoubleSide}));
+  const fg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.09), new THREE.MeshBasicMaterial({color:0x5FBF6E, depthWrite:false, fog:false, side:THREE.DoubleSide}));
   fg.position.z = 0.002;
   hbG.add(bg, fg); hbG.position.y = grunt ? 1.95 : 2.2;
   g.add(hbG);
@@ -3335,26 +3339,56 @@ function dropWeaponFromMesh(mesh){
    to look at. The target is read live every frame, so it keeps following them
    as they move, and it degrades to your corpse if they leave or the kill came
    from something with no body (burn, splash, the environment). */
-function startKillcam(target){
+/* Everything a seeker may curve onto. Offline that is G.ents; in a LIVE match G.ents
+   holds only you - every other player lives in live.remotes - so a scan written against
+   G.ents alone finds nothing, and the round flies dead straight on your screen while the
+   server's authoritative copy homes perfectly onto the target and hits it. Remotes are
+   reported at their SMOOTHED position, which is where their body is actually drawn. */
+function seekCandidates(owner){
+  const out = [];
+  for(const e of G.ents){
+    if(e.dead || e === owner || !hostile(owner, e)) continue;
+    out.push({ id:e.id, x:e.x, z:e.z });
+  }
+  if(G.mode === 'live' && typeof live !== 'undefined' && live && live.remotes){
+    live.remotes.forEach((r, rid) => {
+      if(!r || !r.p || r.p.dead) return;
+      out.push({ id:rid, x:r.cx, z:r.cz });
+    });
+  }
+  return out;
+}
+function startKillcam(target, rid){
   if(!target) return;
-  G.killcam = { t:target, age:0, cam:null };
+  // rid: in a live match the killer's schema entry updates in 30Hz steps, while their
+  // BODY is drawn from the interpolated live.remotes copy. Following the schema made
+  // the camera judder at the tick rate and trail the body it was watching.
+  G.killcam = { t:target, rid:rid || null, age:0, cam:null };
 }
 function stepKillcam(dt){
   const kc = G.killcam;
   if(!kc || !kc.t) return;
   const t = kc.t;
-  if(typeof t.x !== 'number' || typeof t.z !== 'number') return;
+  // prefer the smoothed remote when there is one; it is what the eye is tracking
+  const r = kc.rid && typeof live !== 'undefined' && live && live.remotes
+          ? live.remotes.get(kc.rid) : null;
+  const tx = r ? r.cx : t.x, tz = r ? r.cz : t.z;
+  if(typeof tx !== 'number' || typeof tz !== 'number') return;
   kc.age += dt;
   // sit behind and above them, facing the way they are facing
+  // POSITION comes from the smoothed copy; FACING still comes from the schema. r.cyaw is
+  // in the mesh's convention (-yaw, rotated a quarter turn), not the world-angle one this
+  // orbit maths wants, and a 30Hz step in rotation is nothing like as visible as one in
+  // position anyway - the judder was the camera's own location, not where it looked.
   const face = (typeof t.faceCur === 'number' ? t.faceCur
               : typeof t.yaw === 'number' ? t.yaw : 0);
-  const want = new THREE.Vector3(t.x - Math.cos(face)*3.4, 2.9, t.z - Math.sin(face)*3.4);
+  const want = new THREE.Vector3(tx - Math.cos(face)*3.4, 2.9, tz - Math.sin(face)*3.4);
   if(!kc.cam){ kc.cam = want.clone(); }
   // ease in over the first moment so it does not cut hard off your own corpse
   const k = Math.min(1, dt * (kc.age < 0.5 ? 4 : 9));
   kc.cam.lerp(want, k);
   camera.position.copy(kc.cam);
-  camera.lookAt(t.x, 1.25, t.z);
+  camera.lookAt(tx, 1.25, tz);
 }
 
 /* Cancel any death animation still running on this entity and put the mesh
@@ -4360,8 +4394,8 @@ function tick(now){
     if(b.homing && !b.thruWall){
       const HM = LoadoutCore.HOMING;
       let ht = null, hd = HM.seek * HM.seek;
-      for(const e2 of G.ents){
-        if(e2.dead || e2 === b.owner || !hostile(b.owner, e2) || b.hitset.has(e2.id)) continue;
+      for(const e2 of seekCandidates(b.owner)){
+        if(b.hitset.has(e2.id)) continue;
         const ddx = e2.x-p.x, ddz = e2.z-p.z, dd = ddx*ddx + ddz*ddz;
         if(dd < hd){ hd = dd; ht = e2; }
       }
@@ -4916,7 +4950,7 @@ function startLiveMatch(){
         showDeathCard({ name:m.killer, wid:(k && k.wid) || null, eq,
           hp:k ? k.hp : null,
           dist:k ? Math.hypot(k.x - G.me.x, k.z - G.me.z) : null });
-        startKillcam(k);            // k is live state - it keeps tracking them
+        startKillcam(k, m.killerId); // k is live state; killerId picks the smoothed body
       }
     });
     room.onMessage('shot', m => {
@@ -5160,6 +5194,11 @@ function liveTick(dt){
     if(sp.hp < live.lastHp && !me.dead){
       damageFlinchOnly(live.lastHp - sp.hp);
     }
+    /* Lifesteal and Sanctuary flash the bar from damage(), which the client never runs
+       for ITSELF in a live match - the server owns that damage and all we get is a new
+       hp. Read the heal off the number going UP instead, or the tell exists offline and
+       nowhere else. Guarded against the respawn refill, which is not a heal. */
+    if(sp.hp > live.lastHp + 0.01 && !me.dead && !sp.dead) pulseHud('#hpbar', 'mend');
     live.lastHp = sp.hp;
     me.hp = sp.hp;
     if(sp.dead && !me.dead){
