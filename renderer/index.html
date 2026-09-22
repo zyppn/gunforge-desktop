@@ -3135,7 +3135,11 @@ function startDeathAnim(mesh, grunt){
   if(!mesh) return;
   for(let i=G.dying.length-1;i>=0;i--) if(G.dying[i].mesh === mesh) G.dying.splice(i,1);
   G.dying.push({mesh, t:0, dur:0.60, dir:(Math.random()<0.5?1:-1), grunt:!!grunt});
-  dropWeaponFromMesh(mesh);
+  /* Grunts keep theirs. A hostile's "gun" is a 0.1x0.12x0.32 black box, not a
+     real weapon and not lootable, so dropping it is a tumbling black box that
+     means nothing - and wave 8 spawns eleven of them into a 24-drop cap, which
+     evicts the drops that DO carry a build. */
+  if(!grunt) dropWeaponFromMesh(mesh);
 }
 function clearDyingMesh(mesh){
   if(!mesh) return;

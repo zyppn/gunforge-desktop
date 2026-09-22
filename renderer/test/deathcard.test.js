@@ -202,6 +202,24 @@ console.log('\nCAMPAIGN GETS NO DEATH CARD');
   check('  with a respawn armed', Math.abs(me2.respawnT - core.RESPAWN_MS/1000) < 1e-9);
 }
 
+console.log('\nGRUNTS DO NOT DROP A WEAPON');
+{
+  const box = { Math, G:{ dying:[] }, dropped:[] };
+  box.dropWeaponFromMesh = m => box.dropped.push(m);
+  vm.createContext(box);
+  vm.runInContext(lift('startDeathAnim'), box);
+  box.startDeathAnim({ id:'grunt' }, true);
+  check('a hostile drops nothing', box.dropped.length === 0, box.dropped.length + ' drops');
+  check('  but still topples', box.G.dying.length === 1);
+  const bot = { id:'bot' };
+  box.startDeathAnim(bot, false);
+  check('a real opponent still drops their gun',
+        box.dropped.length === 1 && box.dropped[0] === bot);
+  box.startDeathAnim(bot, false);
+  check('and one body never queues two animations',
+        box.G.dying.filter(d => d.mesh === bot).length === 1);
+}
+
 console.log('\nHIDE');
 { sandbox.hideDeathCard();
   check('hiding clears the visible class', !el.classList._on);
