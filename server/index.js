@@ -563,7 +563,7 @@ class ArenaRoom extends Room {
        the Goliath's 80-round magazine means a reload almost never comes up, so it read as
        arbitrary. Always-on is the configuration the ladder measured directly: 62.3%, 4th
        of 12, losing 37-63 to the VK freebuild and 38-62 to Dragon VK. */
-    if(tAb.indexOf('firing_resist') >= 0) dmg *= 0.7;
+    if(tAb.indexOf('firing_resist') >= 0) dmg *= 1 - LoadoutCore.JUGG_RESIST;
 
     dmg = this.damage(t, dmg);
 

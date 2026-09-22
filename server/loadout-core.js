@@ -205,7 +205,12 @@
      whole lobby burns forever. */
   const DRAGON = { molten: 0.15, spreadR: 4, spreadDur: 1.5, spreadEvery: 0.5 };
 
-  const SHIELD_SOAK = 0.75;
+  /* Juggernaut's flat reduction. It was a bare 0.7 in server/index.js AND a second bare
+   0.7 in the renderer, which is the same two-copies-of-a-number shape that let the PvP
+   and offline paths of this very set drift apart before. It also means the balance model
+   can read the shipped value instead of restating it. */
+const JUGG_RESIST = 0.30;
+const SHIELD_SOAK = 0.75;
 
   /* The shield POOL, which is the lever that actually adds mitigation. The
      absorb is `min(shield, hit * SOAK)` and the pool drops by what it absorbs,
@@ -600,7 +605,7 @@
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR, DRAGON,
                 BULWARK,
-                HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
+                HE_SPLASH_FRAC, splashDamage, HOMING, JUGG_RESIST, SHIELD_SOAK,
                 AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 

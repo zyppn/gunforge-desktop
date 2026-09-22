@@ -751,7 +751,7 @@ const SETS = [
    bonus:'SET · GHOST PROTOCOL — rounds travel 160% faster, pass through everything, and you keep full speed while scoped.', effect:'pierce_all'},
   {id:'jugg',    weapon:'goliath',  name:'Juggernaut',    need:4, rarity:'legendary',
    pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'},
-   bonus:'SET · UNSTOPPABLE — take 30% less damage. Always.', effect:'firing_resist'},
+   bonus:'SET · UNSTOPPABLE — take '+Math.round(LoadoutCore.JUGG_RESIST*100)+'% less damage. Always.', effect:'firing_resist'},
 ];
 
 const MODNAMES = {dmg:'Damage', rof:'Fire rate', mag:'Mag size', reload:'Reload time', spread:'Spread', speed:'Move speed'};
@@ -3522,7 +3522,7 @@ function damage(t, amount, src, isCrit){
   let dmg = amount * (isCrit?2:1);
   // Same window the server uses, from the same constant, and reloading counts as firing:
   // the Goliath's 2.6s reload used to switch this set off at its most exposed moment.
-  if(t.isPlayer && firingResistOn(t)) dmg *= 0.7;
+  if(t.isPlayer && firingResistOn(t)) dmg *= 1 - LoadoutCore.JUGG_RESIST;
   // a shield soaks at most SHIELD_SOAK of a hit - mirrors damage() in server/index.js
   if(t.shield > 0){ const s = Math.min(t.shield, dmg * LoadoutCore.SHIELD_SOAK); t.shield -= s; dmg -= s;
     if(s > 0) t.shHitT = G.elapsed; }   // drawShield flares off this

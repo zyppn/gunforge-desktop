@@ -40,7 +40,9 @@ const html = fs.readFileSync(path.join(SRV, '..', 'renderer', 'index.html'), 'ut
 
 /* 1. the server applies it with no second term */
 ok('server applies the resist unconditionally',
-   /firing_resist'\) >= 0\) dmg \*= 0\.7;/.test(srv));
+   /firing_resist'\) >= 0\) dmg \*= 1 - LoadoutCore\.JUGG_RESIST;/.test(srv));
+ok('neither path still hardcodes the reduction',
+   !/dmg \*= 0\.7/.test(srv) && !/dmg \*= 0\.7/.test(html));
 ok('no firing gate is left on the server',
    !/firingResistOn/.test(srv) && !/tInp && tInp\.fire/.test(srv));
 
@@ -56,7 +58,7 @@ ok('offline predicate is equipment-only',
 ok('it does not look at lastFire or reloading',
    !/firingResistOn[\s\S]{0,300}lastFire/.test(html));
 ok('the resist multiplier is still applied in exactly one place',
-   (html.match(/firingResistOn\(t\)\) dmg \*= 0\.7/g) || []).length === 1);
+   (html.match(/firingResistOn\(t\)\) dmg \*= 1 - LoadoutCore\.JUGG_RESIST/g) || []).length === 1);
 ok('firingResistOn is still defined once',
    (html.match(/function firingResistOn/g) || []).length === 1);
 
@@ -66,7 +68,12 @@ ok('firingResistOn is still defined once',
   ok('the set card exists', !!m);
   if(m){
     const copy = m[1].toLowerCase();
-    ok('the card states the 30%', /30% less damage/.test(copy));
+    // The card COMPUTES its number from the constant, so the source string stops at
+    // "take ". Assert it is derived rather than asserting a digit - a hardcoded 30
+    // that silently disagrees with JUGG_RESIST is the exact failure worth catching.
+    ok('the card derives its number from the shipped constant',
+       /take '\+Math\.round\(LoadoutCore\.JUGG_RESIST\*100\)\+'% less damage/.test(html));
+    ok('the card does not hardcode a percentage', !/take \d+% less damage/.test(html));
     ok('the card no longer says "while firing"', !/while firing/.test(copy));
     ok('nor promises anything about reloads or bursts', !/reload/.test(copy) && !/burst/.test(copy));
   }

@@ -81,7 +81,8 @@ ok('PvP derives the stamp from the synced pool falling', /shNow < \(r\.lastShiel
 
 /* one predicate owns the window, and the damage multiplier is applied in ONE place */
 ok('firingResistOn is defined once', (html.match(/function firingResistOn/g) || []).length === 1);
-ok('the resist multiplier is applied once', (html.match(/firingResistOn\(t\)\) dmg \*= 0\.7/g) || []).length === 1);
+ok('the resist multiplier is applied once',
+   (html.match(/firingResistOn\(t\)\) dmg \*= 1 - LoadoutCore\.JUGG_RESIST/g) || []).length === 1);
 ok('the bullet path does not re-apply it', !/braced \? 0\.7 : 1/.test(html));
 
 /* SANCTUARY - the crit that heals must not look like every other crit */
