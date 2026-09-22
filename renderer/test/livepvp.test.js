@@ -81,5 +81,13 @@ ok('the live path calls the same one', /playerFlinch\(live\.lastHp - sp\.hp\)/.t
 ok('the flinch maths exists in exactly one place',
    (html.match(/Math\.min\(1, dmg \/ 30\)/g) || []).length === 1);
 
+/* 9. the seller's SCREEN, which is not the same thing as the seller's row. A sale credits
+      the database instantly; nothing pushes or polls that to the seller's client. */
+ok('there is a cheap credits-only refresh', /async function refreshCredits\(\)/.test(html));
+ok('it reads one column, not the whole profile',
+   /sbSelect\('players\?select=credits&id=eq\.' \+ ACCOUNT\.playerId\)/.test(html));
+ok('the auction screen runs it', /refreshCredits\(\)\s*\]\)/.test(html));
+ok('it only repaints when the number actually moved', /c !== P\.credits\)\{ P\.credits = c; refreshChips/.test(html));
+
 console.log(fails ? '\n  livepvp.test.js: ' + fails + ' FAILED' : '  livepvp.test.js: all passed');
 process.exit(fails ? 1 : 0);

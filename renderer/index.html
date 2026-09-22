@@ -482,6 +482,22 @@ async function sbRpc(name, body){
   return r.json().catch(()=>null);
 }
 // Pull the authoritative profile after a mutation so the UI shows the DB, not a guess.
+/* A sale credits the SELLER's row in the database the instant it happens, but the seller
+   is a different person on a different machine: nothing pushes them the news and nothing
+   polls for it. Their balance only moved after something else happened to trigger a full
+   profile reload - so to them the credits still looked like they never arrived, which is
+   the exact symptom of the bug that was just fixed, from an entirely different cause.
+
+   One column, not the ~70KB a full resyncProfile() costs, so it is cheap enough to run
+   every time the auction screen is drawn. */
+async function refreshCredits(){
+  if(!ACCOUNT.online || !ACCOUNT.playerId) return;
+  try{
+    const rows = await sbSelect('players?select=credits&id=eq.' + ACCOUNT.playerId);
+    const c = rows && rows[0] && rows[0].credits;
+    if(typeof c === 'number' && c !== P.credits){ P.credits = c; refreshChips(); }
+  }catch(e){}
+}
 async function resyncProfile(){
   try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
 }
@@ -1635,7 +1651,12 @@ async function doList(uidv){
 async function renderAuction(){
   $('#auction').innerHTML = '<div class="panel">QUERYING AUCTION UPLINK...</div>';
   show('auction');
-  const listings = (await getListings()).sort((a,b)=>b.ts-a.ts);
+  // the seller is most likely to be sitting HERE waiting for their money, and the
+  // REFRESH button on this screen is the one obvious way to ask for it
+  const [listings] = await Promise.all([
+    getListings().then(l => l.sort((a,b) => b.ts - a.ts)),
+    refreshCredits()
+  ]);
   const mine = listings.filter(l=>l.seller===P.id);
   const others = listings.filter(l=>l.seller!==P.id);
 
