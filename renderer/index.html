@@ -751,7 +751,7 @@ const SETS = [
    bonus:'SET · GHOST PROTOCOL — rounds travel 160% faster, pass through everything, and you keep full speed while scoped.', effect:'pierce_all'},
   {id:'jugg',    weapon:'goliath',  name:'Juggernaut',    need:4, rarity:'legendary',
    pieces:{barrel:'Jugg Cannon', magazine:'Jugg Belt', foregrip:'Jugg Claw', stock:'Jugg Spine'},
-   bonus:'SET · UNSTOPPABLE — take 30% less damage while firing, and it holds between bursts and through every reload.', effect:'firing_resist'},
+   bonus:'SET · UNSTOPPABLE — take 30% less damage. Always.', effect:'firing_resist'},
 ];
 
 const MODNAMES = {dmg:'Damage', rof:'Fire rate', mag:'Mag size', reload:'Reload time', spread:'Spread', speed:'Move speed'};
@@ -3679,13 +3679,11 @@ function stepContagion(dt){
     }
   }
 }
-/* UNSTOPPABLE's window, offline. Same shape the server derives for itself: the
-   trigger, the tail that covers the gap between bursts, and the reload - the Goliath's
-   2.6s reload used to switch a four-piece legendary set off at its most exposed moment.
-   One predicate, so the damage path, the spark and the HUD can never disagree. */
+/* UNSTOPPABLE is unconditional now, so this is just "is it equipped". Kept as a
+   predicate rather than inlined because the damage path, the deflect spark and the HUD
+   all ask the same question, and they must never be able to disagree about the answer. */
 function firingResistOn(e){
-  if(!e || !e.wep || !e.wep.abilities || !e.wep.abilities.has('firing_resist')) return false;
-  return (G.elapsed - (e.lastFire || -9999)) < LoadoutCore.RESIST_TAIL/1000 || !!e.reloading;
+  return !!(e && e.wep && e.wep.abilities && e.wep.abilities.has('firing_resist'));
 }
 function damageOverTime(e, amt){
   e.hp -= amt;

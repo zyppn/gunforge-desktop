@@ -1,10 +1,15 @@
-/* Juggernaut's -30% is only worth anything if it is ON. Its whole ladder position
-   turns on trigger uptime: 4th of 12 at full uptime, 8th at 60% - below its own
-   freebuild. These pin the window so that can't silently drift back.
-   The bug this replaces: the resist read the raw fire input at the instant of the
-   hit, and the client sends fire:false for the entire reload, so the Goliath's 2.6s
-   reload - the longest in the game - turned a four-piece legendary set off at the
-   exact moment the player was most exposed. */
+/* UNSTOPPABLE is a flat, unconditional 30%.
+   It used to be gated on the target FIRING, and that gate went through three states
+   worth remembering, because each was a real measurement:
+     - raw fire input at the instant of the hit. The client sends fire:false for the
+       whole reload, so the Goliath's 2.6s reload - the longest in the game - switched
+       a four-piece legendary set off at the moment the player was most exposed.
+     - trigger + 450ms tail + a server-derived reload. Correct, but invisible: 450ms is
+       under perception and an 80-round magazine means the reload case almost never
+       comes up, so the set read as arbitrary.
+     - flat. 62.3% and 4th of 12, which is the configuration the ladder measured
+       DIRECTLY rather than extrapolating - the uptime sweep's 100% row is this.
+   These pin it flat. If a condition ever creeps back, this suite says so. */
 const path = require('path'), Module = require('module');
 const SRV = path.join(__dirname, '..');
 let Captured = null;
@@ -25,104 +30,77 @@ process.env.PORT = '0';
 require(path.join(SRV, 'index.js'));
 Module._load = orig;
 const LC = require(path.join(SRV, 'loadout-core.js'));
+const fs = require('fs');
 
-let fails = 0, CS = 0;
+let fails = 0;
 const ok = (name, cond) => { if(!cond){ console.error('  FAIL  ' + name); fails++; } };
 
-function room(){
-  const r = new Captured(); r.onCreate({ map:'foundry' });
-  r.state.phase = 'live';
-  const mk = wid => { const c = { sessionId:'s'+(++CS), send(){} }; r.clients.push(c);
-    r.onJoin(c, { name:'P'+CS, wid, equipped:{} }); return c.sessionId; };
-  return { r, mk };
-}
+const srv  = fs.readFileSync(path.join(SRV, 'index.js'), 'utf8');
+const html = fs.readFileSync(path.join(SRV, '..', 'renderer', 'index.html'), 'utf8');
 
-/* 1. the window is shared, not two hardcoded numbers */
-ok('RESIST_TAIL is exported from loadout-core', typeof LC.RESIST_TAIL === 'number' && LC.RESIST_TAIL > 0);
-{
-  const html = require('fs').readFileSync(path.join(SRV, '..', 'renderer', 'index.html'), 'utf8');
-  // the condition spans more than one line, so take the whole statement, not one line
-  const L = html.split('\n');
-  const i = L.findIndex(l => l.includes("has('firing_resist')"));
-  const stmt = i < 0 ? '' : L.slice(i, i + 3).join(' ');
-  ok('offline path reads RESIST_TAIL rather than a literal',
-     !!stmt && stmt.includes('RESIST_TAIL') && !/0\.45\b/.test(stmt));
-  ok('offline path also covers the reload', /reloading/.test(stmt));
-}
+/* 1. the server applies it with no second term */
+ok('server applies the resist unconditionally',
+   /firing_resist'\) >= 0\) dmg \*= 0\.7;/.test(srv));
+ok('no firing gate is left on the server',
+   !/firingResistOn/.test(srv) && !/tInp && tInp\.fire/.test(srv));
 
-/* 2. trigger down -> on, regardless of anything else */
-{
-  const { r, mk } = room(); const id = mk('goliath');
-  r.inputs.set(id, { fire:true });
-  ok('trigger held counts as firing', r.firingResistOn(id) === true);
-}
+/* 2. and the state that only existed to feed that gate is gone, not orphaned */
+for(const dead of ['lastShotAt', 'magLeft', 'reloadUntil'])
+  ok('server no longer carries ' + dead, !new RegExp(dead).test(srv));
+ok('RESIST_TAIL is retired from loadout-core', LC.RESIST_TAIL === undefined);
+ok('and nothing still reads it', !/RESIST_TAIL/.test(srv) && !/RESIST_TAIL/.test(html));
 
-/* 3. trigger released -> still on inside the tail, off after it */
-{
-  const { r, mk } = room(); const id = mk('goliath');
-  r.inputs.set(id, { fire:false });
-  r.lastShotAt.set(id, Date.now() - (LC.RESIST_TAIL - 50));
-  ok('still firing inside the tail', r.firingResistOn(id) === true);
-  r.lastShotAt.set(id, Date.now() - (LC.RESIST_TAIL + 50));
-  ok('not firing once the tail lapses', r.firingResistOn(id) === false);
-}
+/* 3. offline agrees, through the one predicate all three consumers share */
+ok('offline predicate is equipment-only',
+   /function firingResistOn\(e\)\{\s*\n\s*return !!\(e && e\.wep/.test(html));
+ok('it does not look at lastFire or reloading',
+   !/firingResistOn[\s\S]{0,300}lastFire/.test(html));
+ok('the resist multiplier is still applied in exactly one place',
+   (html.match(/firingResistOn\(t\)\) dmg \*= 0\.7/g) || []).length === 1);
+ok('firingResistOn is still defined once',
+   (html.match(/function firingResistOn/g) || []).length === 1);
 
-/* 4. the reload the server derives for itself covers the whole reload,
-      which is much longer than the tail on the one weapon that has this set */
+/* 4. the card matches. It said "while firing" through two behaviour changes. */
 {
-  const { r, mk } = room(); const id = mk('goliath');
-  const ld = LC.computeStats('goliath', {});
-  ok('the Goliath reload outlasts the tail by a lot', ld.reload > LC.RESIST_TAIL * 3);
-  r.inputs.set(id, { fire:false });
-  r.lastShotAt.set(id, Date.now() - (LC.RESIST_TAIL + 50));   // tail already lapsed
-  r.reloadUntil.set(id, Date.now() + 1000);
-  ok('reloading still counts as firing', r.firingResistOn(id) === true);
-  r.reloadUntil.set(id, Date.now() - 1);
-  ok('and stops when the reload finishes', r.firingResistOn(id) === false);
-}
-
-/* 5. emptying the magazine is what arms that window, derived from server state alone */
-{
-  const { r, mk } = room(); const id = mk('goliath');
-  const ld = r.loadouts.get(id);
-  const p = r.state.players.get(id);
-  const inp = { fire:true, yaw:0, pitch:0, ads:0 };
-  for(let i = 0; i < ld.mag; i++){ r.fireT.set(id, 0); r.tryFire(id, p, inp); }
-  ok('a full magazine of shots arms the reload window',
-     (r.reloadUntil.get(id) || 0) > Date.now() + ld.reload - 200);
-  ok('and the magazine counter wraps rather than going negative', r.magLeft.get(id) === ld.mag);
-}
-
-/* 6. nothing about this is forgeable: a client that never fires gets nothing */
-{
-  const { r, mk } = room(); const id = mk('goliath');
-  r.inputs.set(id, { fire:false, reloading:true });   // a field the server must ignore
-  ok('a client claiming to reload without firing gets no resist', r.firingResistOn(id) === false);
-}
-
-/* 7. per-player state is cleaned up, the way burnSpread had to be */
-{
-  const { r, mk } = room(); const id = mk('goliath');
-  r.lastShotAt.set(id, Date.now()); r.magLeft.set(id, 3); r.reloadUntil.set(id, Date.now()+1);
-  r.onLeave(r.clients.find(c => c.sessionId === id), true);
-  ok('leaving clears the uptime state',
-     !r.lastShotAt.has(id) && !r.magLeft.has(id) && !r.reloadUntil.has(id));
-}
-
-/* 8. the card has to describe the behaviour the code actually has. The old copy said
-      "while firing" full stop, which was true of the version this replaced and is now
-      an understatement - the set reads as weaker than it is, which is the same problem
-      in a different place. */
-{
-  const html = require('fs').readFileSync(path.join(SRV, '..', 'renderer', 'index.html'), 'utf8');
   const m = html.match(/bonus:'([^']*UNSTOPPABLE[^']*)'/);
   ok('the set card exists', !!m);
   if(m){
     const copy = m[1].toLowerCase();
-    ok('the card still states the 30%', /30% less damage/.test(copy));
-    ok('the card mentions reloading, because the code covers it', /reload/.test(copy));
-    ok('the card mentions the gap between bursts', /burst/.test(copy));
+    ok('the card states the 30%', /30% less damage/.test(copy));
+    ok('the card no longer says "while firing"', !/while firing/.test(copy));
+    ok('nor promises anything about reloads or bursts', !/reload/.test(copy) && !/burst/.test(copy));
   }
+}
+
+/* 5. the damage actually lands at 0.7x, end to end through applyHit */
+{
+  const r = new Captured(); r.onCreate({ map:'foundry' });
+  r.state.phase = 'live';
+  let CS = 0;
+  const mk = (wid, eq) => { const c = { sessionId:'s'+(++CS), send(){} }; r.clients.push(c);
+    r.onJoin(c, { name:'P'+CS, wid, equipped: eq || {} }); return c.sessionId; };
+  const jugg = {};
+  for(const [slot, name] of Object.entries(LC.SETS.find(s => s.id === 'jugg').pieces))
+    jugg[slot] = { slot, weapon:'goliath', name, rarity:'legendary', set:'jugg', mods:{} };
+  const shooter = mk('vkraptor');
+  const braced  = mk('goliath', jugg);
+  const plain   = mk('goliath');
+  const ld = r.loadouts.get(shooter);
+  ok('the set resolves to firing_resist',
+     (r.loadouts.get(braced).abilities || []).indexOf('firing_resist') >= 0);
+
+  const hpAfter = tid => {
+    const t = r.state.players.get(tid);
+    t.hp = 100; t.shield = 0;
+    r.inputs.set(tid, { fire:false });          // explicitly NOT firing
+    r.applyHit(shooter, r.state.players.get(shooter), t, tid, ld, { crit:false });
+    return t.hp;
+  };
+  const lossBraced = 100 - hpAfter(braced);
+  const lossPlain  = 100 - hpAfter(plain);
+  ok('a target that is not firing still takes 30% less (' +
+     lossBraced.toFixed(2) + ' vs ' + lossPlain.toFixed(2) + ')',
+     Math.abs(lossBraced - lossPlain * 0.7) < 0.01);
 }
 
 console.log(fails ? '\n  jugg.test.js: ' + fails + ' FAILED' : '  jugg.test.js: all passed');
