@@ -48,5 +48,18 @@ ok('and flashes the same bar the offline path does',
 ok('a respawn refill is not treated as a heal',
    /sp\.hp > live\.lastHp \+ 0\.01 && !me\.dead && !sp\.dead/.test(html));
 
+/* 6. the hitmarker: offline raises it from damage(), live from the server's confirmation */
+ok('one function raises the marker', (html.match(/function showHitmark/g) || []).length === 1);
+ok('the offline damage path calls it', /src\.isPlayer && src!==t\) showHitmark\(isCrit\)/.test(html));
+ok('the live path listens for the server hit', /room\.onMessage\('hit'[\s\S]{0,90}showHitmark/.test(html));
+ok('nothing raises it by poking the element directly',
+   (html.match(/#hitmark'\)/g) || []).length === 1);
+ok('the server confirms hits to the shooter', /sc\.send\('hit', \{ c: crit \? 1 : 0/.test(srv));
+ok('only when damage actually landed', /if\(dmg > 0 && id !== tid\)/.test(srv));
+
+/* 7. a purchase the database refuses must not read as a generic failure */
+ok('the auction surfaces the migration-009 abort specifically',
+   /AUCTION NEEDS MIGRATION 009/.test(html));
+
 console.log(fails ? '\n  livepvp.test.js: ' + fails + ' FAILED' : '  livepvp.test.js: all passed');
 process.exit(fails ? 1 : 0);

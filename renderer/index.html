@@ -1674,7 +1674,13 @@ async function buyListing(id){
       toast('PURCHASED');
     }
   }catch(e){
-    toast('PURCHASE FAILED \u2014 ' + e.message);
+    // 009's assertions abort the purchase rather than let it destroy credits. That is
+    // the database refusing to half-complete, not a network blip, and it needs a DB
+    // change to clear - so say so instead of inviting a retry that cannot work.
+    const msg = /touched 0 rows|touched \d+ rows/.test(e.message || '')
+      ? 'PURCHASE BLOCKED \u2014 AUCTION NEEDS MIGRATION 009'
+      : 'PURCHASE FAILED \u2014 ' + e.message;
+    toast(msg);
     await resyncProfile();
   }
   renderAuction();
@@ -3344,6 +3350,16 @@ function dropWeaponFromMesh(mesh){
    G.ents alone finds nothing, and the round flies dead straight on your screen while the
    server's authoritative copy homes perfectly onto the target and hits it. Remotes are
    reported at their SMOOTHED position, which is where their body is actually drawn. */
+/* The hitmarker. Offline this is raised from damage(); in a live match the server owns
+   damage, so it is raised from the server's hit confirmation instead. One function, so
+   the two can never drift into showing different things. */
+function showHitmark(isCrit){
+  const hm = $('#hitmark');
+  if(!hm) return;
+  hm.classList.toggle('crit', !!isCrit);
+  hm.style.opacity = 1; sfx('hit');
+  clearTimeout(hm._t); hm._t = setTimeout(() => { hm.style.opacity = 0; }, 90);
+}
 function seekCandidates(owner){
   const out = [];
   for(const e of G.ents){
@@ -3573,12 +3589,7 @@ function damage(t, amount, src, isCrit){
     G.kickYaw += (Math.random()-0.5) * (0.005 + hitF * 0.006);
     const v = $('#vign'); v.style.opacity = 0.9; setTimeout(()=>{ v.style.opacity = 0; }, 160);
   }
-  if(src && src.isPlayer && src!==t){
-    const hm = $('#hitmark');
-    hm.classList.toggle('crit', !!isCrit);
-    hm.style.opacity = 1; sfx('hit');
-    clearTimeout(hm._t); hm._t = setTimeout(()=>{ hm.style.opacity = 0; }, 90);
-  }
+  if(src && src.isPlayer && src!==t) showHitmark(isCrit);
   if(src){
     if(src.wep && src.wep.abilities.has('vampiric') && src!==t){
       const b4 = src.hp;
@@ -4953,6 +4964,8 @@ function startLiveMatch(){
         startKillcam(k, m.killerId); // k is live state; killerId picks the smoothed body
       }
     });
+    // the server confirms every landed hit to whoever fired it
+    room.onMessage('hit', m => { if(!G || !G.running) return; showHitmark(!!(m && m.c)); });
     room.onMessage('shot', m => {
       const r = live.remotes.get(m.id);
       if(!r) return;

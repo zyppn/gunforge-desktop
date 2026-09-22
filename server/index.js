@@ -572,6 +572,16 @@ class ArenaRoom extends Room {
 
     dmg = this.damage(t, dmg);
 
+    /* Confirm the hit to the shooter. The client raises its hitmarker from damage(),
+       which it only ever runs in an OFFLINE match - in live play the server owns damage
+       and never said anything back, so landing shots on a real player gave no feedback
+       at all. Sent only to the shooter, and only when damage actually landed, so a round
+       fully eaten by a shield does not read as a hit. */
+    if(dmg > 0 && id !== tid){
+      const sc = this.clients.find(c => c.sessionId === id);
+      if(sc) sc.send('hit', { c: crit ? 1 : 0, k: t.hp <= 0 ? 1 : 0 });
+    }
+
     // The set carries its own ignition, so it is never a worse Incendiary and
     // does not eat one of the four ability slots it leaves you.
     if(has('incendiary') || has('fire_nova')){
