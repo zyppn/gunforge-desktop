@@ -191,7 +191,7 @@
   /* While dead, everything about YOUR state comes off screen. The scoreboard,
      killfeed and the card itself stay. */
   #hud.dead #crosshair, #hud.dead #hudbl, #hud.dead #hudbr,
-  #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov, #hud.dead #bracov{
+  #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov{
     opacity:0 !important; transition:opacity .18s}
   #hudtop{position:absolute;top:8px;left:0;right:0;display:flex;justify-content:center;gap:18px;text-shadow:0 1px 2px #000}
   #hudtop .box{background:rgba(10,14,19,.75);border:1px solid var(--line);padding:4px 12px}
@@ -207,9 +207,12 @@
   .hbar.sh i{background:var(--blue)}
   /* SANCTUARY heals you on a crit and RAMPART plates you on a kill; both used to be a
      bar quietly changing width, which is not a payoff you can feel. */
-  #hpbar.mend{animation:mendf .42s ease-out}
-  @keyframes mendf{from{box-shadow:0 0 0 0 rgba(245,196,104,.95);filter:brightness(2.1)}
-                     to{box-shadow:0 0 0 7px rgba(245,196,104,0);filter:none}}
+  /* The flash is WHITE, not brass. It has to be legible over a green bar, a red one
+     and an UNSTOPPABLE brass one - a brass glow on a brass bar is no glow at all, and
+     a Goliath can be healing while braced. */
+  #hpbar.mend{animation:mendf .40s ease-out}
+  @keyframes mendf{from{box-shadow:0 0 0 0 rgba(255,255,255,.95);filter:brightness(2.2)}
+                     to{box-shadow:0 0 0 7px rgba(255,255,255,0);filter:none}}
   #shbar.ward{animation:wardf .42s ease-out}
   @keyframes wardf{from{box-shadow:0 0 0 0 rgba(111,168,220,1);filter:brightness(2.4)}
                      to{box-shadow:0 0 0 9px rgba(111,168,220,0);filter:none}}
@@ -258,10 +261,11 @@
     background:radial-gradient(ellipse at center, transparent 55%, rgba(255,150,60,.45) 100%)}
   #frostov{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .25s;
     background:radial-gradient(ellipse at center, transparent 50%, rgba(120,190,255,.5) 100%)}
-  /* UNSTOPPABLE: a thin brass rim, not a vignette - every other full-screen tint in
-     here means something is hurting you, and this one means the opposite. */
-  #bracov{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .12s;
-    box-shadow:inset 0 0 0 3px rgba(245,196,104,.5), inset 0 0 34px rgba(245,196,104,.16)}
+  /* UNSTOPPABLE plates the HEALTH BAR rather than ringing the screen: a full-screen
+     tint competes with the sight picture, and the bar is already where you look to
+     learn how durable you are right now. The number keeps white-on-dark-shadow, which
+     holds over brass as well as it does over green. */
+  #hpbar.braced{background:var(--brass)}
   #lowhp{position:absolute;inset:0;pointer-events:none;opacity:0;
     background:radial-gradient(ellipse at center, transparent 60%, rgba(180,20,15,.4) 100%);
     animation:pulse 1.2s infinite}
@@ -316,7 +320,7 @@
     <div id="gamewrap">
       <canvas id="cv"></canvas>
       <div id="hud">
-        <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div><div id="bracov"></div>
+        <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div>
         <div id="crosshair"></div>
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
         <div id="hudtop">
@@ -3454,9 +3458,12 @@ function fire(e, dir){
     scene.add(m);
     // fire off the muzzle. Spawned from the same point the round leaves, so it works
     // for the player, bots and remotes without any of them needing their own path.
-    if(drake) spawnFlame(m.position.x + (Math.random()-0.5)*0.12,
-                         oy + (Math.random()-0.5)*0.12,
-                         m.position.z + (Math.random()-0.5)*0.12);
+    // one per SHOT, not one per pellet, and only on some of them - an assault rifle
+    // cadence with a flame on every round is a wall of orange
+    if(drake && i === 0 && Math.random() < 0.5)
+      spawnMuzzleFire(m.position.x + (Math.random()-0.5)*0.05,
+                      oy + (Math.random()-0.5)*0.05,
+                      m.position.z + (Math.random()-0.5)*0.05, e.isPlayer);
     G.bullets.push({
       mesh:m, vx:d.x*speed, vy:d.y*speed, vz:d.z*speed,
       dmg:w.dmg, owner:e, life:1.6,
@@ -3517,7 +3524,8 @@ function damage(t, amount, src, isCrit){
   // the Goliath's 2.6s reload used to switch this set off at its most exposed moment.
   if(t.isPlayer && firingResistOn(t)) dmg *= 0.7;
   // a shield soaks at most SHIELD_SOAK of a hit - mirrors damage() in server/index.js
-  if(t.shield > 0){ const s = Math.min(t.shield, dmg * LoadoutCore.SHIELD_SOAK); t.shield -= s; dmg -= s; }
+  if(t.shield > 0){ const s = Math.min(t.shield, dmg * LoadoutCore.SHIELD_SOAK); t.shield -= s; dmg -= s;
+    if(s > 0) t.shHitT = G.elapsed; }   // drawShield flares off this
   t.hp -= dmg;
   if(!t.isPlayer && !t.dead && src && src!==t && hostile(t, src)){
     t.alertSrc = src; t.alertT = 3;
@@ -3538,7 +3546,13 @@ function damage(t, amount, src, isCrit){
     clearTimeout(hm._t); hm._t = setTimeout(()=>{ hm.style.opacity = 0; }, 90);
   }
   if(src){
-    if(src.wep && src.wep.abilities.has('vampiric') && src!==t) src.hp = Math.min(src.maxhp, src.hp + (amount*(isCrit?2:1))*0.12);
+    if(src.wep && src.wep.abilities.has('vampiric') && src!==t){
+      const b4 = src.hp;
+      src.hp = Math.min(src.maxhp, src.hp + (amount*(isCrit?2:1))*0.12);
+      // same tell as ABSOLUTION: lifesteal you cannot see is lifesteal you do not
+      // credit. Only when it actually healed, or it fires on every single hit.
+      if(src.hp > b4 && src.isPlayer) pulseHud('#hpbar', 'mend');
+    }
     if(isCrit && src.wep && src.wep.abilities.has('critheal')){
       const before = src.hp;
       src.hp = Math.min(src.maxhp, src.hp + 10);
@@ -3684,6 +3698,18 @@ function spawnBurst(x, z, color){
   scene.add(m);
   G.fx.push({mesh:m, t:0.4, grow:6});
 }
+/* Muzzle fire. spawnFlame's 7-12cm spheres are sized for a body that is ALIGHT and
+   metres away; one of those at the end of your own barrel fills the screen. These are
+   a quarter the size, rise slower and die sooner, and never appear while aimed - the
+   sight picture is the one place a cosmetic must not go. */
+function spawnMuzzleFire(x, y, z, local){
+  if(local && adsT > 0.15) return;                 // never in the sight picture
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.018 + Math.random()*0.014, 5, 4),
+    new THREE.MeshBasicMaterial({color: Math.random() < 0.5 ? 0xFF6A2A : 0xFFB13D,
+      transparent:true, opacity:0.85, depthWrite:false}));
+  m.position.set(x, y, z); scene.add(m);
+  G.fx.push({mesh:m, t:0.16, grow:-2.6, vy:0.5});
+}
 function spawnFlame(x, y, z){
   const c = Math.random() < 0.5 ? 0xFF6A2A : 0xFFB13D;
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.07 + Math.random()*0.05, 6, 5),
@@ -3713,13 +3739,17 @@ function spawnFrost(x, y, z){
    ever turned it on - in PvP a plated Warden looked exactly like an unplated one, and
    the only tell was a health bar that would not move. One function so the two paths
    cannot disagree about it again, and it reads the pool size rather than guessing. */
-function drawShield(u, sh){
+function drawShield(u, sh, hitT){
   if(!u || !u.shSphere) return;
   u.shSphere.visible = sh > 0;
   if(sh <= 0) return;
   const f = Math.max(0, Math.min(1, sh / LoadoutCore.BULWARK.cap));
   u.shSphere.scale.setScalar(0.86 + 0.16*f + Math.sin((G.elapsed||0) * 5) * 0.015);
-  u.shSphere.material.opacity = 0.13 + 0.12*f;
+  /* Armour, not an aura. A constant bubble is noise you learn to ignore; this sits
+     near-invisible at rest and flares on the hits it actually soaks, which puts the
+     tell on the exact moment your damage is being cut rather than on the whole fight. */
+  const flare = Math.max(0, 1 - ((G.elapsed || 0) - (hitT || -9)) / 0.28);
+  u.shSphere.material.opacity = 0.05 + 0.05*f + 0.34*flare*flare;
 }
 function pulseHud(sel, cls){
   const el = $(sel); if(!el) return;
@@ -4267,7 +4297,7 @@ function tick(now){
       u.hbFg.material.color.setHex(pct>0.4 ? 0x5FBF6E : 0xE05A4E);
       e.mesh.getWorldQuaternion(TMPQ);
       u.hbGroup.quaternion.copy(TMPQ.invert().multiply(camera.quaternion));
-      drawShield(u, e.shield || 0);
+      drawShield(u, e.shield || 0, e.shHitT);
       // walk cycle: legs swing with distance actually covered this frame
       if(e.lastX===null){ e.lastX=e.x; e.lastZ=e.z; }
       const moved = Math.hypot(e.x-e.lastX, e.z-e.lastZ);
@@ -4550,7 +4580,7 @@ function hud(){
   $('#reloadtag').textContent = me.reloading ? 'RELOADING...' : (me.ammo===0?'PRESS R':'');
   $('#lowhp').style.opacity = (!me.dead && me.hp < 32) ? 1 : 0;
   $('#burnov').style.opacity = (!me.dead && me.burnT > 0) ? 1 : 0;
-  $('#bracov').style.opacity = (!me.dead && firingResistOn(me)) ? 1 : 0;
+  $('#hpbar').classList.toggle('braced', !me.dead && firingResistOn(me));
   $('#frostov').style.opacity = (!me.dead && me.slowT > 0) ? 1 : 0;
 }
 
@@ -4916,9 +4946,9 @@ function startLiveMatch(){
         if(m.f) tm.scale.set(1.35, 1.35, 2.1);
         if(m.g || m.f) tm.lookAt(wire[i]+wire[i+3], wire[i+1]+wire[i+4], wire[i+2]+wire[i+5]);
         tm.position.set(wire[i], wire[i+1], wire[i+2]);
-        if(m.f) spawnFlame(wire[i] + (Math.random()-0.5)*0.12,
-                           wire[i+1] + (Math.random()-0.5)*0.12,
-                           wire[i+2] + (Math.random()-0.5)*0.12);
+        if(m.f && i === 0) spawnMuzzleFire(wire[i] + (Math.random()-0.5)*0.05,
+                           wire[i+1] + (Math.random()-0.5)*0.05,
+                           wire[i+2] + (Math.random()-0.5)*0.05, false);
         scene.add(tm);
         live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6 });
       }
@@ -5211,7 +5241,14 @@ function liveTick(dt){
         spawnFrost(r.cx + (Math.random()-0.5)*0.8, 0.4 + Math.random()*1.5, r.cz + (Math.random()-0.5)*0.8);
       }
     }
-    drawShield(u, t.shield || 0);
+    /* Offline, damage() stamps shHitT as it soaks. In PvP the server owns damage and
+       all the client ever sees is the synced pool going DOWN, so derive the same stamp
+       from that - otherwise the flare simply never fires in a real match, which is the
+       only place a Bulwark opponent exists. */
+    const shNow = t.shield || 0;
+    if(shNow < (r.lastShield || 0) - 0.01) r.shHitT = G.elapsed;
+    r.lastShield = shNow;
+    drawShield(u, shNow, r.shHitT);
     if(u.hbFg){
       const pct = Math.max(0, t.hp/100);
       u.hbFg.scale.x = Math.max(0.001, pct);

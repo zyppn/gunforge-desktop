@@ -45,7 +45,7 @@ if(rail && ds){
   ok('ghost reads as a slug, not a cube', railLong >= 8);
   ok('exhale is short and thick, not a second railgun', +ds[3] < 3 && +ds[1] > 1);
 }
-ok('exhale spits fire off the muzzle', /if\(drake\)\s*spawnFlame\(/.test(html));
+ok('exhale spits fire off the muzzle', /drake && i === 0[\s\S]{0,80}spawnMuzzleFire\(/.test(html));
 
 /* Unstoppable is the one set whose effect is invisible on the target */
 ok('mitigated hits spark differently', /braced\)\{[\s\S]{0,160}spawnSpark\(/.test(html));
@@ -55,9 +55,29 @@ if(sp && np){
   ok('the braced spark is not the normal spark', far(parseInt(sp[1],16), parseInt(np[2],16)) >= 60);
   ok('nor the crit spark', far(parseInt(sp[1],16), parseInt(np[1],16)) >= 60);
 }
-ok('the brace overlay exists', /#bracov\{/.test(html) && /id="bracov"/.test(html));
-ok('the brace overlay is driven by the shared predicate', /#bracov'\)\.style\.opacity[\s\S]{0,60}firingResistOn\(me\)/.test(html));
-ok('the brace overlay hides on death', /#hud\.dead #bracov/.test(html));
+/* UNSTOPPABLE marks the health bar, not the whole screen - a full-screen tint competes
+   with the sight picture, and every other one in this HUD means something is hurting you */
+ok('the brace state is on the health bar', /#hpbar\.braced\{background:var\(--brass\)\}/.test(html));
+ok('it is driven by the shared predicate', /classList\.toggle\('braced'[\s\S]{0,60}firingResistOn\(me\)/.test(html));
+ok('the screen overlay is gone', !/bracov/.test(html));
+ok('the health number is untouched, so it stays readable', /#hptext'\)\.textContent/.test(html));
+
+/* the heal flash has to read over a braced bar too - brass on brass is no flash */
+ok('the heal flash is white, not brass', /mendf\{from\{box-shadow:0 0 0 0 rgba\(255,255,255/.test(html));
+ok('lifesteal flashes the bar like the Saint heal does',
+   /abilities\.has\('vampiric'\)[\s\S]{0,420}pulseHud\('#hpbar', 'mend'\)/.test(html));
+ok('and only when it actually healed', /src\.hp > b4 && src\.isPlayer/.test(html));
+
+/* muzzle fire is its own size, and never in the sight picture */
+ok('muzzle fire is a separate, smaller emitter', /function spawnMuzzleFire/.test(html));
+ok('it is suppressed while aiming', /if\(local && adsT > [\d.]+\) return;/.test(html));
+ok('one per shot, not one per pellet', /drake && i === 0/.test(html));
+ok('the old oversized flame is no longer used at the muzzle', !/if\(drake\) spawnFlame/.test(html));
+
+/* the bubble flares on soaked hits instead of glowing constantly */
+ok('the bubble flares off a hit stamp', /drawShield\(u, sh, hitT\)/.test(html) && /flare\*flare/.test(html));
+ok('offline stamps it where the soak happens', /if\(s > 0\) t\.shHitT = G\.elapsed;/.test(html));
+ok('PvP derives the stamp from the synced pool falling', /shNow < \(r\.lastShield \|\| 0\)/.test(html));
 
 /* one predicate owns the window, and the damage multiplier is applied in ONE place */
 ok('firingResistOn is defined once', (html.match(/function firingResistOn/g) || []).length === 1);
@@ -72,7 +92,7 @@ ok('saint flashes the health bar', /pulseHud\('#hpbar', 'mend'\)/.test(html) && 
 /* RAMPART - the bubble existed but only offline ever switched it on */
 ok('one function draws the bubble', (html.match(/function drawShield/g) || []).length === 1);
 ok('the offline path uses it', /drawShield\(u, e\.shield/.test(html));
-ok('the PvP path uses it too', /drawShield\(u, t\.shield/.test(html));
+ok('the PvP path uses it too', /drawShield\(u, shNow, r\.shHitT\)/.test(html));
 // three legitimate sites: the initial hide in makeBody, the per-life reset, and drawShield
 ok('no path toggles shSphere.visible behind drawShield\'s back',
    (html.match(/shSphere\.visible/g) || []).length === 3);
