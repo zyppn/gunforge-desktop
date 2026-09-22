@@ -2156,8 +2156,21 @@ function buildGunModel(wid, eqOpt){
 
   // slot components — standard geometry, or replaced by the equipped part's variant
   const tipZ = vmBarrel(eq.barrel, w, frontZ);
-  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY);
-  vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY);
+  /* The receiver's underside is a SHARED BUDGET. The foregrip, the magwell and the frame's
+     pistol grip are all fixed-size objects placed at fractions of a receiver depth that
+     varies 2.3x across the roster, and on the M17 that is 144mm of rail for up to 278mm of
+     hardware. Sizing the magazine alone against the leftovers made it absorb the whole
+     squeeze - a drum came out at 31% next to a Bulwark Brace. Size the PAIR against the
+     rail they actually have, so a short receiver takes a little off each. */
+  const railRear = bodyZ + bodyD*0.28 - 0.060;   // vmFrame's pistol grip, tilted 0.28 rad
+  const fgD = foregripDepth(eq.foregrip, w), magD = magazineDepth(eq.magazine);
+  const fit = Math.min(1, (railRear - frontZ - 0.012) / Math.max(1e-6, fgD + magD));
+  const fgZ = Math.max(frontZ + fgD*fit/2 + 0.004,                       // never off the muzzle end
+                Math.min(frontZ + bodyD*0.22,                            // where it has always gone
+                         railRear - magD*fit - fgD*fit/2 - 0.012));      // leaving the magwell room
+  const magZ = Math.min(bodyZ + bodyD*0.05, railRear - magD*fit/2 - 0.004);
+  vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY, fgZ, fit);
+  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY, magZ, fit);
   vmStock(eq.stock, w, rearZ, bodyH, fr.rearMidY, bodyD);
   vmOptic(eq.optic, w, bodyZ, bodyH, bodyD, fr.topY);
 
@@ -2388,26 +2401,24 @@ function vmBarrel(p, w, frontZ){
   }
   return frontZ - len - tipPad;
 }
-function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY){
+function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY, zOpt, fitOpt){
   if(botY === undefined) botY = -bodyH/2;   // locker thumbnails build parts bare
+  const host = VMT, G = new THREE.Group();
+  G.position.set(0, botY, (typeof zOpt === 'number') ? zOpt : bodyZ + bodyD*0.05);
+  G.scale.setScalar((typeof fitOpt === 'number') ? fitOpt : 1);
+  VMT = G;
+  try { vmMagazineBody(p, w); }
+  finally { VMT = host; host.add(G); }
+}
+function vmMagazineBody(p, w){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
   const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
   const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
-  /* The magwell and vmFrame's pistol grip are both placed as a FRACTION of the receiver
-     depth - 5% and 28% - but both are fixed-size objects. On the M17's 260mm receiver that
-     leaves ~60mm of gap for ~110mm of hardware, and 36-78mm of the well ended up buried
-     inside the grip: the "crammed" look. Slide the well forward only as far as it takes to
-     clear, so every receiver long enough to fit both is left exactly where it was. */
-  const gripFront = bodyZ + bodyD*0.28 - 0.060;   // grip box 0.08 deep, tilted 0.28 rad
-  const zFor = hd => Math.min(bodyZ + bodyD*0.05, gripFront - hd - 0.004);
-  // A leaning magazine reaches FURTHER back at its base than its depth alone implies:
-  // the body pivots about its own centre, so h/2 * sin(tilt) of swing has to be paid for
-  // too. 0.048 covers the 0.12-0.14 tall bodies at their 0.08-0.10 rad tilts.
-  let z = zFor(0.048);
-  const topIn = botY + 0.02; // mag tops tuck 2cm INTO the receiver — no float on any body height
-  const well = (wd, dp) => vmBox(dark(), wd+0.014, 0.032, dp+0.014, 0, botY - 0.006, z); // magwell collar hides the seam
+  const z = 0;               // mount-local: the group carries the world placement
+  const topIn = 0.02;        // mag tops tuck 2cm INTO the receiver — no float on any body height
+  const well = (wd, dp) => vmBox(dark(), wd+0.014, 0.032, dp+0.014, 0, -0.006, z); // magwell collar hides the seam
   // Sub-pieces RIDE ON the magazine body instead of standing beside it. They used to be
   // separate meshes each rotated about its own centre, so on a mag leaning 0.16 rad the
   // base plate finished 17mm behind the body's bottom end and the rib bands walked off
@@ -2425,7 +2436,6 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY){
     return;
   }
   if(n.includes('Drum') || n.includes('Heart')){
-    z = zFor(0.079);   // a 150mm drum needs a lot more room than a box mag
     const d = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.05, 14), m);
     d.rotation.z = Math.PI/2; d.position.set(0, topIn - 0.072, z); VMT.add(d);
     if(n.includes('Heart')){
@@ -2439,7 +2449,6 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY){
     rim.rotation.y = Math.PI/2; rim.position.set(0.027, topIn - 0.072, z); VMT.add(rim);
   } else if(n.includes('Extended')){
     const h = 0.22;
-    z = zFor(0.058);   // tallest body at the steepest tilt: 17mm of rearward swing
     const b = vmBox(m, 0.05, h, 0.065, 0, topIn - h/2, z); b.rotation.x = -0.16;
     for(const fr of [0.5, 0.82]) rider(b, dark(), 0.053, 0.006, 0.068, h*(0.5 - fr)); // rib bands
     well(0.05, 0.065);
@@ -2447,11 +2456,10 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY){
   } else if(n.includes('Belt')){
     // macro-scale belt feed: the box hangs on brackets below the receiver,
     // and FAT cartridges visibly climb the open gap into the gun. Chunky, style-native.
-    z = zFor(0.056);
     const tw = 0.08, th = 0.115, td = 0.105;
     const bx = 0.012 + tw/2;
     const gap = 0.016;
-    const boxTop = botY - gap;
+    const boxTop = -gap;
     vmBox(m, tw, th, td, bx, boxTop - th/2, z);
     vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, boxTop - th + 0.006, z);        // base band
     vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.003, boxTop - th*0.5, z);  // latch
@@ -2498,14 +2506,38 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY){
     basePlate(b, 0.05, 0.062, h);
   }
 }
-function vmForegrip(p, w, frontZ, bodyD, bodyH, botY){
+/* Natural front-to-back size of the two things that share the receiver's underside rail.
+   buildGunModel needs both BEFORE either is built, to size them against the rail. */
+function foregripDepth(p, w){
+  const n = p ? p.name : '';
+  if(!p) return w.type === 'Pistol' ? 0 : 0.10;
+  if(n.includes('Angled')) return 0.092;   // the hung body swings back through 0.5 rad
+  if(n.includes('Brace'))  return 0.120;
+  if(n.includes('Vertical') || n.includes('Skeleton') || n.includes('Claw')) return 0.060;
+  return 0.062;
+}
+function magazineDepth(p){
+  const n = p ? p.name : '';
+  if(n.includes('Drum') || n.includes('Heart')) return 0.158;
+  if(n.includes('Extended')) return 0.116;   // includes the rearward swing of the tilted body
+  if(n.includes('Belt'))     return 0.112;
+  return 0.096;
+}
+function vmForegrip(p, w, frontZ, bodyD, bodyH, botY, zOpt, fitOpt){
   if(botY === undefined) botY = -bodyH/2;
+  const host = VMT, G = new THREE.Group();
+  G.position.set(0, botY, (typeof zOpt === 'number') ? zOpt : frontZ + bodyD*0.22);
+  G.scale.setScalar((typeof fitOpt === 'number') ? fitOpt : fitScale(bodyD));
+  VMT = G;
+  try { vmForegripBody(p, w); }
+  finally { VMT = host; host.add(G); }
+}
+function vmForegripBody(p, w){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
   const dark = () => tone(0.75);
   const steel = () => mat(0x27303A);
-  const z = frontZ + bodyD*0.22;
-  const mountY = botY; // actual receiver underside — grips attach HERE on every frame
+  const z = 0, mountY = 0;   // mount-local: the group carries the world placement
   const rail = (wd, dp) => vmBox(dark(), wd, 0.016, dp, 0, mountY - 0.006, z);
   const hang = (g, h, rotX) => {
     // pivot at the top: the grip's attachment point stays ON the rail no matter the angle
@@ -2562,7 +2594,7 @@ function vmStock(p, w, rearZ, bodyH, rearMidY, bodyD){
   // muzzle, because every position inside vmStockBody is an absolute z.
   const host = VMT, G = new THREE.Group();
   G.position.set(0, rearMidY || 0, rearZ);
-  G.scale.setScalar(stockScale(bodyD));
+  G.scale.setScalar(fitScale(bodyD));
   VMT = G;
   try { vmStockBody(p, w, 0, bodyH); }
   finally { VMT = host; host.add(G); }
@@ -2573,9 +2605,9 @@ function vmStock(p, w, rearZ, bodyH, rearMidY, bodyD){
    -1 = bottom edge), a rifle stock tops out at -2.7 on the VK, -1.0 on the Havoc-9 and
    -0.68 on the M17 - two thirds of the way up the lower half of the sight picture, which
    is what fouls the pistol's aim. Taper the stock with the receiver it is actually on. */
-const STOCK_FIT = 0.44;
-function stockScale(bodyD){
-  return (typeof bodyD === 'number') ? Math.min(1, bodyD / STOCK_FIT) : 1;
+const FIT_SPAN = 0.44;
+function fitScale(bodyD){
+  return (typeof bodyD === 'number') ? Math.min(1, bodyD / FIT_SPAN) : 1;
 }
 function vmStockBody(p, w, rearZ, bodyH){
   const m = partMat(p), n = p ? p.name : '';
