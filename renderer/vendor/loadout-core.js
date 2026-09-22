@@ -184,6 +184,11 @@
      set swing between 21x and 1.6x depending on how busy the lobby was. With
      a soak you always lose some hp, at every damage level, in every lobby.
 
+     Raised 0.60 -> 0.75 alongside the pool. 0.75 is the saturation point: past
+     it the pool empties before the fraction binds, so 90% and 100% measure
+     identical to 75% - and 100% is exactly the unbounded case above, because
+     nothing leaks to hp at all. It must not go higher while the pool is 50.
+
      (Deliberately placed AFTER the HOMING block: it sat between the Hornet
      comment and HOMING, and editing that region by slice deleted this constant
      three separate times in one session. The module still PARSED every time.) */
@@ -200,7 +205,24 @@
      whole lobby burns forever. */
   const DRAGON = { molten: 0.15, spreadR: 4, spreadDur: 1.5, spreadEvery: 0.5 };
 
-  const SHIELD_SOAK = 0.60;
+  const SHIELD_SOAK = 0.75;
+
+  /* The shield POOL, which is the lever that actually adds mitigation. The
+     absorb is `min(shield, hit * SOAK)` and the pool drops by what it absorbs,
+     so a shield's TOTAL mitigation is its pool size no matter what the soak
+     fraction is - raising the soak alone measured 0.878 -> 0.874 kills/life,
+     i.e. nothing.
+
+     At 25/50 Bulwark ran 0.89 kills/life in the close band against the Warden
+     FREEBUILD's 1.25: the set cost three ability slots and gave back less than
+     the abilities it displaced. At 50/75 it is 1.23 - even - and mid and long
+     are untouched (0.24 / 0.05), so the Warden stays the polarised close-range
+     weapon it should be. Longest life over 14k lives went 7 -> 13, not runaway.
+
+     These live here because the cap used to be a bare 50 in four places,
+     including the HUD bar's scaleX(shield/50), which silently overflowed its
+     track the moment the cap moved. */
+  const BULWARK = { perKill: 50, cap: 75 };
 
   /* ---- AP Rounds ---------------------------------------------------------
      Was "shots pierce through one enemy", which measured at 2.8% of shots even
@@ -577,6 +599,7 @@
   const api = { WEAPONS, SLOTS, SETS, weaponById, activeSets, computeStats, sanitizeEquipped,
                 rollServerDrop, storeWindow, rollDailyStore, STORE_PRICE, STORE_SLOTS,
                 FALLOFF, rangeMul, ADS_SPREAD, fireSpread, SPREAD_FLOOR, DRAGON,
+                BULWARK,
                 HE_SPLASH_FRAC, splashDamage, HOMING, SHIELD_SOAK,
                 AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive

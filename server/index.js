@@ -33,7 +33,8 @@ const PVP = {
   // it (LoadoutCore.splashDamage), so it stops scaling with rate of fire.
   explRadius:     3,     //                    (matches PvE)
   critHeal:       10,    // Saint set — Absolution, reworked to carry its own crit chance
-  killShield:     25,    // Bulwark set
+  // killShield moved to LoadoutCore.BULWARK - the cap lived in four places,
+  // one of which was the HUD bar's divisor, and they drifted apart.
   novaRadius:     4,     // Dragon set: ignite around a corpse
   novaDmg:        14,    // PvE deals damage here too, PvP was only igniting
 };
@@ -652,7 +653,8 @@ class ArenaRoom extends Room {
     this.burnSpread.delete(tid);
     p.kills++;
 
-    if(ab.indexOf('killshield') >= 0) p.shield = Math.min(50, p.shield + PVP.killShield);  // Bulwark
+    if(ab.indexOf('killshield') >= 0)                                                   // Bulwark
+      p.shield = Math.min(LoadoutCore.BULWARK.cap, p.shield + LoadoutCore.BULWARK.perKill);
     if(ab.indexOf('fire_nova') >= 0){                                                      // Dragon
       this.state.players.forEach((o, oid) => {
         if(oid === tid || oid === id || o.dead) return;

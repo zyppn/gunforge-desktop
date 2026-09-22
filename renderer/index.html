@@ -729,7 +729,7 @@ const SETS = [
    bonus:'SET · EXHALE — your rounds ignite, burning enemies take 15% more from you, and the fire spreads to anyone near them.', effect:'fire_nova'},
   {id:'bulwark', weapon:'warden',   name:'Bulwark',       need:3, rarity:'epic',
    pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Chassis', optic:'Bulwark Ward'},
-   bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
+   bonus:'SET · RAMPART — every kill grants a 50 HP shield, stacking to 75, that soaks 75% of each hit.', effect:'killshield'},
   {id:'ghost',   weapon:'ls1',      name:'Ghost Protocol',need:2, rarity:'legendary',
    pieces:{barrel:'Ghost Bore', optic:'Ghost Lens'},
    bonus:'SET · GHOST PROTOCOL — rounds travel 160% faster, pass through everything, and you keep full speed while scoped.', effect:'pierce_all'},
@@ -3305,7 +3305,8 @@ function kill(t, src){
   if(src && src!==t){
     src.kills++;
     if(src.isPlayer) sfx('kill');
-    if(src.wep && src.wep.abilities.has('killshield')) src.shield = Math.min(50, src.shield+25);
+    if(src.wep && src.wep.abilities.has('killshield'))
+      src.shield = Math.min(LoadoutCore.BULWARK.cap, src.shield + LoadoutCore.BULWARK.perKill);
     if(src.wep && src.wep.abilities.has('fire_nova')){
       spawnBurst(t.x, t.z, 0xFF7A2A);
       const dNova = Math.hypot(t.x-G.me.x, t.z-G.me.z);
@@ -4208,7 +4209,9 @@ function hud(){
   }
   $('#hpbar').style.transform = 'scaleX('+Math.max(0,me.hp/me.maxhp)+')';
   $('#hptext').textContent = Math.max(0,Math.ceil(me.hp))+' / '+me.maxhp;
-  $('#shbar').style.transform = 'scaleX('+((me.shield||0)/50)+')';
+  // the divisor is the CAP - a bare 50 here overflowed the track the moment
+  // the cap moved, and nothing would have failed loudly
+  $('#shbar').style.transform = 'scaleX('+Math.min(1,(me.shield||0)/LoadoutCore.BULWARK.cap)+')';
   $('#shtext').textContent = me.shield>0 ? 'SHIELD '+Math.ceil(me.shield) : '';
   $('#wepline').textContent = me.wep.name;
   $('#ammoline').textContent = me.ammo+' / '+me.wep.mag;

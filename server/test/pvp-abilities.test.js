@@ -81,27 +81,36 @@ console.log('\nspecific effects:');
 { const s = scenario(null, 'm17');
   s.r.loadouts.get('A').abilities.push('killshield');
   s.b.hp = 5; shoot(s);
-  check('killshield grants a shield on the kill', s.b.dead && s.a.shield === 25, 'shield=' + s.a.shield); }
+  check('killshield grants a shield on the kill',
+        s.b.dead && s.a.shield === LC.BULWARK.perKill, 'shield=' + s.a.shield);
+  /* The cap used to be a bare 50 in four places - server, renderer, and the HUD
+     bar's scaleX(shield/50), which overflows its track if they drift. */
+  s.a.shield = LC.BULWARK.cap - 1; s.b.dead = false; s.b.hp = 5;
+  s.r.fireT.set('A', -1); shoot(s);
+  check('  and never exceeds the cap', s.a.shield === LC.BULWARK.cap,
+        'shield=' + s.a.shield + ' cap=' + LC.BULWARK.cap); }
 
 /* The shield must never fully absorb a hit. Full absorption is what made
-   Bulwark unbounded: gain 25 per kill, spend <=25 per fight, take zero hp
-   damage forever. A shielded player losing no hp at all is the bug. */
+   Bulwark unbounded: gain a shield per kill, spend less than it per fight,
+   take zero hp damage forever. A shielded player losing no hp at all is the
+   bug, and the pool going up makes that failure mode cheaper to reach. */
 {
+  check('SHIELD_SOAK leaves a leak - 1.0 is the unbounded case',
+        LC.SHIELD_SOAK < 1, 'soak=' + LC.SHIELD_SOAK);
   const x = scenario('killshield', 'm17');
-  x.a.shield = 50; x.a.hp = 100;
+  x.a.shield = LC.BULWARK.cap; x.a.hp = 100;
   const before = x.a.hp;
   x.r.damage(x.a, 20);
-  const hpLost = before - x.a.hp, shieldUsed = 50 - x.a.shield;
-  const C4 = require('../loadout-core.js');
+  const hpLost = before - x.a.hp, shieldUsed = LC.BULWARK.cap - x.a.shield;
   check('a shield soaks only part of a hit', hpLost > 0,
         '20 damage -> ' + hpLost.toFixed(1) + ' hp, ' + shieldUsed.toFixed(1) + ' shield');
   check('it soaks exactly SHIELD_SOAK of it',
-        Math.abs(shieldUsed - 20*C4.SHIELD_SOAK) < 1e-9 &&
-        Math.abs(hpLost - 20*(1-C4.SHIELD_SOAK)) < 1e-9,
-        'soak=' + C4.SHIELD_SOAK);
+        Math.abs(shieldUsed - 20*LC.SHIELD_SOAK) < 1e-9 &&
+        Math.abs(hpLost - 20*(1-LC.SHIELD_SOAK)) < 1e-9,
+        'soak=' + LC.SHIELD_SOAK);
   // and the economy is bounded: a full shield cannot outlast repeated hits
   const y = scenario('killshield', 'm17');
-  y.a.shield = 50; y.a.hp = 100;
+  y.a.shield = LC.BULWARK.cap; y.a.hp = 100;
   let n = 0;
   while(y.a.hp > 0 && n < 500){ y.r.damage(y.a, 20); n++; }
   check('a full shield cannot make you immortal', n < 500, 'died after ' + n + ' hits of 20');
