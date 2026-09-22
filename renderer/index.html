@@ -726,7 +726,7 @@ const SETS = [
    bonus:'SET · SEEKER SWARM — every second round is a seeker that curves onto enemies within 8m.', effect:'homing'},
   {id:'dragon',  weapon:'vkraptor', name:'Dragonfire',    need:2, rarity:'epic',
    pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'},
-   bonus:'SET · EXHALE — your rounds ignite, burning enemies take 15% more from you, and the fire spreads to anyone near them.', effect:'fire_nova'},
+   bonus:'SET · EXHALE — your rounds ignite. Burning enemies take 15% more from you and deal 10% less to you, and the fire spreads to anyone near them.', effect:'fire_nova'},
   {id:'bulwark', weapon:'warden',   name:'Bulwark',       need:3, rarity:'epic',
    pieces:{foregrip:'Bulwark Brace', stock:'Bulwark Chassis', optic:'Bulwark Ward'},
    bonus:'SET · RAMPART — every kill grants a 25 HP shield that soaks 60% of each hit.', effect:'killshield'},
@@ -4082,7 +4082,12 @@ function tick(now){
         // before the ignite below, so the round that STARTS the fire does not
         // also get the bonus - the first hit lights, the rest burn hotter.
         const molten = (b.dragon && e.burnT > 0) ? 1 + LoadoutCore.DRAGON.molten : 1;
-        damage(e, b.dmg * fall * molten * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
+        // Defensive half: a man on fire cannot hold his aim. Gated like molten -
+        // only a fire the DEFENDER lit counts. Mirrors applyHit in server/index.js.
+        const guard = (e.wep && e.wep.abilities && e.wep.abilities.has('fire_nova')
+                       && b.owner && b.owner.burnT > 0 && b.owner.burnSrc === e)
+                    ? 1 - LoadoutCore.DRAGON.guard : 1;
+        damage(e, b.dmg * fall * molten * guard * (b.thruWall ? LoadoutCore.AP_WALL.dmgMul : 1), b.owner, b.crit);
         spawnSpark(p.x,p.y,p.z, b.crit?0xF5C468:0xFFFFFF);
         if((b.burn || b.dragon) && !e.dead){
           e.burnT = Math.max(e.burnT, 3); e.burnSrc = b.owner; e.burnSpread = false;
