@@ -2279,17 +2279,34 @@ function vmBarrel(p, w, frontZ){
     tipPad = 0.045;
   }
   else if(n.includes('Dragon')){
-    len = base*1.1;
-    vmCyl(m, 0.024, len, frontZ - len/2);
-    const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.02, 0.09, 10), m);
-    cone.rotation.x = -Math.PI/2; cone.position.set(0, 0.02, frontZ - len - 0.04); VMT.add(cone);
-    const ember = new THREE.Mesh(new THREE.CircleGeometry(0.017, 12), glowB(0xFF5A2A)); // fire in the maw
-    ember.position.set(0, 0.02, frontZ - len - 0.055); VMT.add(ember);
-    for(const dz of [0.25, 0.5]){ // heat rings
-      const hr = new THREE.Mesh(new THREE.TorusGeometry(0.027, 0.004, 6, 12), dark());
-      hr.position.set(0, 0.02, frontZ - len*dz); VMT.add(hr);
+    /* This was a smooth cone flaring 0.02 -> 0.055 over 0.09, which reads as a
+       trumpet bell rather than a maw - reported as "looks a little funny", and
+       rendering it offscreen confirmed it. A vented heat shroud plus a toothed
+       crown says fire and says weapon, and the orange vents give the part a
+       colour signature that still reads in a 48px locker thumbnail, where the
+       old one was an anonymous pink tube. */
+    len = base*1.18;
+    vmCyl(m, 0.022, len, frontZ - len/2);
+    vmCyl(m, 0.038, len*0.46, frontZ - len*0.74);              // heat shroud
+    for(const a of [0.4, 1.66, 2.92, 4.17, 5.43]){             // glowing vent slots
+      vmBox(glowB(0xFF6A32), 0.006, 0.006, len*0.30,
+            Math.cos(a)*0.039, 0.02 + Math.sin(a)*0.039, frontZ - len*0.74);
     }
-    tipPad = 0.08;
+    vmCyl(m, 0.034, 0.030, frontZ - len - 0.012);              // muzzle crown
+    for(let i = 0; i < 6; i++){                                 // fangs
+      const a = i*Math.PI/3 + Math.PI/6;
+      const f = new THREE.Mesh(new THREE.ConeGeometry(0.0085, 0.034, 4), dark());
+      f.position.set(Math.cos(a)*0.027, 0.02 + Math.sin(a)*0.027, frontZ - len - 0.042);
+      // aim the cone's own +Y down the bore with a slight inward lean, so the
+      // teeth converge. rotation.x alone leaves them splayed out sideways.
+      const dir = new THREE.Vector3(-Math.cos(a)*0.22, -Math.sin(a)*0.22, -1).normalize();
+      f.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      VMT.add(f);
+    }
+    const ember = new THREE.Mesh(new THREE.CircleGeometry(0.021, 12), glowB(0xFF5A2A)); // fire in the maw
+    ember.position.set(0, 0.02, frontZ - len - 0.026); VMT.add(ember);
+    collar(0.03);
+    tipPad = 0.062;
   }
   else if(n.includes('Whisper')){
     len = base*1.15;
