@@ -32,7 +32,8 @@
       "renderer/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -55,11 +56,13 @@
           ]
         }
       ],
-      "category": "public.app-category.games"
+      "category": "public.app-category.games",
+      "icon": "build/icon-mac.png"
     },
     "linux": {
       "target": "AppImage",
-      "category": "Game"
+      "category": "Game",
+      "icon": "build/icon.png"
     },
     "publish": [
       {

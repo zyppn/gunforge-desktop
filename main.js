@@ -71,6 +71,10 @@ function createWindow(){
     minHeight: 640,
     backgroundColor: '#0D1117',
     autoHideMenuBar: true,
+    // Packaged builds take the icon from the bundle (electron-builder generates
+    // .ico/.icns from build/). This is only so `npm start` isn't the default
+    // Electron atom - build/ is not in the shipped files list.
+    ...(app.isPackaged ? {} : { icon: path.join(__dirname, 'build', 'icon.png') }),
     webPreferences: {
       backgroundThrottling: false, // live matches keep rendering/syncing when the window loses focus
       preload: path.join(__dirname, 'preload.js'),

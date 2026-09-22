@@ -4,3 +4,6 @@ dist/
 .DS_Store
 **/.DS_Store
 *.log
+
+# the desktop app drops chat downloads here, inside the repo
+Claude outputs/
