@@ -2119,7 +2119,13 @@ function buildScene(map){
        equipped parts REPLACE with their own geometry, length and color.
        buildGunModel() is shared by the in-match viewmodel AND the armory preview ---- */
 const RCOL = {common:0x9BA8B0, uncommon:0x5FBF6E, rare:0x4C9BE8, epic:0xB463E8, legendary:0xE8A33D};
-function partMat(p){ return p ? mat(RCOL[p.rarity], RCOL[p.rarity], p.set?0.75:0.25) : mat(0x1B232C); }
+// Set emissive was 0.75. Emissive is FLAT - it adds the same value to every face - so at
+// 0.75 an epic set piece (R180 B232) pinned both channels on all six faces: the part lost
+// its facet shading entirely and read as a pale pink cutout bleeding over whatever it sat
+// against. 0.40 still runs visibly hotter than the 0.25 baseline while the faces stay
+// tellable apart; the set already signals itself through unique geometry and the receiver
+// accent strip, which lights to the set colour at 1.2 when the bonus is live.
+function partMat(p){ return p ? mat(RCOL[p.rarity], RCOL[p.rarity], p.set?0.40:0.25) : mat(0x1B232C); }
 let VMT = null; // current build target group
 let VMT_AIM = null, VMT_ADS = null; // set by vmOptic: aperture point + zoom/eye-distance
 function vmCyl(m, r, l, z, y){ const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 10), m); c.rotation.x = Math.PI/2; c.position.set(0, y===undefined?0.02:y, z); VMT.add(c); return c; }
@@ -2135,7 +2141,7 @@ function buildGunModel(wid, eqOpt){
   const bodyD = w.type==='Pistol'?0.26 : w.type==='SMG'?0.36 : w.type==='Sniper'?0.6 : w.type==='LMG'?0.55 : 0.48;
   const bodyH = w.type==='LMG'?0.13:0.11;
   const bodyZ = -0.28, frontZ = bodyZ - bodyD/2, rearZ = bodyZ + bodyD/2;
-  const fr = vmFrame(eq.frame, w, bodyD, bodyH, bodyZ) || { topY: bodyH/2, bw: 0.045 };
+  const fr = vmFrame(eq.frame, w, bodyD, bodyH, bodyZ) || { topY: bodyH/2, bw: 0.045, botY: -bodyH/2, rearMidY: 0 };
   const setCount = {};
   for(const s of SLOTS){ const pp = eq[s]; if(pp && pp.set) setCount[pp.set] = (setCount[pp.set]||0)+1; }
   const act = SETS.filter(st => st.weapon===w.id && (setCount[st.id]||0) >= st.need);
@@ -2150,9 +2156,9 @@ function buildGunModel(wid, eqOpt){
 
   // slot components — standard geometry, or replaced by the equipped part's variant
   const tipZ = vmBarrel(eq.barrel, w, frontZ);
-  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH);
-  vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH);
-  vmStock(eq.stock, w, rearZ, bodyH);
+  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY);
+  vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY);
+  vmStock(eq.stock, w, rearZ, bodyH, fr.rearMidY);
   vmOptic(eq.optic, w, bodyZ, bodyH, bodyD, fr.topY);
 
   const g = VMT; VMT = null;
@@ -2189,21 +2195,31 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
   // topY = how high this frame ACTUALLY builds over the receiver centre. vmOptic used to
   // assume bodyH/2, so frames with a raised rail punched straight through the scope tube.
   let topY = bodyH/2;
+  // topY was the only surface vmFrame reported back, so vmOptic sat right while the
+  // magazine, foregrip and stock all bolted to a nominal receiver that half the frames
+  // don't build. botY is the real underside; rearMidY is the centre of the rear face.
+  let botY = -bodyH/2, rearMidY = 0;
   if(!p){ vmBox(m, 0.09, bodyH, bodyD, 0, 0, bodyZ); }
   else if(n.includes('Forged')){
     bw = 0.05;
     topY = Math.max(bodyH*0.55, bodyH*0.66 + 0.014);   // raised body + top rail
+    botY = -bodyH*0.55;                                // 1.1x body hangs lower than nominal
     vmBox(m, 0.1, bodyH*1.1, bodyD, 0, 0, bodyZ);
     vmBox(m, 0.055, 0.028, bodyD*0.8, 0, bodyH*0.66, bodyZ);
     for(const dz of [-0.3, 0, 0.3]) vmBox(steel(), 0.012, 0.012, 0.005, bw+0.001, bodyH*0.2, bodyZ + bodyD*dz); // forge bolts
   } else if(n.includes('Polymer')){
     bw = 0.036;
     topY = bodyH*0.44;
+    botY = -bodyH*0.44;                                // 0.88x body sits higher than nominal
     vmBox(m, 0.072, bodyH*0.88, bodyD, 0, 0, bodyZ);
     vmBox(dark(), 0.074, bodyH*0.22, bodyD*0.45, 0, -bodyH*0.16, bodyZ + bodyD*0.1); // stipple band
   } else if(n.includes('Recon')){
     bw = 0.0425;
     topY = Math.max(bodyH*0.5, bodyH*0.52 + 0.0025);   // upper shelf + rail teeth
+    botY = -bodyH*0.42;                                // underside of the LOWER block
+    rearMidY = bodyH*0.24;                             // the lower block stops short of the
+                                                       // rear, so only the raised shelf is
+                                                       // there for a stock to bolt to
     vmBox(m, 0.085, bodyH*0.52, bodyD, 0, bodyH*0.24, bodyZ);
     vmBox(m, 0.085, bodyH*0.3, bodyD*0.82, 0, -bodyH*0.27, bodyZ);
     for(let i=-2;i<=2;i++) vmBox(dark(), 0.06, 0.005, 0.012, 0, bodyH*0.52, bodyZ + i*bodyD*0.15); // rail teeth
@@ -2225,7 +2241,7 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
   vmBox(tone(0.72), 0.012, 0.004, 0.07, 0, -0.072, guardZ);                 // trigger guard bottom
   vmBox(tone(0.72), 0.012, 0.026, 0.004, 0, -0.058, guardZ - 0.034);        // guard front
   vmBox(steel(), 0.006, 0.022, 0.006, 0, -0.055, guardZ + 0.012);           // trigger
-  return { topY, bw };
+  return { topY, bw, botY, rearMidY };
 }
 function vmBarrel(p, w, frontZ){
   const m = partMat(p), n = p ? p.name : '';
@@ -2372,25 +2388,30 @@ function vmBarrel(p, w, frontZ){
   }
   return frontZ - len - tipPad;
 }
-function vmMagazine(p, w, bodyZ, bodyD, bodyH){
+function vmMagazine(p, w, bodyZ, bodyD, bodyH, botY){
+  if(botY === undefined) botY = -bodyH/2;   // locker thumbnails build parts bare
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
   const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
   const steel = () => mat(0x27303A);      // hardware: bolts, studs, wheels — neutral steel
   const voidM = () => tone(0.32);         // true openings: deep shade of the part's hue, never neutral black
   const z = bodyZ + bodyD*0.05;
-  const topIn = -bodyH/2 + 0.02; // mag tops tuck 2cm INTO the receiver — no float on any body height
-  const well = (wd, dp) => vmBox(dark(), wd+0.014, 0.032, dp+0.014, 0, -bodyH/2 - 0.006, z); // magwell collar hides the seam
-  const basePlate = (wd, dp, py, rotX) => {
-    const b = vmBox(dark(), wd+0.005, 0.01, dp+0.005, 0, py, z);
-    if(rotX) b.rotation.x = rotX;
-    return b;
+  const topIn = botY + 0.02; // mag tops tuck 2cm INTO the receiver — no float on any body height
+  const well = (wd, dp) => vmBox(dark(), wd+0.014, 0.032, dp+0.014, 0, botY - 0.006, z); // magwell collar hides the seam
+  // Sub-pieces RIDE ON the magazine body instead of standing beside it. They used to be
+  // separate meshes each rotated about its own centre, so on a mag leaning 0.16 rad the
+  // base plate finished 17mm behind the body's bottom end and the rib bands walked off
+  // its face. As children they inherit the body's pivot and can never drift again.
+  const rider = (body, mtl, wd, ht, dp, ly, lz) => {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, dp), mtl);
+    b.position.set(0, ly, lz || 0); body.add(b); return b;
   };
+  const basePlate = (body, wd, dp, h) => rider(body, dark(), wd+0.005, 0.01, dp+0.005, -h/2 - 0.004);
   if(!p){
     const h = 0.12;
-    vmBox(m, 0.045, h, 0.06, 0, topIn - h/2, z).rotation.x = -0.08;
+    const b = vmBox(m, 0.045, h, 0.06, 0, topIn - h/2, z); b.rotation.x = -0.08;
     well(0.045, 0.06);
-    basePlate(0.045, 0.06, topIn - h - 0.004, -0.08);
+    basePlate(b, 0.045, 0.06, h);
     return;
   }
   if(n.includes('Drum') || n.includes('Heart')){
@@ -2407,17 +2428,17 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     rim.rotation.y = Math.PI/2; rim.position.set(0.027, topIn - 0.072, z); VMT.add(rim);
   } else if(n.includes('Extended')){
     const h = 0.22;
-    vmBox(m, 0.05, h, 0.065, 0, topIn - h/2, z).rotation.x = -0.16;
-    for(const fr of [0.5, 0.82]) vmBox(dark(), 0.053, 0.006, 0.068, 0, topIn - h*fr, z).rotation.x = -0.16; // rib bands
+    const b = vmBox(m, 0.05, h, 0.065, 0, topIn - h/2, z); b.rotation.x = -0.16;
+    for(const fr of [0.5, 0.82]) rider(b, dark(), 0.053, 0.006, 0.068, h*(0.5 - fr)); // rib bands
     well(0.05, 0.065);
-    basePlate(0.05, 0.065, topIn - h - 0.004, -0.16);
+    basePlate(b, 0.05, 0.065, h);
   } else if(n.includes('Belt')){
     // macro-scale belt feed: the box hangs on brackets below the receiver,
     // and FAT cartridges visibly climb the open gap into the gun. Chunky, style-native.
     const tw = 0.08, th = 0.115, td = 0.105;
     const bx = 0.012 + tw/2;
     const gap = 0.016;
-    const boxTop = -bodyH/2 - gap;
+    const boxTop = botY - gap;
     vmBox(m, tw, th, td, bx, boxTop - th/2, z);
     vmBox(dark(), tw+0.006, 0.008, td+0.006, bx, boxTop - th + 0.006, z);        // base band
     vmBox(steel(), 0.006, 0.018, 0.03, 0.012 + tw + 0.003, boxTop - th*0.5, z);  // latch
@@ -2434,14 +2455,19 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     }
   } else if(n.includes('Compact')){
     const h = 0.075;
-    vmBox(m, 0.045, h, 0.06, 0, topIn - h/2, z);
+    const b = vmBox(m, 0.045, h, 0.06, 0, topIn - h/2, z);
     well(0.045, 0.06);
-    basePlate(0.045, 0.06, topIn - h - 0.004, 0);
+    basePlate(b, 0.045, 0.06, h);
   } else if(n.includes('Quickload')){
     const h = 0.12;
-    vmBox(m, 0.045, h, 0.06, 0, topIn - h/2, z).rotation.x = -0.08;
-    vmBox(mat(0xEDF1F5, 0xEDF1F5, 0.5), 0.05, 0.02, 0.065, 0, topIn - h - 0.012, z);
-    vmBox(mat(0xEDF1F5, 0xEDF1F5, 0.3), 0.014, 0.02, 0.008, 0, topIn - h - 0.028, z + 0.028); // pull tab
+    // The body leans 0.08 rad; the plate and tab did not, so they swung out from under
+    // it. They were also hardcoded near-white emissive - every other magazine's plate is
+    // the part's OWN dark tone - which is what read as a loose slab under the gun.
+    const b = vmBox(m, 0.045, h, 0.06, 0, topIn - h/2, z); b.rotation.x = -0.08;
+    const plate = basePlate(b, 0.045, 0.06, h);
+    const tab = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.018, 0.026), tone(1.3));
+    tab.position.set(0, -0.005, 0.044);   // quick-pull tab, riding the plate
+    plate.add(tab);
     well(0.045, 0.06);
   } else if(n.includes('Hive')){
     const h = 0.13;
@@ -2451,18 +2477,19 @@ function vmMagazine(p, w, bodyZ, bodyD, bodyH){
     well(0.078, 0.062);
   } else {
     const h = 0.14;
-    vmBox(m, 0.05, h, 0.062, 0, topIn - h/2, z).rotation.x = -0.1;
+    const b = vmBox(m, 0.05, h, 0.062, 0, topIn - h/2, z); b.rotation.x = -0.1;
     well(0.05, 0.062);
-    basePlate(0.05, 0.062, topIn - h - 0.004, -0.1);
+    basePlate(b, 0.05, 0.062, h);
   }
 }
-function vmForegrip(p, w, frontZ, bodyD, bodyH){
+function vmForegrip(p, w, frontZ, bodyD, bodyH, botY){
+  if(botY === undefined) botY = -bodyH/2;
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
   const dark = () => tone(0.75);
   const steel = () => mat(0x27303A);
   const z = frontZ + bodyD*0.22;
-  const mountY = -bodyH/2; // actual receiver underside — grips attach HERE on every body height
+  const mountY = botY; // actual receiver underside — grips attach HERE on every frame
   const rail = (wd, dp) => vmBox(dark(), wd, 0.016, dp, 0, mountY - 0.006, z);
   const hang = (g, h, rotX) => {
     // pivot at the top: the grip's attachment point stays ON the rail no matter the angle
@@ -2510,7 +2537,16 @@ function vmForegrip(p, w, frontZ, bodyD, bodyH){
     vmBox(dark(), 0.057, 0.014, 0.062, 0, mountY - 0.045, z); // knurl band
   }
 }
-function vmStock(p, w, rearZ, bodyH){
+function vmStock(p, w, rearZ, bodyH, rearMidY){
+  // Stocks bolted to a nominal y=0 that the Recon frame doesn't build: its rear face is
+  // the raised shelf, centred 26mm up, so every stock hung a clear 30-47mm below it.
+  // Build into a sub-group and lift it onto the face that is really there.
+  const host = VMT, G = new THREE.Group();
+  G.position.y = rearMidY || 0; VMT = G;
+  try { vmStockBody(p, w, rearZ, bodyH); }
+  finally { VMT = host; host.add(G); }
+}
+function vmStockBody(p, w, rearZ, bodyH){
   const m = partMat(p), n = p ? p.name : '';
   const tone = k => mat(new THREE.Color(p ? RCOL[p.rarity] : 0x39424E).multiplyScalar(k).getHex());
   const dark = () => tone(0.75);          // machined recess: subtly darker shade of the part's OWN finish
