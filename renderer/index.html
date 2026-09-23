@@ -1768,19 +1768,47 @@ const MAPS = [
             B(25,0,1.5,10), B(33.5,0,1.5,10), B(25,30,1.5,10), B(33.5,30,1.5,10),
             B(28,16.5,4,4,4.6) ],
     spawns:[[4,6],[56,6],[4,34],[56,34],[30,3],[30,37],[21,18.5],[39,18.5]] },
+  /* Built for King of the Hill. The arena is 60x40, so a quarter turn is not available;
+     this is mirrored about both centre lines instead, which is enough to make all four
+     corners equivalent - no team gets a shorter run or a better angle, and the test
+     checks it rather than trusting the numbers. The four inner bars form a broken ring just
+     OUTSIDE the hill with the gaps on the diagonals - which is exactly where the four
+     spawn corners feed in - so every team arrives down a lane instead of walking into
+     open ground, and the hill itself stays a fight rather than a sniper's dinner. */
+  { id:'crucible', name:'CRUCIBLE', floor:0x14181E, wall:0x36404E, fog:0x090C11, accent:0x8FE9FF, fogd:66,
+    walls:[ B(26,13.4,8,1.4,2.4), B(26,25.2,8,1.4,2.4), B(22.6,16,1.4,8,2.4), B(36,16,1.4,8,2.4),
+            B(12,8,6,1.5), B(42,8,6,1.5), B(12,30.5,6,1.5), B(42,30.5,6,1.5),
+            B(10,17,1.5,6), B(48.5,17,1.5,6), B(28,2,4,1.5), B(28,36.5,4,1.5) ],
+    spawns:[[4,4],[56,4],[4,36],[56,36],[30,6],[30,34],[4,20],[56,20]],
+    hill:{ x:30, z:20, r:4.6 },
+    teamSpawns:{ blue:[[4,4],[9,4],[4,9]], green:[[56,4],[51,4],[56,9]],
+                 yellow:[[4,36],[9,36],[4,31]], red:[[56,36],[51,36],[56,31]] } },
 ];
+
+/* Four teams, because two would make the hill a duel. With four, the team that takes
+   it is immediately the thing the other three are looking at, which is what keeps a
+   single point interesting for a whole match. */
+const KOTH_TEAMS = ['blue','red','green','yellow'];
+const TEAM_COL = { blue:0x4C9BE8, red:0xE05A4E, green:0x5FBF6E, yellow:0xE8C44A };
+const KOTH_TARGET = 150;   // points, paid at 1/s while you hold it alone
+const KOTH_LOCK   = 1.0;   // seconds alone on the hill before it is yours
+const KOTH_SQUAD  = 3;     // per team, the player filling one blue slot
 
 const CLIENT_BUILD = 'live-27';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
+  {id:'koth', name:'KING OF THE HILL',d:'Four-way. Blue, red, green and yellow fight over one hill. Hold it alone to score. First to 150.'},
   {id:'camp', name:'CAMPAIGN',       d:'PvE. Survive 8 escalating waves of hostiles. One life per run.'},
   {id:'live', name:'LIVE ARENA',     d:'Online PvP against real operators. Server-authoritative. First to 20.'},
 ];
 let setupSel = {mode:'ffa', map:'foundry'};
 function openSetup(){
   const modeRow = MODES.map(m=>'<div class="opt '+(setupSel.mode===m.id?'sel':'')+'" onclick="setupSel.mode=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div><div class="d">'+m.d+'</div></div>').join('');
-  const mapRow = MAPS.map(m=>'<div class="opt '+(setupSel.map===m.id?'sel':'')+'" onclick="setupSel.map=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div></div>').join('');
+  // King of the Hill needs a map with a hill on it; every other mode can use any map
+  const mapsFor = MAPS.filter(m => setupSel.mode !== 'koth' || m.hill);
+  if(!mapsFor.some(m => m.id === setupSel.map)) setupSel.map = mapsFor[0].id;
+  const mapRow = mapsFor.map(m=>'<div class="opt '+(setupSel.map===m.id?'sel':'')+'" onclick="setupSel.map=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div></div>').join('');
   const L = computeLoadout();
   document.querySelector('#setup').innerHTML =
    '<div class="eyebrow">Deployment</div><h2>Match Setup</h2>'
@@ -3410,6 +3438,14 @@ function safePoint(x, z){
   }
   return [AW/2, AD/2];
 }
+/* Team-owned corners. farSpawn drops you wherever the enemy happens not to be, which
+   in a four-way fight is a coin toss that can land you in someone else's yard. */
+function teamSpawn(map, team, idx){
+  const list = (map.teamSpawns && map.teamSpawns[team]) || map.spawns;
+  const pick = (typeof idx === 'number') ? list[idx % list.length]
+                                         : list[Math.floor(Math.random()*list.length)];
+  return safePoint(pick[0], pick[1]);
+}
 function farSpawn(map, team){
   let best=null, bd=-1;
   for(const s of map.spawns){
@@ -3907,7 +3943,9 @@ function respawn(e){
   if(e.isPlayer){ hideDeathCard(); G.killcam = null; }
   e.burnT=0; e.slowT=0; e.burnSrc=null; e.burnSpread=false; e.target=null; e.alertSrc=null; e.alertT=0;
   e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0; e.wantAim=false; e.aimT=0;
-  const s = farSpawn(G.map, e.team); e.x=s[0]; e.z=s[1];
+  const s = (G.mode==='koth' && G.map.teamSpawns) ? teamSpawn(G.map, e.team)
+                                                  : farSpawn(G.map, e.team);
+  e.x=s[0]; e.z=s[1];
   e.lastX=e.x; e.lastZ=e.z;
   if(e.mesh){
     e.mesh.visible = true; e.mesh.rotation.x = 0;
@@ -4169,9 +4207,36 @@ function botThink(e, dt){
   const tgt = pickTarget(e, dt);
   if(!tgt){
     e.wantAim = false;
-    e.wanderA += (Math.random()-0.5)*2*dt;
-    moveEnt(e, Math.cos(e.wanderA)*sp*0.5*dt, Math.sin(e.wanderA)*sp*0.5*dt);
-    faceAng = e.wanderA;
+    const H = (G.mode === 'koth') ? G.hill : null;
+    const dh = H ? Math.hypot(H.x - e.x, H.z - e.z) : 0;
+    if(H && dh > H.r*0.7){
+      // nobody to shoot: walk to the objective rather than in a random direction,
+      // which is the difference between a mode and a deathmatch with a circle on it
+      e.pathT = (e.pathT||0) - dt;
+      if(!e.path || !e.path.length || e.pathT <= 0){
+        e.path = findPath(e.x, e.z, H.x, H.z);
+        e.pathGoal = {x:H.x, z:H.z};
+        e.pathT = 1.0 + Math.random()*0.6;
+      }
+      let wpp = null;
+      if(e.path && e.path.length){
+        while(e.path.length && Math.hypot(e.path[0].x-e.x, e.path[0].z-e.z) < 0.7) e.path.shift();
+        wpp = e.path[0] || null;
+      }
+      const mx = wpp ? wpp.x-e.x : H.x-e.x, mz = wpp ? wpp.z-e.z : H.z-e.z;
+      const ml = Math.hypot(mx,mz)||1;
+      wantMove = true; moveEnt(e, mx/ml*sp*dt, mz/ml*sp*dt);
+      faceAng = Math.atan2(mz,mx);
+    } else if(H){
+      e.path = null;                      // on the hill: hold it, but keep moving
+      e.wanderA += (Math.random()-0.5)*3*dt;
+      moveEnt(e, Math.cos(e.wanderA)*sp*0.32*dt, Math.sin(e.wanderA)*sp*0.32*dt);
+      faceAng = e.wanderA;
+    } else {
+      e.wanderA += (Math.random()-0.5)*2*dt;
+      moveEnt(e, Math.cos(e.wanderA)*sp*0.5*dt, Math.sin(e.wanderA)*sp*0.5*dt);
+      faceAng = e.wanderA;
+    }
   } else {
     const dx = tgt.x-e.x, dz = tgt.z-e.z, dist = Math.hypot(dx,dz), ang = Math.atan2(dz,dx);
     faceAng = ang;
@@ -4287,7 +4352,8 @@ function startMatch(){
   G = {
     running:true, mode:setupSel.mode, map, ents:[], bullets:[], fx:[],
     time: setupSel.mode==='camp' ? 0 : 180, elapsed:0, recoil:0,
-    teamScore:{blue:0, red:0}, wave:0, waveBreak:1.2, over:false, feed:[], dying:[], drops:[], killcam:null,
+    teamScore: setupSel.mode==='koth' ? {blue:0, red:0, green:0, yellow:0} : {blue:0, red:0},
+    hill:null, wave:0, waveBreak:1.2, over:false, feed:[], dying:[], drops:[], killcam:null,
     last: performance.now(),
     kickPitch: 0, kickYaw: 0, shake: 0
   };
@@ -4297,18 +4363,19 @@ function startMatch(){
     wep:{wid:L.base.id, name:L.base.name, type:L.base.type, dmg:L.dmg, rof:L.rof, mag:L.mag, reload:L.reload, spread:L.spread*0.55, bspd:L.bspd, pellets:L.pellets, crit:L.crit, abilities:L.abilities},
     ammo: L.mag
   });
-  const sp = spawnOrder[0]; me.x = sp[0]; me.z = sp[1];
+  const sp = (G.mode==='koth' && map.teamSpawns) ? teamSpawn(map, 'blue', 0) : spawnOrder[0];
+  me.x = sp[0]; me.z = sp[1];
   yaw = Math.atan2(me.x - AW/2, me.z - AD/2); pitch = 0;
   G.me = me; G.ents.push(me);
 
   const names = [...BOTNAMES].sort(()=>Math.random()-0.5);
-  const addBot = (name, team, colorHex, i) => {
+  const addBot = (name, team, colorHex, i, at) => {
     const lo = rollBotLoadout();
     const b = mkEnt({name, team, wep:lo.wep, baseSpeed:(4.4+Math.random()*1.2)*lo.speedMul});
     b.ammo = b.wep.mag;
     b.wid = lo.wid; b.eq = lo.eq;          // kept for the eliminated-by card
     b.mesh = botMesh(colorHex, false, {wid:lo.wid, eq:lo.eq}); scene.add(b.mesh);
-    const s = spawnOrder[(i+1) % spawnOrder.length]; b.x=s[0]; b.z=s[1];
+    const s = at || spawnOrder[(i+1) % spawnOrder.length]; b.x=s[0]; b.z=s[1];
     b.mesh.position.set(b.x,0,b.z);
     G.ents.push(b);
   };
@@ -4317,6 +4384,20 @@ function startMatch(){
   } else if(G.mode==='tdm'){
     for(let i=0;i<3;i++) addBot(names[i], 'blue', 0x4C9BE8, i);
     for(let i=0;i<4;i++) addBot(names[i+3], 'red', 0xE05A4E, i+3);
+  } else if(G.mode==='koth'){
+    G.hill = { x:map.hill.x, z:map.hill.z, r:map.hill.r,
+               owner:null, cand:null, candT:0, contested:false, occ:{} };
+    buildHill(map.hill);
+    let n = 0;
+    for(const team of KOTH_TEAMS){
+      // the player already holds one blue slot, so blue fields one fewer bot
+      const squad = KOTH_SQUAD - (team==='blue' ? 1 : 0);
+      for(let i=0;i<squad;i++){
+        addBot(names[n % names.length], team, TEAM_COL[team], n,
+               teamSpawn(map, team, i + (team==='blue' ? 1 : 0)));
+        n++;
+      }
+    }
   }
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
   resetHeadToHead();   // the record is per match, not per session
@@ -4348,6 +4429,58 @@ function spawnWave(){
     });
     g.mesh = botMesh(0x8A4640, true, null); g.mesh.position.set(x,0,z); scene.add(g.mesh);
     G.ents.push(g);
+  }
+}
+/* ---- King of the Hill ----------------------------------------------------------
+   One team owns the hill by being the only one standing in it. Two teams inside and
+   nobody scores - that is the whole point of having four: taking the hill makes you
+   the target of everyone else at once, so holding it costs more than reaching it. */
+let hillDisc = null, hillRing = null, hillCol = null;
+function buildHill(h){
+  const skin = o => new THREE.MeshBasicMaterial(Object.assign(
+    {color:0x8FA0B0, transparent:true, depthWrite:false, side:THREE.DoubleSide}, o));
+  hillDisc = new THREE.Mesh(new THREE.CircleGeometry(h.r, 44), skin({opacity:0.13}));
+  hillDisc.rotation.x = -Math.PI/2; hillDisc.position.set(h.x, 0.03, h.z);
+  hillRing = new THREE.Mesh(new THREE.RingGeometry(h.r-0.18, h.r, 52), skin({opacity:0.8}));
+  hillRing.rotation.x = -Math.PI/2; hillRing.position.set(h.x, 0.05, h.z);
+  // a soft column, so the hill is findable from across the map and not just underfoot
+  hillCol = new THREE.Mesh(new THREE.CylinderGeometry(h.r*0.94, h.r*0.94, 3.2, 28, 1, true),
+                           skin({opacity:0.055}));
+  hillCol.position.set(h.x, 1.6, h.z);
+  scene.add(hillDisc, hillRing, hillCol);
+}
+function stepHill(dt){
+  const H = G.hill; if(!H) return;
+  for(const t of KOTH_TEAMS) H.occ[t] = 0;
+  const r2 = H.r * H.r;
+  for(const e of G.ents){
+    if(e.dead || e.grunt || H.occ[e.team] === undefined) continue;
+    const dx = e.x - H.x, dz = e.z - H.z;
+    if(dx*dx + dz*dz <= r2) H.occ[e.team]++;
+  }
+  const inside = KOTH_TEAMS.filter(t => H.occ[t] > 0);
+  H.contested = inside.length > 1;
+  const was = H.owner;
+  if(inside.length === 1){
+    if(H.cand !== inside[0]){ H.cand = inside[0]; H.candT = 0; }
+    H.candT += dt;
+    if(H.candT >= KOTH_LOCK) H.owner = inside[0];
+  } else {
+    H.cand = null; H.candT = 0;
+    if(H.contested) H.owner = null;   // a contested hill belongs to nobody
+  }
+  // an abandoned hill keeps its owner but pays nothing - you have to stand on it
+  if(H.owner && !H.contested && H.occ[H.owner] > 0) G.teamScore[H.owner] += dt;
+  if(H.owner !== was){
+    if(H.owner) banner((H.owner === 'blue' ? 'YOUR TEAM' : H.owner.toUpperCase()) + ' HOLDS THE HILL');
+    else if(H.contested) banner('HILL CONTESTED');
+  }
+  const col = H.contested ? 0xFFFFFF : (H.owner ? TEAM_COL[H.owner] : 0x8FA0B0);
+  const pulse = H.contested ? (0.62 + 0.38*Math.sin(G.elapsed*10)) : 1;
+  if(hillRing){
+    hillRing.material.color.setHex(col); hillRing.material.opacity = 0.8 * pulse;
+    hillDisc.material.color.setHex(col); hillDisc.material.opacity = 0.13 * pulse;
+    hillCol.material.color.setHex(col);  hillCol.material.opacity = 0.055 * pulse;
   }
 }
 function banner(t){
@@ -4798,12 +4931,16 @@ function tick(now){
   G.shake     *= Math.max(0, 1 - 7*dt);
   updateViewmodelPose(dt, me, !me.dead && (act('forward')||act('left')||act('back')||act('right')));
 
+  if(G.mode==='koth') stepHill(dt);
+
   // win checks
   if(G.mode==='ffa'){
     const top = Math.max(...G.ents.map(e=>e.kills));
     if(top >= 20){ endMatch(null); return; }
   } else if(G.mode==='tdm'){
     if(G.teamScore.blue>=30 || G.teamScore.red>=30){ endMatch(null); return; }
+  } else if(G.mode==='koth'){
+    for(const t of KOTH_TEAMS) if(G.teamScore[t] >= KOTH_TARGET){ endMatch(null); return; }
   }
 
   renderer.render(scene, camera);
@@ -4829,6 +4966,15 @@ function hud(){
     } else if(G.mode==='ffa'){
       const lead = [...G.ents].sort((a,b)=>b.kills-a.kills)[0];
       $('#scoreline').textContent = 'YOU: '+me.kills+'  ·  LEAD: '+lead.name+' '+lead.kills+'  ·  TARGET 20';
+    } else if(G.mode==='koth'){
+      const H = G.hill;
+      // team names and colours are constants here, so no caller text reaches innerHTML
+      const scores = KOTH_TEAMS.map(t => '<b style="color:#'
+        + TEAM_COL[t].toString(16).padStart(6,'0') + '">' + t.charAt(0).toUpperCase()
+        + ' ' + Math.floor(G.teamScore[t]) + '</b>').join(' · ');
+      const state = !H ? '' : H.contested ? 'CONTESTED'
+        : H.owner ? H.owner.toUpperCase() + ' HOLDS' : 'HILL OPEN';
+      $('#scoreline').innerHTML = scores + '  —  ' + state + '  ·  TARGET ' + KOTH_TARGET;
     } else {
       $('#scoreline').textContent = 'BLUE '+G.teamScore.blue+'  :  '+G.teamScore.red+' RED  ·  TARGET 30';
     }
@@ -4908,6 +5054,10 @@ function endMatch(campWin){
   } else if(mode==='tdm'){
     win = G.teamScore.blue > G.teamScore.red;
     placeTxt = 'BLUE '+G.teamScore.blue+' — '+G.teamScore.red+' RED';
+  } else if(mode==='koth'){
+    const rank = KOTH_TEAMS.slice().sort((a,b)=>G.teamScore[b]-G.teamScore[a]);
+    win = rank[0] === 'blue';
+    placeTxt = rank.map(t=>t.toUpperCase()+' '+Math.floor(G.teamScore[t])).join('  ·  ');
   } else {
     win = !!campWin;
     placeTxt = win ? 'ALL 8 WAVES CLEARED' : 'FELL ON WAVE '+Math.max(1,G.wave);
