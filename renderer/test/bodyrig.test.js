@@ -1,21 +1,24 @@
 /* The player body is a drop-in for code that already exists, not a free-standing model.
-   Three things have to stay true and none of them show up in a diff:
+   Four things have to stay true and none of them show up in a diff:
 
    1. botMesh's userData contract. The walk cycle, the death camera, the health bar and
       the shield bubble all reach in by key; a renamed or dropped key does not throw,
       it just quietly stops animating.
-   2. The arms follow the gun. The gun climbs 0.32 to the visor on ADS and for a long
-      time nothing followed it, so the rifle left the hands mid-aim. That was invisible
-      only because the old body was one flat colour.
+   2. The hands stay on the weapon. The arms are two bones solved to grips that live in
+      the gun's own space, so idle, aim and recoil are one code path - but an arm that
+      cannot reach its grip silently gives up and goes straight, which looks exactly
+      like the rigid planks this replaced. Every weapon is checked, in both poses.
    3. The body fits the server's hit cylinder. The hitbox is a cylinder in
       server/index.js and is NOT derived from the mesh, so geometry outside it is
-      geometry players shoot at and watch pass through. The old sphere head sat 4cm
-      above the ceiling. The bounds are read out of the server here rather than copied,
-      because a copied constant is how these two halves drift apart.
+      geometry players shoot at and watch pass through. The bounds are read out of the
+      server here rather than copied, because a copied constant is how these two halves
+      drift apart.
+   4. Recoil does not accumulate. Folding the kick straight into gun.rotation.x and then
+      lerping that same value toward its target next frame compounds it about sevenfold.
 
    Real geometry, not regex: three.js builds fine in Node as long as nothing asks for a
    WebGL context, and measuring transformed vertices is the only honest way to answer
-   "is this inside the cylinder". */
+   "is this inside the cylinder" or "is that hand on the grip". */
 const fs = require('fs'), path = require('path'), vm = require('vm');
 const ROOT = path.join(__dirname, '..', '..');
 const html = fs.readFileSync(path.join(ROOT, 'renderer', 'index.html'), 'utf8');
@@ -53,70 +56,108 @@ function liftConst(n){
 }
 const FNS = ['vmCyl','vmBox','mat','partMat','vmFrame','vmBarrel','vmMagazine','vmMagazineBody',
   'vmForegrip','vmForegripBody','vmStock','vmStockBody','fitScale','vmOptic','buildGunModel',
-  'poseArms','poseUpper','botMesh'];
-const CONSTS = ['RCOL','FIT_SPAN','ARM_ADS'];
+  'aimBone','solveArm','fitGripZ','lerp','lerp3','poseUpper','mkArm','botMesh'];
+const CONSTS = ['RCOL','FIT_SPAN','ARM','GUN_HIP','GUN_ADS','POLE',
+  '_v1','_pole','_elbow','_DOWN','_pR'];
 
 const ctx = vm.createContext({
   THREE, Math, console,
   WEAPONS: LoadoutCore.WEAPONS, SLOTS: LoadoutCore.SLOTS, SETS: LoadoutCore.SETS,
-  LoadoutCore,
-  equippedParts: () => ({}),
+  LoadoutCore, equippedParts: () => ({}),
 });
 vm.runInContext('let VMT=null, VMT_AIM=null, VMT_ADS=null;\n'
   + CONSTS.map(liftConst).join('\n') + '\n' + FNS.map(lift).join('\n'), ctx);
 
-const GUN = { wid: 'vkraptor', eq: {} };
-const build = grunt => ctx.botMesh(0xE8734A, grunt, grunt ? null : GUN);
+const WEAPONS = Object.keys(LoadoutCore.WEAPONS);
+const build = (grunt, wid) => ctx.botMesh(0xE8734A, grunt, grunt ? null : { wid, eq: {} });
+const settle = (u, aim, reloading) => { for(let i = 0; i < 60; i++) ctx.poseUpper(u, aim, reloading, 1/60, 7); };
 
 /* ---- 1. the contract ---- */
 const KEYS = ['hbFg','hbGroup','shSphere','legL','legR','gun','gunMuzzle','gunBase'];
 for(const grunt of [false, true]){
   const who = grunt ? 'grunt' : 'player';
-  const u = build(grunt).userData;
+  const u = build(grunt, 'vkraptor').userData;
   for(const k of KEYS) ok(who + ' userData keeps ' + k, !!u[k]);
   ok(who + ' legs pivot at the hip (groups, not meshes)', u.legL.isGroup && u.legR.isGroup);
+  ok(who + ' carries its own gun mount', !!(u.gunHip && u.gunAds));
 }
 
-/* ---- 2. the arm rig, and that it moves with the gun ---- */
+/* ---- 2. the hands stay on the weapon, on every gun, in both poses ---- */
 {
-  const m = build(false), u = m.userData;
-  ok('player has arm groups', !!(u.armL && u.armR && u.armL.isGroup && u.armR.isGroup));
-  ok('player stores a rest pose for both arms', !!(u.armLB && u.armRB));
-
-  ctx.poseUpper(u, 0, false, 1/60, 7);
-  const rest = { gy: u.gun.position.y, gx: u.gun.position.x,
-                 rx: u.armR.rotation.x, rz: u.armR.rotation.z,
-                 lx: u.armL.rotation.x, lz: u.armL.rotation.z };
-  ctx.poseUpper(u, 1, false, 1/60, 7);
-  const aim = { gy: u.gun.position.y, gx: u.gun.position.x,
-                rx: u.armR.rotation.x, rz: u.armR.rotation.z,
-                lx: u.armL.rotation.x, lz: u.armL.rotation.z };
-
-  ok('gun rises to the visor on ADS', Math.abs((aim.gy - rest.gy) - 0.32) < 1e-9);
-  ok('gun pulls inboard on ADS', aim.gx < rest.gx - 0.05);
-  // the actual regression this file exists for
-  const moved = a => Math.abs(aim[a] - rest[a]);
-  ok('trigger arm follows the gun', moved('rx') > 0.2);
-  ok('support arm follows the gun', moved('lx') > 0.2 || moved('lz') > 0.05);
-  ok('arms return to rest when the sight drops',
-     (ctx.poseUpper(u, 0, false, 1/60, 7), Math.abs(u.armR.rotation.x - rest.rx) < 1e-9));
-
-  // reload tilt still reaches the gun through the shared path
-  for(let i = 0; i < 180; i++) ctx.poseUpper(u, 0, true, 1/60, 7);
-  ok('reload tilt still applies', Math.abs(u.gun.rotation.x - 0.85) < 0.01);
-
-  // a grunt has a claw, not arms, and must not crash the shared pose
-  const gu = build(true).userData;
-  ok('grunt has no arm rig', !gu.armL && !gu.armR);
-  let threw = false;
-  try { ctx.poseUpper(gu, 1, true, 1/60, 5); } catch(e){ threw = true; }
-  ok('shared pose survives a body with no arms', !threw);
+  const tip = new THREE.Vector3(), want = new THREE.Vector3();
+  for(const wid of WEAPONS){
+    const u = build(false, wid).userData;
+    ok(wid + ' has two-bone arms',
+       !!(u.arms && u.arms.R && u.arms.L && u.arms.R.up.isGroup && u.arms.R.fore.isGroup));
+    if(!u.arms) continue;
+    for(const aim of [0, 1]){
+      settle(u, aim, false);
+      u.gun.updateMatrix();
+      for(const side of ['R','L']){
+        const a = u.arms[side];
+        ok(wid + ' ' + side + (aim ? ' aimed' : ' ready') + ' arm is not maxed out '
+           + '(' + (a.reach*100).toFixed(0) + 'cm of ' + ((a.L1+a.L2)*100).toFixed(0) + ')', !a.straight);
+        // where the forearm actually ends, vs the grip it was asked for
+        tip.set(0, -a.L2, 0).applyQuaternion(a.fore.quaternion).add(a.fore.position);
+        want.copy(a.grip).applyMatrix4(u.gun.matrix);
+        ok(wid + ' ' + side + (aim ? ' aimed' : ' ready') + ' hand is on the grip '
+           + '(' + (tip.distanceTo(want)*1000).toFixed(0) + 'mm off)', tip.distanceTo(want) < 0.005);
+      }
+    }
+  }
 }
 
-/* ---- 3. the hit envelope ---- */
+/* ---- 3. poses differ, and the reload tilt survives the shared path ---- */
+{
+  const u = build(false, 'vkraptor').userData;
+  settle(u, 0, false); const ready = u.gun.position.clone();
+  settle(u, 1, false); const aimed = u.gun.position.clone();
+  ok('the sight raises the weapon', aimed.y - ready.y > 0.15);
+  // aimed, the weapon has to line up under the aiming eye - not out on the shoulder,
+  // and not so high it covers the visor, which starts at 1.70
+  const ADS = vm.runInContext('[GUN_ADS.x, GUN_ADS.y]', ctx);
+  ok('the sight lines the weapon up under the eye (x ' + ADS[0] + ')', Math.abs(ADS[0]) < 0.12);
+  ok('aimed weapon clears the visor (top ' + (ADS[1] + 0.12).toFixed(2) + ')', ADS[1] + 0.12 < 1.70);
+
+  settle(u, 0, true);
+  ok('reload tilt still applies', Math.abs(u.gunTilt - 0.85) < 0.01);
+
+  // idle sway exists at rest and is gone on the sight
+  settle(u, 0, false);
+  let lo = Infinity, hi = -Infinity;
+  for(let i = 0; i < 400; i++){ ctx.poseUpper(u, 0, false, 1/60, 7);
+    lo = Math.min(lo, u.gun.position.y); hi = Math.max(hi, u.gun.position.y); }
+  ok('the weapon breathes at rest (' + ((hi-lo)*1000).toFixed(0) + 'mm)', hi - lo > 0.008 && hi - lo < 0.05);
+  settle(u, 1, false);
+  lo = Infinity; hi = -Infinity;
+  for(let i = 0; i < 400; i++){ ctx.poseUpper(u, 1, false, 1/60, 7);
+    lo = Math.min(lo, u.gun.position.y); hi = Math.max(hi, u.gun.position.y); }
+  ok('the sight is steady (' + ((hi-lo)*1000).toFixed(1) + 'mm)', hi - lo < 0.001);
+}
+
+/* ---- 4. recoil decays instead of accumulating ---- */
+{
+  const u = build(false, 'vkraptor').userData;
+  settle(u, 0, false);
+  const restPitch = u.gun.rotation.x, restZ = u.gun.position.z;
+  let peak = 0;
+  for(let shot = 0; shot < 12; shot++){        // a full auto burst
+    u.kick = 1;
+    for(let i = 0; i < 5; i++){ ctx.poseUpper(u, 0, false, 1/60, 7);
+      peak = Math.max(peak, Math.abs(u.gun.rotation.x - restPitch)); }
+  }
+  ok('recoil pitch stays in proportion to one kick (' + peak.toFixed(3) + ' rad)', peak < 0.30);
+  for(let i = 0; i < 200; i++) ctx.poseUpper(u, 0, false, 1/60, 7);
+  ok('recoil pitch returns to rest', Math.abs(u.gun.rotation.x - restPitch) < 1e-3);
+  ok('recoil recoil offset returns to rest', Math.abs(u.gun.position.z - restZ) < 1e-3);
+  ok('a burst leaves no bias in the resting tilt', Math.abs(u.gunTilt) < 1e-3);
+}
+
+/* ---- 5. the hit envelope ---- */
 for(const grunt of [false, true]){
   const who = grunt ? 'grunt' : 'player';
-  const m = build(grunt), u = m.userData;
+  const m = build(grunt, 'ls1'), u = m.userData;
+  settle(u, 0, false);
   m.updateMatrixWorld(true);
   const skip = new Set();
   const mark = o => { if(!o) return; skip.add(o); o.children.forEach(mark); };
@@ -139,10 +180,19 @@ for(const grunt of [false, true]){
   ok(who + ' stands on the floor (' + minY.toFixed(3) + ')', Math.abs(minY) < 0.02);
 }
 
-/* ---- 4. one pose implementation, not two ---- */
+/* ---- 6. a grunt has a claw, not arms, and keeps its own mount ---- */
 {
-  // Both worlds must route through poseUpper. Counting call sites is the check that
-  // catches a future edit re-inlining the maths into one branch and drifting again.
+  const u = build(true).userData;
+  ok('grunt has no arm rig', !u.arms);
+  let threw = false;
+  try { for(let i = 0; i < 30; i++) ctx.poseUpper(u, 1, true, 1/60, 5); } catch(e){ threw = true; }
+  ok('the shared pose survives a body with no arms', !threw);
+  ok('grunt keeps its own claw mount, not the rifle mount',
+     Math.abs(u.gunHip.x - 0.42) < 1e-6 && Math.abs(u.gunHip.y - 1.15) < 1e-6);
+}
+
+/* ---- 7. one pose implementation, not two ---- */
+{
   const calls = (html.match(/poseUpper\(/g) || []).length;
   ok('poseUpper is defined once and called from both worlds (found ' + calls + ')', calls >= 3);
   ok('live remotes read the synced sight blend', /poseUpper\(u,\s*t\.ads/.test(html));
@@ -151,7 +201,6 @@ for(const grunt of [false, true]){
   ok('the schema carries the sight blend', /ads:\s*'number'/.test(server));
   ok('the schema carries the reload flag', /reloading:\s*'boolean'/.test(server));
   ok('the server whitelists the reload flag', /reloading:\s*!!msg\.reloading/.test(server));
-  // one clamp of ads, not two
   ok('ads is clamped in one place on the server',
      (server.match(/Math\.max\(0, Math\.min\(1, Number\(inp\.ads\)/g) || []).length === 1);
 }

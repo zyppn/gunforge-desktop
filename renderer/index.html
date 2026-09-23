@@ -3057,34 +3057,151 @@ function hydrateThumbs(retry){
   if(missed && !retry) requestAnimationFrame(() => hydrateThumbs(true));
 }
 
-/* How far the arms travel between hip-fire and the sight. Tuned so the hands stay on
-   the weapon while the gun climbs 0.32 and pulls inboard to x 0.1. */
-const ARM_ADS = { rx: -0.38, rz: -0.30, lx: -0.30, lz: -0.10 };
+/* ---------------------------------------------------------------------------------
+   Third-person arms, solved to the weapon.
+
+   The hands are driven by the gun, not by a table of angles: decide where the gun is
+   this frame (idle sway, sight, recoil), then put each hand on it and bend the arm to
+   suit. Idle, aim and shooting are therefore one code path with three inputs, and a
+   new weapon length or a changed mount can never leave a hand hanging in the air.
+
+   Why the old arms looked wrong: a single rigid box from the shoulder cannot both
+   start at the shoulder and end on the grip, so it ended wherever its angle put it.
+   The mount made it impossible anyway - the gun sat at y 1.10, x 0.30, hip height and
+   a whole forearm outboard, about 0.9 from the left shoulder when a whole arm is 0.6.
+
+   Bone convention: a bone is a Group at its joint whose mesh extends along local -Y,
+   so aiming a bone means rotating -Y onto the direction it should point.
+   --------------------------------------------------------------------------------- */
+const ARM = {
+  L1: 0.30, L2: 0.33,              // upper arm, then forearm+hand
+  // The shoulder has to sit OUTSIDE the chest (half-width 0.27) or the upper bone is
+  // simply inside the torso and the arm reads as a forearm sticking out of the ribs.
+  sx: 0.28, sy: 1.40, sz: 0.03,
+};
+/* Where a rifle is actually carried, in body space, and where it goes on the sight:
+   centreline and high enough that the bore runs just under the visor at 1.745. */
+const GUN_HIP = new THREE.Vector3(0.10, 1.30, 0.26);
+// 1.55, not eye level: the receiver is 12cm tall and the visor starts at 1.70, so a
+// gun held at the eye simply covers the face from every angle that matters.
+const GUN_ADS = new THREE.Vector3(0.09, 1.55, 0.32);
+/* Which way each elbow breaks. Without a pole the solver is free to put the elbow
+   anywhere on a circle around the shoulder-to-hand line, and it will flip between
+   frames. The trigger elbow lifts as the weapon comes up, the way a real one does. */
+const POLE = {
+  R: { hip: [ 0.85, -0.50, -0.40], ads: [ 0.95,  0.10, -0.30] },
+  L: { hip: [-0.75, -0.65, -0.20], ads: [-0.70, -0.30, -0.10] },
+};
+
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _pole = new THREE.Vector3(), _dir = new THREE.Vector3(), _bend = new THREE.Vector3();
+const _elbow = new THREE.Vector3();
+const _DOWN = new THREE.Vector3(0, -1, 0);
+const _pR = [0, 0, 0], _pL = [0, 0, 0];
+
+function aimBone(bone, from, to){
+  bone.position.copy(from);
+  _v3.copy(to).sub(from);
+  if(_v3.lengthSq() < 1e-10) return;
+  bone.quaternion.setFromUnitVectors(_DOWN, _v3.normalize());
+}
+
+/* Two-bone solve. Records the distance asked for and whether it had to give up and go
+   straight - a permanently straight support arm means the mount and the arm length
+   disagree, which is a modelling bug rather than a pose, and the test checks for it. */
+function solveArm(a, target, poleDir){
+  const S = a.shoulder, L1 = a.L1, L2 = a.L2;
+  _dir.copy(target).sub(S);
+  const want = _dir.length();
+  a.reach = want;
+  const max = L1 + L2 - 1e-4, min = Math.abs(L1 - L2) + 1e-4;
+  const d = Math.max(min, Math.min(max, want));
+  a.straight = want > max;
+  if(want < 1e-6) _dir.set(0, -1, 0); else _dir.divideScalar(want);
+  _pole.set(poleDir[0], poleDir[1], poleDir[2]);
+  _bend.copy(_pole).addScaledVector(_dir, -_pole.dot(_dir));   // pole, flattened into the plane
+  if(_bend.lengthSq() < 1e-8){ _bend.set(0, -1, 0).addScaledVector(_dir, -(-_dir.y)); }
+  _bend.normalize();
+  const cosA = Math.max(-1, Math.min(1, (L1*L1 + d*d - L2*L2) / (2*L1*d)));
+  const sinA = Math.sqrt(Math.max(0, 1 - cosA*cosA));
+  _elbow.copy(S).addScaledVector(_dir, L1*cosA).addScaledVector(_bend, L1*sinA);
+  aimBone(a.up, S, _elbow);
+  // the hand lands where the arm can reach, not where we wished it would
+  if(a.straight) _v2.copy(S).addScaledVector(_dir, d); else _v2.copy(target);
+  aimBone(a.fore, _elbow, _v2);
+}
+
+/* How far along the barrel the support hand can go and still be reachable in BOTH the
+   ready and the aimed pose. Solved rather than guessed: the numbers that decide it -
+   arm length, shoulder position, where the gun is held - all live above, and any of
+   them moving used to mean re-tuning a magic offset by eye. */
+function fitGripZ(scale, lo, hi, limit){
+  const sx = -ARM.sx, sy = ARM.sy, sz = ARM.sz;
+  const worst = z => Math.max(
+    Math.hypot(GUN_HIP.x - sx, GUN_HIP.y - 0.10*scale - sy, GUN_HIP.z + z*scale - sz),
+    Math.hypot(GUN_ADS.x - sx, GUN_ADS.y - 0.10*scale - sy, GUN_ADS.z + z*scale - sz));
+  if(worst(lo) > limit) return lo;      // nothing on this weapon is reachable; clamp
+  let a = lo, b = hi;
+  for(let i = 0; i < 16; i++){ const m = (a + b) / 2; if(worst(m) <= limit) a = m; else b = m; }
+  return a;
+}
+
+function lerp(a, b, t){ return a + (b - a) * t; }
+function lerp3(o, p, q, t){ o[0] = lerp(p[0], q[0], t); o[1] = lerp(p[1], q[1], t); o[2] = lerp(p[2], q[2], t); }
 
 /* ONE upper-body pose for both worlds. Every animation touch-up before this was
    written against the offline path and silently did nothing in live PvP - seven times
    now - because offline walks G.ents and live walks live.remotes. A single function
    both call is the only version of this that cannot drift apart. */
-function poseArms(u, aim){
-  if(u.armR && u.armRB){
-    u.armR.rotation.x = u.armRB.x + ARM_ADS.rx * aim;
-    u.armR.rotation.z = u.armRB.z + ARM_ADS.rz * aim;
-  }
-  if(u.armL && u.armLB){
-    u.armL.rotation.x = u.armLB.x + ARM_ADS.lx * aim;
-    u.armL.rotation.z = u.armLB.z + ARM_ADS.lz * aim;
-  }
-}
 function poseUpper(u, aim, reloading, dt, kickRate){
-  poseArms(u, aim);
   if(!u.gun || !u.gunBase) return;
   u.kick = Math.max(0, (u.kick || 0) - dt*kickRate);
-  const tiltTarget = reloading ? 0.85 : 0;
-  u.gun.rotation.x += (tiltTarget - u.gun.rotation.x) * Math.min(1, dt*9);
-  u.gun.position.x = u.gunBase.x + (0.1 - u.gunBase.x) * aim;   // pulls inboard...
-  u.gun.position.z = u.gunBase.z - u.kick*0.07 - 0.02*aim;
-  u.gun.position.y = u.gunBase.y + 0.32*aim                     // ...and up to the visor
-    - (reloading ? 0.06 : 0) * Math.min(1, u.gun.rotation.x/0.85);
+  u.animT = (u.animT || 0) + dt;
+  const k = u.kick;
+  const hip = u.gunHip || u.gunBase, ads = u.gunAds || u.gunBase;
+
+  // Idle sway: small, slow, and gone by the time the sight is up. A wobble on an aimed
+  // weapon reads as lag rather than as life.
+  const calm = 1 - aim;
+  const sway  = Math.sin(u.animT * 1.9) * 0.011 * calm;
+  const drift = Math.sin(u.animT * 1.3 + 1.1) * 0.008 * calm;
+
+  /* Tilt is its own state. Folding recoil straight into rotation.x and then lerping
+     rotation.x toward the target next frame makes the kick compound - it settles about
+     seven times larger than intended, because the lerp only claws back 15% a frame. */
+  const tilt = reloading ? 0.85 : 0;
+  u.gunTilt = (u.gunTilt || 0) + (tilt - (u.gunTilt || 0)) * Math.min(1, dt*9);
+  u.gun.rotation.x = u.gunTilt - k * 0.16;            // muzzle climb on the shot
+
+  u.gun.position.x = lerp(hip.x, ads.x, aim) + drift;
+  u.gun.position.y = lerp(hip.y, ads.y, aim) + sway + k*0.025
+    - (reloading ? 0.06 : 0) * Math.min(1, u.gunTilt/0.85);
+  u.gun.position.z = lerp(hip.z, ads.z, aim) - k*0.075;
+  u.gun.updateMatrix();
+
+  if(!u.arms) return;
+  // Hand targets live in the gun's own space, so they inherit the mount, the recoil
+  // pitch and the reload tilt without any of that being restated here.
+  lerp3(_pR, POLE.R.hip, POLE.R.ads, aim);
+  lerp3(_pL, POLE.L.hip, POLE.L.ads, aim);
+  _v1.copy(u.arms.R.grip).applyMatrix4(u.gun.matrix); solveArm(u.arms.R, _v1, _pR);
+  _v1.copy(u.arms.L.grip).applyMatrix4(u.gun.matrix); solveArm(u.arms.L, _v1, _pL);
+}
+
+/* One arm, two bones. grip is in GUN-local space and is read off the weapon that was
+   actually built, because an M17's muzzle is 33cm out and an LS-1's is 85cm. */
+function mkArm(g, side, grip, hexUp, hexFore){
+  const sgn = side === 'R' ? 1 : -1;
+  const up = new THREE.Group(), fore = new THREE.Group();
+  // Plate on the upper arm, dark sleeve on the forearm. A wholly dark arm disappears
+  // into the undersuit, which is why the first pass looked armless from the front.
+  const upM = new THREE.Mesh(new THREE.BoxGeometry(0.125, ARM.L1, 0.125), mat(hexUp));
+  upM.position.y = -ARM.L1/2; up.add(upM);
+  const foreM = new THREE.Mesh(new THREE.BoxGeometry(0.10, ARM.L2, 0.10), mat(hexFore));
+  foreM.position.y = -ARM.L2/2; fore.add(foreM);
+  g.add(up, fore);
+  return { up, fore, L1: ARM.L1, L2: ARM.L2, grip: grip.clone(), reach: 0, straight: false,
+           shoulder: new THREE.Vector3(sgn*ARM.sx, ARM.sy, ARM.sz) };
 }
 
 function botMesh(color, grunt, gunInfo){
@@ -3094,20 +3211,14 @@ function botMesh(color, grunt, gunInfo){
   // Neutral undersuit. Tinting EVERY surface with the team colour is most of why the
   // old body read as one flat blob past about 15m; the hue now rides on plates only.
   const us = 0x2A3138;
-  let legL=null, legR=null, gun=null, gunMuzzle=null, gunBase=null, armL=null, armR=null;
+  let legL=null, legR=null, gun=null, gunMuzzle=null, gunBase=null, armL=null, armR=null,
+      arms=null, gunHip=null, gunAds=null;
 
   const mkLeg = (x, w2, h2, topY) => {
     const lg = new THREE.Group(); lg.position.set(x, topY, 0);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w2, h2, w2*1.1), mat(dark.getHex()));
     mesh.position.y = -h2/2; lg.add(mesh); g.add(lg);
     return lg;
-  };
-  // Shoulder-pivoted arm GROUP, so the arm can follow the gun. See poseArms.
-  const mkArm = (x, y, z, len, w2, rx, rz) => {
-    const ag = new THREE.Group(); ag.position.set(x, y, z);
-    const lm = new THREE.Mesh(new THREE.BoxGeometry(w2, len, w2), mat(us));
-    lm.position.y = -len/2; ag.add(lm);
-    ag.rotation.set(rx, 0, rz); g.add(ag); return ag;
   };
 
   if(grunt){
@@ -3128,6 +3239,9 @@ function botMesh(color, grunt, gunInfo){
     gun.add(gunMuzzle);
     gun.position.set(0.42, 1.15, 0.25);
     gunBase = gun.position.clone();
+    // A claw, not arms. Same mount and same sight shift it has always had.
+    gunHip = gunBase.clone();
+    gunAds = new THREE.Vector3(0.1, gunBase.y + 0.32, gunBase.z - 0.02);
     g.add(gun);
   } else {
     // Plated chest over the undersuit: tapered ribs, a pinched waist and a flared
@@ -3174,11 +3288,6 @@ function botMesh(color, grunt, gunInfo){
       const kn = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.13, 0.07), mat(c));
       kn.position.set(0, -0.36, 0.11); lg.add(kn);
     }
-    // Trigger arm to the grip, support arm across the body to the foregrip. The old
-    // rig angled its support arm AWAY from the weapon (rotation.z -0.7 on a shoulder
-    // already left of centre); one flat colour is the only reason it never showed.
-    armR = mkArm( 0.31, 1.42, 0.02, 0.42, 0.13, -0.95, 0.00);
-    armL = mkArm(-0.26, 1.42, 0.02, 0.44, 0.12, -1.05, 0.85);
     // the actual gun, same modular builder as the player's — attachments and all
     gun = new THREE.Group();
     const built = buildGunModel(gunInfo.wid, gunInfo.eq);
@@ -3190,9 +3299,25 @@ function botMesh(color, grunt, gunInfo){
     gunMuzzle.position.set(0, 0.02, -built.tipZ - 0.23); // mirrored tip, in gun-group space
     gun.add(gunMuzzle);
     gun.scale.setScalar(0.9);
-    gun.position.set(0.3, 1.1, 0.34);
+    // (0.3, 1.1, 0.34) was hip height and a whole forearm outboard - about 0.9 from
+    // the left shoulder, when a whole arm is 0.6. Nothing could reach it.
+    gun.position.copy(GUN_HIP);
     gunBase = gun.position.clone();
+    gunHip = GUN_HIP.clone(); gunAds = GUN_ADS.clone();
     g.add(gun);
+    // Hand targets read off THIS weapon: an M17's muzzle is 33cm out and an LS-1's is
+    // 85cm, so one fixed support offset buries a hand in the receiver on one gun and
+    // leaves it in mid-air on another. Gun-local, so they ride mount, recoil and tilt.
+    const mz = Math.abs(gunMuzzle.position.z);
+    // as far down the handguard as the arm can actually get, but never past the muzzle
+    const gz = Math.min(mz*0.36, fitGripZ(gun.scale.x, 0.08, 0.34, 0.88*(ARM.L1 + ARM.L2)));
+    arms = {
+      // plate, then a mid-tone sleeve. A dark forearm over the dark undersuit is
+      // invisible from the front, which is how the first pass looked armless.
+      R: mkArm(g, 'R', new THREE.Vector3(0, -0.09, 0), c, dark.getHex()),
+      L: mkArm(g, 'L', new THREE.Vector3(0, -0.10, gz), c, dark.getHex()),
+    };
+    armR = arms.R.up; armL = arms.L.up;
   }
   // hp bar (billboard planes)
   const hbG = new THREE.Group();
@@ -3211,9 +3336,9 @@ function botMesh(color, grunt, gunInfo){
   shSphere.position.y = 1.0; shSphere.visible = false;
   g.add(shSphere);
   g.userData = {hbFg:fg, hbGroup:hbG, shSphere, legL, legR, gun, gunMuzzle, gunBase, kick:0,
-    armL, armR,                                   // null on grunts, so callers must guard
-    armLB: armL ? armL.rotation.clone() : null,   // rest pose, the ADS lerp works from it
-    armRB: armR ? armR.rotation.clone() : null};
+    arms, gunHip, gunAds,
+    animT: Math.random()*6,   // stagger the idle sway, or a lobby breathes in unison
+    armL, armR};              // upper bones, kept by name; null on grunts
   return g;
 }
 
