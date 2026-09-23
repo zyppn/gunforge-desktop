@@ -1792,7 +1792,8 @@ const KOTH_TEAMS = ['blue','red','green','yellow'];
 const TEAM_COL = { blue:0x4C9BE8, red:0xE05A4E, green:0x5FBF6E, yellow:0xE8C44A };
 const KOTH_TARGET = 150;   // points, paid at 1/s while you hold it alone
 const KOTH_LOCK   = 1.0;   // seconds alone on the hill before it is yours
-const KOTH_SQUAD  = 3;     // per team, the player filling one blue slot
+const KOTH_SQUAD  = 2;     // per team, the player filling one blue slot: eight bodies
+const KOTH_LEASH  = 18;    // how far a bot will chase before the point wins
 
 const CLIENT_BUILD = 'live-27';
 const MODES = [
@@ -1805,8 +1806,9 @@ const MODES = [
 let setupSel = {mode:'ffa', map:'foundry'};
 function openSetup(){
   const modeRow = MODES.map(m=>'<div class="opt '+(setupSel.mode===m.id?'sel':'')+'" onclick="setupSel.mode=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div><div class="d">'+m.d+'</div></div>').join('');
-  // King of the Hill needs a map with a hill on it; every other mode can use any map
-  const mapsFor = MAPS.filter(m => setupSel.mode !== 'koth' || m.hill);
+  // A map with a hill is a King of the Hill map and is offered nowhere else: its
+  // layout only makes sense around the point, and the other modes have no hill to run.
+  const mapsFor = MAPS.filter(m => (setupSel.mode === 'koth') === !!m.hill);
   if(!mapsFor.some(m => m.id === setupSel.map)) setupSel.map = mapsFor[0].id;
   const mapRow = mapsFor.map(m=>'<div class="opt '+(setupSel.map===m.id?'sel':'')+'" onclick="setupSel.map=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div></div>').join('');
   const L = computeLoadout();
@@ -3952,6 +3954,7 @@ function respawn(e){
   if(e.isPlayer){ hideDeathCard(); G.killcam = null; }
   e.burnT=0; e.slowT=0; e.burnSrc=null; e.burnSpread=false; e.target=null; e.alertSrc=null; e.alertT=0;
   e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0; e.wantAim=false; e.aimT=0;
+  e.postA = undefined;   // a new life picks a new angle onto the point
   const s = (G.mode==='koth' && G.map.teamSpawns) ? teamSpawn(G.map, e.team)
                                                   : farSpawn(G.map, e.team);
   e.x=s[0]; e.z=s[1];
@@ -4213,34 +4216,44 @@ function botThink(e, dt){
   if(e.reactT > 0) e.reactT -= dt;
   e.aimT = Math.max(0, Math.min(1, e.aimT + (e.wantAim ? 1 : -1) * dt * 5)); // raising the glass takes time
 
-  const tgt = pickTarget(e, dt);
+  const H = (G.mode === 'koth' && G.hill) ? G.hill : null;
+  let tgt = pickTarget(e, dt);
+  if(H && !kothWorthChasing(e, tgt, H)) tgt = null;
+  const post = H ? kothPost(e, dt) : null;
+
   if(!tgt){
     e.wantAim = false;
-    const H = (G.mode === 'koth') ? G.hill : null;
-    const dh = H ? Math.hypot(H.x - e.x, H.z - e.z) : 0;
-    if(H && dh > H.r*0.7){
-      // nobody to shoot: walk to the objective rather than in a random direction,
-      // which is the difference between a mode and a deathmatch with a circle on it
-      e.pathT = (e.pathT||0) - dt;
-      if(!e.path || !e.path.length || e.pathT <= 0){
-        e.path = findPath(e.x, e.z, H.x, H.z);
-        e.pathGoal = {x:H.x, z:H.z};
-        e.pathT = 1.0 + Math.random()*0.6;
+    if(post){
+      const pd = Math.hypot(post.x-e.x, post.z-e.z);
+      if(pd > 1.1){
+        e.pathT = (e.pathT||0) - dt;
+        const stale = !e.path || !e.path.length || e.pathT <= 0 ||
+          (e.pathGoal && Math.hypot(post.x-e.pathGoal.x, post.z-e.pathGoal.z) > 2.5);
+        if(stale){
+          e.path = findPath(e.x, e.z, post.x, post.z);
+          e.pathGoal = {x:post.x, z:post.z};
+          e.pathT = 0.8 + Math.random()*0.6;
+        }
+        let wpp = null;
+        if(e.path && e.path.length){
+          while(e.path.length && Math.hypot(e.path[0].x-e.x, e.path[0].z-e.z) < 0.7) e.path.shift();
+          for(let j = Math.min(e.path.length,6)-1; j>0; j--){
+            if(navClear(e.x, e.z, e.path[j].x, e.path[j].z)){ e.path.splice(0,j); break; }
+          }
+          wpp = e.path[0] || null;
+        }
+        const mx = wpp ? wpp.x-e.x : post.x-e.x, mz = wpp ? wpp.z-e.z : post.z-e.z;
+        const ml = Math.hypot(mx,mz)||1;
+        wantMove = true; moveEnt(e, mx/ml*sp*dt, mz/ml*sp*dt);
+        faceAng = Math.atan2(mz,mx);
+      } else {
+        // at the post: small movement and eyes outward, the way someone holding a
+        // point watches the approaches rather than staring at their own feet
+        e.path = null;
+        e.wanderA += (Math.random()-0.5)*2.2*dt;
+        moveEnt(e, Math.cos(e.wanderA)*sp*0.22*dt, Math.sin(e.wanderA)*sp*0.22*dt);
+        faceAng = Math.atan2(e.z - H.z, e.x - H.x);
       }
-      let wpp = null;
-      if(e.path && e.path.length){
-        while(e.path.length && Math.hypot(e.path[0].x-e.x, e.path[0].z-e.z) < 0.7) e.path.shift();
-        wpp = e.path[0] || null;
-      }
-      const mx = wpp ? wpp.x-e.x : H.x-e.x, mz = wpp ? wpp.z-e.z : H.z-e.z;
-      const ml = Math.hypot(mx,mz)||1;
-      wantMove = true; moveEnt(e, mx/ml*sp*dt, mz/ml*sp*dt);
-      faceAng = Math.atan2(mz,mx);
-    } else if(H){
-      e.path = null;                      // on the hill: hold it, but keep moving
-      e.wanderA += (Math.random()-0.5)*3*dt;
-      moveEnt(e, Math.cos(e.wanderA)*sp*0.32*dt, Math.sin(e.wanderA)*sp*0.32*dt);
-      faceAng = e.wanderA;
     } else {
       e.wanderA += (Math.random()-0.5)*2*dt;
       moveEnt(e, Math.cos(e.wanderA)*sp*0.5*dt, Math.sin(e.wanderA)*sp*0.5*dt);
@@ -4270,19 +4283,42 @@ function botThink(e, dt){
       e.path = null;
       let mvx=0, mvz=0;
       if(dist > ideal){ mvx += Math.cos(ang); mvz += Math.sin(ang); }
-      else if(dist < ideal*0.6 && wp2.type!=='Shotgun'){ mvx -= Math.cos(ang); mvz -= Math.sin(ang); } // shotguns keep pushing
+      else if(dist < ideal*0.6 && wp2.type!=='Shotgun'){
+        /* Backing off to your weapon's range is right in a deathmatch. On a point it
+           is how you lose the point - the first build had every bot orbiting four
+           metres outside the ring, all alive, nobody scoring. Give ground only when
+           the step does not take you further from the hill. */
+        const bx = -Math.cos(ang), bz = -Math.sin(ang);
+        const keeps = !post ||
+          (e.x+bx-H.x)*(e.x+bx-H.x) + (e.z+bz-H.z)*(e.z+bz-H.z)
+            <= (e.x-H.x)*(e.x-H.x) + (e.z-H.z)*(e.z-H.z);
+        if(keeps){ mvx += bx; mvz += bz; }
+      }
       if(!e.grunt){ mvx += Math.cos(ang+Math.PI/2)*e.strafe*0.8; mvz += Math.sin(ang+Math.PI/2)*e.strafe*0.8; }
+      /* Fight toward the point instead of wherever the duel happens to drift. The
+         pull grows with distance from the post, so it is a lean while you are on the
+         hill and a march while you are not - you close on the objective and trade
+         shots on the way rather than doing one and then the other. */
+      if(post){
+        const qx = post.x-e.x, qz = post.z-e.z, qd = Math.hypot(qx,qz);
+        if(qd > 0.8){
+          const w = Math.max(0.35, Math.min(1.6, qd / H.r));
+          mvx += qx/qd*w; mvz += qz/qd*w;
+        }
+      }
       const ml = Math.hypot(mvx,mvz);
       const msp = sp * (1 - e.aimT*0.4); // steady hands, slow feet — same trade as the player
       if(ml > 0.01){ wantMove = true; moveEnt(e, mvx/ml*msp*dt, mvz/ml*msp*dt); }
     } else {
-      // no reliable sight: navigate the grid toward the target
+      // No reliable sight. In KotH the destination is the point, not the man: hunting
+      // someone through a wall is how eight bots end up anywhere but the middle.
+      const goal = post || tgt;
       e.pathT = (e.pathT||0) - dt;
       const stale = !e.path || !e.path.length || e.pathT <= 0 ||
-        (e.pathGoal && Math.hypot(tgt.x-e.pathGoal.x, tgt.z-e.pathGoal.z) > 3);
+        (e.pathGoal && Math.hypot(goal.x-e.pathGoal.x, goal.z-e.pathGoal.z) > 3);
       if(stale){
-        e.path = findPath(e.x, e.z, tgt.x, tgt.z);
-        e.pathGoal = {x:tgt.x, z:tgt.z};
+        e.path = findPath(e.x, e.z, goal.x, goal.z);
+        e.pathGoal = {x:goal.x, z:goal.z};
         e.pathT = 0.7 + Math.random()*0.5;
       }
       let wpp = null;
@@ -4293,7 +4329,7 @@ function botThink(e, dt){
         }
         wpp = e.path[0] || null;
       }
-      const mx = wpp ? wpp.x-e.x : dx, mz = wpp ? wpp.z-e.z : dz;
+      const mx = wpp ? wpp.x-e.x : goal.x-e.x, mz = wpp ? wpp.z-e.z : goal.z-e.z;
       const ml = Math.hypot(mx,mz)||1;
       wantMove = true;
       moveEnt(e, mx/ml*sp*dt, mz/ml*sp*dt);
@@ -4457,6 +4493,39 @@ function buildHill(h){
                            skin({opacity:0.055}));
   hillCol.position.set(h.x, 1.6, h.z);
   scene.add(hillDisc, hillRing, hillCol);
+}
+/* Where a bot belongs when the hill is what matters. Attackers push inside it,
+   defenders hold the rim looking out, and every bot keeps its OWN angle so a squad
+   spreads around the circle instead of stacking on the centre tile. The angle drifts
+   on a slow random timer, because a held point should look like people holding it. */
+function kothPost(e, dt){
+  const H = G.hill;
+  if(e.postA === undefined){
+    e.postA = Math.random()*Math.PI*2;
+    e.postR = 0.40 + Math.random()*0.35;
+    e.postT = 2 + Math.random()*4;
+  }
+  e.postT -= dt;
+  if(e.postT <= 0){
+    e.postA += (Math.random()-0.5)*1.6;
+    e.postR = 0.40 + Math.random()*0.35;
+    e.postT = 3 + Math.random()*5;
+  }
+  // hold the rim while it is ours, push to the middle while it is not - both inside
+  // the ring, because standing next to the point scores exactly nothing
+  const defend = H.owner === e.team && !H.contested;
+  const rr = H.r * (defend ? 0.72 + e.postR*0.28 : e.postR*0.9);
+  return { x: H.x + Math.cos(e.postA)*rr, z: H.z + Math.sin(e.postA)*rr, defend };
+}
+/* Is this target worth leaving the point for? nearestEnemy has no range limit and no
+   sight test, so every bot always has "a target" somewhere on the map. Without this
+   the objective code never runs at all and the mode is deathmatch with a circle
+   painted on the floor - which is exactly how the first version played. */
+function kothWorthChasing(e, tgt, H){
+  if(!tgt) return false;
+  if(e.alertT > 0) return true;                                    // someone is shooting us
+  if(Math.hypot(tgt.x-e.x, tgt.z-e.z) <= KOTH_LEASH) return true;  // close enough to matter
+  return Math.hypot(tgt.x-H.x, tgt.z-H.z) <= H.r + 8;              // or they are on our point
 }
 function stepHill(dt){
   const H = G.hill; if(!H) return;
