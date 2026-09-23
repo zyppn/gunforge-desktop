@@ -347,10 +347,11 @@ function run(G, secs, dt){
    match and measures where eight bots actually end up, because "the objective code is
    reachable" and "they play the objective" are different claims.
 
-   findPath is stubbed to null so they steer straight at whatever goal botThink chose,
-   and nothing can shoot, so this isolates the DECISION - hill or man - from the navmesh
-   and from combat outcomes. On the first build of this mode it produced: 12 bots, mean
-   distance 21m, zero ever inside the ring. */
+   Nothing can shoot, so combat outcomes stay out of it, but the navmesh is REAL. An
+   earlier version of this stubbed findPath to null, which is exactly what the real one
+   was returning - the hill turned out to be sealed off on the nav grid - so the stub
+   hid the bug instead of finding it. On the first build of this mode it produced: 12
+   bots, mean distance 21m, zero ever inside the ring. */
 {
   // seeded, so a red build is a real regression rather than an unlucky afternoon
   let seed = 20260923;
@@ -359,17 +360,16 @@ function run(G, secs, dt){
 
   const sctx = vm.createContext({ Math: simMath, console });
   const FN = ['B','circleRect','moveEnt','hasLOS','hostile','nearestEnemy','setTarget',
+              'buildNav','navCell','navFree','nearestFreeCell','findPath','navClear','safePoint',
               'pickTarget','kothPost','kothWorthChasing','stepHill','botThink'];
   vm.runInContext(
-    'let G = null, hillDisc = null, hillRing = null, hillCol = null;\n'
+    'let G = null, NAV = null, hillDisc = null, hillRing = null, hillCol = null;\n'
     + 'const EYE = 1.6;\n'
     + 'const THREE = { Vector3: function(x,y,z){ this.x=x; this.y=y; this.z=z;\n'
     + '  this.normalize = function(){ return this; }; } };\n'
-    + 'function findPath(){ return null; }\n'
-    + 'function navClear(){ return true; }\n'
     + 'function fire(){}\nfunction startReload(){}\nfunction banner(){}\n'
-    + 'function safePoint(x, z){ return [x, z]; }\n'
-    + ['AW','MAPS','KOTH_TEAMS','KOTH_TARGET','KOTH_LOCK','KOTH_SQUAD','KOTH_LEASH','TEAM_COL']
+    + ['AW','MAPS','KOTH_TEAMS','KOTH_TARGET','KOTH_LOCK','KOTH_SQUAD','KOTH_LEASH','TEAM_COL',
+       'NAVCELL','NAVDIRS']
         .map(liftConst).join('\n') + '\n'
     + FN.map(lift).join('\n'), sctx);
 
@@ -390,18 +390,28 @@ function run(G, secs, dt){
               spread:0.02, bspd:60, pellets:1, crit:0, abilities:new Set() } });
     }
   }
-  vm.runInContext('(function(g){ G = g; })', sctx)(G2);
+  vm.runInContext('(function(g){ G = g; buildNav(g.map); })', sctx)(G2);
   const think = vm.runInContext('(function(e,d){ botThink(e,d); })', sctx);
   const tick  = vm.runInContext('(function(d){ stepHill(d); })', sctx);
 
   const HH = G2.hill, sdt = 1/30;
   const start = G2.ents.map(e => Math.hypot(e.x-HH.x, e.z-HH.z))
                        .reduce((a,b)=>a+b,0) / G2.ents.length;
+  let trail = 0, frames = 0;
   for(let i = 0; i < 30/sdt; i++){
     G2.elapsed += sdt;
+    const was = G2.ents.map(e => ({x:e.x, z:e.z}));
     for(const e of G2.ents) think(e, sdt);
     tick(sdt);
+    // over the back half, once they have arrived, how fast are they actually running?
+    if(G2.elapsed > 15){
+      G2.ents.forEach((e, k) => {
+        if(Math.hypot(e.x-HH.x, e.z-HH.z) > HH.r) return;   // only bots on the point
+        trail += Math.hypot(e.x-was[k].x, e.z-was[k].z); frames++;
+      });
+    }
   }
+  const holdSpeed = frames ? trail / (frames * sdt) : 0;
   const ds = G2.ents.map(e => Math.hypot(e.x-HH.x, e.z-HH.z));
   const mean = ds.reduce((a,b)=>a+b,0) / ds.length;
   const inside = ds.filter(d => d <= HH.r).length;
@@ -420,6 +430,13 @@ function run(G, secs, dt){
      mean < 8);
   ok('they ring the point rather than stacking on one bearing (clump '
      + clump.toFixed(2) + ')', clump < 0.8);
+  /* Holding a point is not sprinting on the spot. The steering vector is normalised
+     before the speed is applied, so terms that cancel to nearly nothing still used to
+     come out as a full-speed run across the same metre - 24m of travel in five seconds
+     for no ground gained. Bots on the point should be moving at a fraction of their
+     4.8m/s, not all of it. */
+  ok('bots holding the point are not running flat out (' + holdSpeed.toFixed(1) + 'm/s)',
+     holdSpeed > 0.05 && holdSpeed < 2.6);
 }
 
 /* ---- 6. the setup menu tiles evenly, and the hill map stays in its mode ---------- */
@@ -445,6 +462,47 @@ function run(G, secs, dt){
     } else {
       ok(m.id + ' is never offered a hill map', offered.every(mm => !mm.hill));
     }
+  }
+}
+/* ---- 7. the pathfinder can reach the hill ----------------------------------------
+   The nav grid is 1m cells with 0.55 clearance and findPath refuses to cut corners, so
+   a gap that is only diagonally connected is not a gap - it is a wall. The first cut of
+   Crucible had four of those and the hill was sealed: not one path in or out, from
+   anywhere. findPath returned null every time, every bot fell back to steering straight
+   at the point, and they piled up against the inner bars. Nothing threw, and the map
+   looks perfectly open in a top-down render. So: actually pathfind it. */
+{
+  const nctx = vm.createContext({ Math, console });
+  vm.runInContext('let NAV = null;\n'
+    + ['AW','MAPS','NAVCELL','NAVDIRS'].map(liftConst).join('\n') + '\n'
+    + ['B','circleRect','buildNav','navCell','navFree','nearestFreeCell','findPath','navClear']
+        .map(lift).join('\n'), nctx);
+  const nMAPS = vm.runInContext('MAPS', nctx);
+  const path = vm.runInContext('findPath', nctx);
+  for(const map of nMAPS.filter(m => m.hill)){
+    vm.runInContext('(function(m){ buildNav(m); })', nctx)(map);
+    const H = map.hill;
+    const lens = [];
+    for(const t of TEAMS){
+      for(const p of map.teamSpawns[t]){
+        const route = path(p[0], p[1], H.x, H.z);
+        ok(map.id + ': ' + t + ' can path from ' + p + ' to the hill',
+           !!(route && route.length));
+        if(route && route.length) lens.push(route.length);
+      }
+    }
+    ok(map.id + ': the hill can be left again as well as reached',
+       !!(path(H.x, H.z, map.teamSpawns[TEAMS[0]][0][0], map.teamSpawns[TEAMS[0]][0][1]) || {}).length);
+    // and no team's route is meaningfully longer than anyone else's
+    if(lens.length){
+      const lo = Math.min(...lens), hi = Math.max(...lens);
+      ok(map.id + ': every team has a comparable route in (' + lo + '-' + hi + ' waypoints)',
+         hi - lo <= 6);
+    }
+    // the ring gaps have to be ORTHOGONALLY connected, not just diagonally
+    const cell = vm.runInContext('navCell', nctx), free = vm.runInContext('navFree', nctx);
+    const [hx, hy] = cell(H.x, H.z);
+    ok(map.id + ': the centre of the hill is standable', free(hx, hy));
   }
 }
 

@@ -1781,9 +1781,14 @@ const MAPS = [
      checks it rather than trusting the numbers. The four inner bars form a broken ring just
      OUTSIDE the hill with the gaps on the diagonals - which is exactly where the four
      spawn corners feed in - so every team arrives down a lane instead of walking into
-     open ground, and the hill itself stays a fight rather than a sniper's dinner. */
+     open ground, and the hill itself stays a fight rather than a sniper's dinner.
+
+     The bars are 6 long, not 8. At 8 the corner gaps were only wide enough to connect
+     DIAGONALLY on the 1m nav grid, and findPath refuses to cut corners - so the hill
+     was sealed: not one path in or out, every bot fell back to steering straight at it
+     and wedged against a bar. koth.test.js now pathfinds from every spawn. */
   { id:'crucible', name:'CRUCIBLE', floor:0x14181E, wall:0x36404E, fog:0x090C11, accent:0x8FE9FF, fogd:66,
-    walls:[ B(26,13.4,8,1.4,2.4), B(26,25.2,8,1.4,2.4), B(22.6,16,1.4,8,2.4), B(36,16,1.4,8,2.4),
+    walls:[ B(27,13.4,6,1.4,2.4), B(27,25.2,6,1.4,2.4), B(22.6,17,1.4,6,2.4), B(36,17,1.4,6,2.4),
             B(12,8,6,1.5), B(42,8,6,1.5), B(12,30.5,6,1.5), B(42,30.5,6,1.5),
             B(10,17,1.5,6), B(48.5,17,1.5,6), B(28,2,4,1.5), B(28,36.5,4,1.5) ],
     spawns:[[4,4],[56,4],[4,36],[56,36],[30,6],[30,34],[4,20],[56,20]],
@@ -3966,7 +3971,7 @@ function respawn(e){
   if(e.isPlayer){ hideDeathCard(); G.killcam = null; }
   e.burnT=0; e.slowT=0; e.burnSrc=null; e.burnSpread=false; e.target=null; e.alertSrc=null; e.alertT=0;
   e.reactT=0; e.seenT=0; e.path=null; e.stuckT=0; e.wantAim=false; e.aimT=0;
-  e.postA = undefined;   // a new life picks a new angle onto the point
+  e.postA = undefined; e.atPost = false;   // a new life picks a new angle onto the point
   const s = (G.mode==='koth' && G.map.teamSpawns) ? teamSpawn(G.map, e.team)
                                                   : farSpawn(G.map, e.team);
   e.x=s[0]; e.z=s[1];
@@ -4237,7 +4242,13 @@ function botThink(e, dt){
     e.wantAim = false;
     if(post){
       const pd = Math.hypot(post.x-e.x, post.z-e.z);
-      if(pd > 1.1){
+      /* Hysteresis. With one threshold a bot crosses it, stops, drifts back over it,
+         sets off again - forever. That ping-pong is what read as jitter on the point.
+         You commit to a post once you reach it and only set off when it has genuinely
+         moved away from you. */
+      if(e.atPost && pd > 2.2) e.atPost = false;
+      else if(!e.atPost && pd <= 1.0) e.atPost = true;
+      if(!e.atPost){
         e.pathT = (e.pathT||0) - dt;
         const stale = !e.path || !e.path.length || e.pathT <= 0 ||
           (e.pathGoal && Math.hypot(post.x-e.pathGoal.x, post.z-e.pathGoal.z) > 2.5);
@@ -4259,11 +4270,17 @@ function botThink(e, dt){
         wantMove = true; moveEnt(e, mx/ml*sp*dt, mz/ml*sp*dt);
         faceAng = Math.atan2(mz,mx);
       } else {
-        // at the post: small movement and eyes outward, the way someone holding a
-        // point watches the approaches rather than staring at their own feet
+        /* Holding the point: ease onto the post, then STAND and watch outward. The
+           first version nudged in a random direction every frame, which is a metre a
+           second of travel that goes nowhere - the walk cycle runs off distance
+           actually covered, so it played at full amplitude while the bot stayed put.
+           That is the walking-on-the-spot. The post itself drifts every few seconds,
+           which is where the repositioning comes from. */
         e.path = null;
-        e.wanderA += (Math.random()-0.5)*2.2*dt;
-        moveEnt(e, Math.cos(e.wanderA)*sp*0.22*dt, Math.sin(e.wanderA)*sp*0.22*dt);
+        if(pd > 0.45){
+          wantMove = true;
+          moveEnt(e, (post.x-e.x)/pd*sp*0.35*dt, (post.z-e.z)/pd*sp*0.35*dt);
+        }
         faceAng = Math.atan2(e.z - H.z, e.x - H.x);
       }
     } else {
@@ -4306,7 +4323,13 @@ function botThink(e, dt){
             <= (e.x-H.x)*(e.x-H.x) + (e.z-H.z)*(e.z-H.z);
         if(keeps){ mvx += bx; mvz += bz; }
       }
-      if(!e.grunt){ mvx += Math.cos(ang+Math.PI/2)*e.strafe*0.8; mvz += Math.sin(ang+Math.PI/2)*e.strafe*0.8; }
+      /* Circle-strafing has to have somewhere to go. At knife range on a crowded
+         point, giving ground is already disallowed, so a full-weight strafe just runs
+         the bot flat out back and forth across the same metre - measured, 24m of
+         travel in five seconds for no ground gained, which is the shuffling on the
+         point. Close in, plant and shoot instead. */
+      const room = post ? Math.max(0.25, Math.min(1, dist / Math.max(1, ideal*0.6))) : 1;
+      if(!e.grunt){ mvx += Math.cos(ang+Math.PI/2)*e.strafe*0.8*room; mvz += Math.sin(ang+Math.PI/2)*e.strafe*0.8*room; }
       /* Fight toward the point instead of wherever the duel happens to drift. The
          pull grows with distance from the post, so it is a lean while you are on the
          hill and a march while you are not - you close on the objective and trade
@@ -4320,7 +4343,17 @@ function botThink(e, dt){
       }
       const ml = Math.hypot(mvx,mvz);
       const msp = sp * (1 - e.aimT*0.4); // steady hands, slow feet — same trade as the player
-      if(ml > 0.01){ wantMove = true; moveEnt(e, mvx/ml*msp*dt, mvz/ml*msp*dt); }
+      /* The steering vector was normalised and then driven at FULL speed, so the
+         magnitude - how much the bot actually wanted to move - was thrown away. Damping
+         a component only rotated the result; it could never slow anyone down. That is
+         the mechanism behind jogging on the spot: terms cancelling to nearly nothing,
+         then being renormalised to a full-speed sprint across the same metre.
+         Scoped to KotH for now so the other modes keep exactly the feel they have. */
+      const drive = post ? Math.max(0, Math.min(1, ml)) : 1;
+      if(ml > 0.01 && drive > 0.12){
+        wantMove = drive > 0.3;   // a shuffle is not walking; do not ask stuck-recovery to fix it
+        moveEnt(e, mvx/ml*msp*drive*dt, mvz/ml*msp*drive*dt);
+      }
     } else {
       // No reliable sight. In KotH the destination is the point, not the man: hunting
       // someone through a wall is how eight bots end up anywhere but the middle.
@@ -4526,7 +4559,10 @@ function kothPost(e, dt){
   // hold the rim while it is ours, push to the middle while it is not - both inside
   // the ring, because standing next to the point scores exactly nothing
   const defend = H.owner === e.team && !H.contested;
-  const rr = H.r * (defend ? 0.72 + e.postR*0.28 : e.postR*0.9);
+  // Attackers used the inner third of the disc, so eight bodies converged on the
+  // middle and stood on each other. Both bands now sit out toward the rim, still
+  // comfortably inside the ring that pays.
+  const rr = H.r * (defend ? 0.72 + e.postR*0.28 : 0.45 + e.postR*0.45);
   return { x: H.x + Math.cos(e.postA)*rr, z: H.z + Math.sin(e.postA)*rr, defend };
 }
 /* Is this target worth leaving the point for? nearestEnemy has no range limit and no
