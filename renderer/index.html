@@ -472,7 +472,8 @@ let ACCOUNT = { online: false, uid: null };
 // map a DB parts row -> in-game part object
 function partFromRow(r){
   return { uid: r.uid, weapon: r.weapon_id, slot: r.slot, rarity: r.rarity,
-           name: r.name, mods: r.mods || {}, ability: r.ability || null, set: r.set_id || null };
+           name: r.name, mods: r.mods || {}, ability: r.ability || null, set: r.set_id || null,
+           got: r.created_at ? Date.parse(r.created_at) : undefined };
 }
 
 // Every economy mutation goes through a security-definer RPC now: the client
@@ -612,7 +613,11 @@ async function loadCloudProfile(){
   }
   const row = rows[0];
   // load my parts
-  const partRows = await sbSelect('parts?select=*&owner_id=eq.'+row.id);
+  // ORDER BY, because there wasn't one. Postgres is free to return rows in whatever
+  // order the plan produces, and that order changes as rows are updated - so the
+  // locker came back shuffled on every load and "newest" meant nothing.
+  const partRows = await sbSelect('parts?select=*&owner_id=eq.'+row.id
+    + '&order=created_at.asc,uid.asc');
   const inventory = partRows.map(partFromRow);
   // equipped map lives in the player row (jsonb) so a loadout survives across devices
   const equipped = row.equipped || {};
@@ -894,7 +899,7 @@ function scaleMods(mods, rarity){
 }
 function makePart(weapon, slot, rarity, tpl, ability=null, setId=null){
   return { uid:uid(), weapon, slot, rarity, name:tpl.name,
-           mods:scaleMods(tpl.mods, rarity), ability, set:setId };
+           mods:scaleMods(tpl.mods, rarity), ability, set:setId, got: Date.now() };
 }
 /* Mirrors pickSetWeighted in loadout-core.js. Drop weight ~ piece count, so a
    4-piece set is not punished twice: once for needing more pieces, again for each
@@ -1467,9 +1472,19 @@ const INV_SORTS = [
   ['obtained','NEWEST'], ['name','NAME'], ['rarity','RARITY'], ['type','TYPE'],
 ];
 function invSorted(items){
-  // `obtained` has no timestamp to sort on - parts are appended as they arrive,
-  // so position in the array IS the acquisition order. Newest first.
+  /* "Newest" used to mean position in P.inventory, on the assumption that parts are
+     only ever appended. They are not:
+       - the cloud profile load fetched parts with NO ORDER BY, so the locker came
+         back in a different order on every load;
+       - a returned auction listing is re-appended, which made an old part look like
+         the newest thing you own;
+       - buying and scrapping shuffle the tail.
+     parts.created_at has existed since the first migration and was simply never
+     selected. It is now carried on the part as `got` and sorted on directly. Array
+     position is kept only as the tiebreak and as the fallback for parts saved before
+     the field existed, so old local profiles still order sensibly. */
   const idx = new Map(P.inventory.map((p, i) => [p.uid, i]));
+  const got = p => (typeof p.got === 'number' && isFinite(p.got)) ? p.got : null;
   const rank = p => RKEYS.indexOf(p.rarity);           // common 0 -> legendary 4
   const slotRank = p => SLOTS.indexOf(p.slot);
   const byName = (a, b) => a.name.localeCompare(b.name);
@@ -1477,7 +1492,13 @@ function invSorted(items){
   if(invSort === 'name')        out.sort((a,b) => byName(a,b) || rank(b) - rank(a));
   else if(invSort === 'rarity') out.sort((a,b) => rank(b) - rank(a) || byName(a,b));
   else if(invSort === 'type')   out.sort((a,b) => slotRank(a) - slotRank(b) || rank(b) - rank(a) || byName(a,b));
-  else                          out.sort((a,b) => idx.get(b.uid) - idx.get(a.uid));
+  else out.sort((a,b) => {
+    const ga = got(a), gb = got(b);
+    if(ga !== null && gb !== null && ga !== gb) return gb - ga;   // newest first
+    if(ga !== null && gb === null) return -1;   // a stamped part postdates an unstamped one
+    if(ga === null && gb !== null) return 1;
+    return idx.get(b.uid) - idx.get(a.uid);
+  });
   return out;
 }
 function pagerHtml(total, pages){
