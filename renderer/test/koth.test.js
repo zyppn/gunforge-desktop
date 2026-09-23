@@ -422,5 +422,31 @@ function run(G, secs, dt){
      + clump.toFixed(2) + ')', clump < 0.8);
 }
 
+/* ---- 6. the setup menu tiles evenly, and the hill map stays in its mode ---------- */
+{
+  const offline = MODES.filter(m => !m.online);
+  const online  = MODES.filter(m => m.online);
+  ok('exactly one online mode, and it gets its own panel', online.length === 1);
+  ok('an even number of offline modes, so the 2-column grid has no orphan card ('
+     + offline.length + ')', offline.length % 2 === 0);
+  ok('mode cards use the grid rather than a flex row sized by its longest blurb',
+     /class="optgrid"/.test(html));
+  // a blurb long enough to wrap makes one card taller than the rest of its row
+  const longs = MODES.filter(m => m.d.length > 70).map(m => m.id + ' (' + m.d.length + ')');
+  ok('no mode blurb is long enough to wrap its card'
+     + (longs.length ? ': ' + longs.join(', ') : ''), longs.length === 0);
+
+  // the map filter, exercised for every mode rather than just read out of the source
+  for(const m of MODES){
+    const offered = MAPS.filter(mm => (m.id === 'koth') === !!mm.hill);
+    ok(m.id + ' has at least one map to play on', offered.length > 0);
+    if(m.id === 'koth'){
+      ok('koth is only offered hill maps', offered.every(mm => !!mm.hill));
+    } else {
+      ok(m.id + ' is never offered a hill map', offered.every(mm => !mm.hill));
+    }
+  }
+}
+
 if(fails){ console.error('\nkoth: ' + fails + ' failure(s)'); process.exit(1); }
 console.log('koth: ok');

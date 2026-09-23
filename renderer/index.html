@@ -178,6 +178,13 @@
 
   /* ---------- setup ---------- */
   .optrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+  /* Mode cards go in a grid, not a wrapping flex row. Sized to their own text they
+     came out all different widths - the longest description decided how big a card
+     was - and the odd one out dangled on a half-empty row. */
+  .optgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px}
+  .optgrid.one{grid-template-columns:1fr}
+  .optgrid .opt{min-width:0}
+  @media (max-width:760px){ .optgrid{grid-template-columns:1fr} }
   .opt{border:1px solid var(--line);background:var(--panel2);padding:12px 16px;cursor:pointer;min-width:160px}
   .opt:hover{border-color:var(--brass)}
   .opt.sel{border-color:var(--brass);background:#22190C}
@@ -1797,15 +1804,19 @@ const KOTH_LEASH  = 18;    // how far a bot will chase before the point wins
 
 const CLIENT_BUILD = 'live-27';
 const MODES = [
-  {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 eliminations or best score at 3:00.'},
+  {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 kills or top score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
-  {id:'koth', name:'KING OF THE HILL',d:'Four-way. Blue, red, green and yellow fight over one hill. Hold it alone to score. First to 150.'},
+  {id:'koth', name:'KING OF THE HILL',d:'Four teams, one hill. Hold it alone to score. First to 150.'},
   {id:'camp', name:'CAMPAIGN',       d:'PvE. Survive 8 escalating waves of hostiles. One life per run.'},
-  {id:'live', name:'LIVE ARENA',     d:'Online PvP against real operators. Server-authoritative. First to 20.'},
+  // online:true pulls it out of the offline grid and into its own panel below, so
+  // four local modes tile evenly instead of leaving a fifth card on a row of two
+  {id:'live', name:'LIVE ARENA',     d:'Online PvP against real operators. Server-authoritative. First to 20.', online:true},
 ];
 let setupSel = {mode:'ffa', map:'foundry'};
 function openSetup(){
-  const modeRow = MODES.map(m=>'<div class="opt '+(setupSel.mode===m.id?'sel':'')+'" onclick="setupSel.mode=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div><div class="d">'+m.d+'</div></div>').join('');
+  const modeCard = m => '<div class="opt '+(setupSel.mode===m.id?'sel':'')+'" onclick="setupSel.mode=\''+m.id+'\';openSetup()"><div class="t">'+m.name+'</div><div class="d">'+m.d+'</div></div>';
+  const modeRow = MODES.filter(m=>!m.online).map(modeCard).join('');
+  const liveRow = MODES.filter(m=>m.online).map(modeCard).join('');
   // A map with a hill is a King of the Hill map and is offered nowhere else: its
   // layout only makes sense around the point, and the other modes have no hill to run.
   const mapsFor = MAPS.filter(m => (setupSel.mode === 'koth') === !!m.hill);
@@ -1814,7 +1825,8 @@ function openSetup(){
   const L = computeLoadout();
   document.querySelector('#setup').innerHTML =
    '<div class="eyebrow">Deployment</div><h2>Match Setup</h2>'
-   +'<div class="panel" style="margin-top:12px"><div class="eyebrow">Game mode</div><div class="optrow">'+modeRow+'</div></div>'
+   +'<div class="panel" style="margin-top:12px"><div class="eyebrow">Game mode</div><div class="optgrid">'+modeRow+'</div></div>'
+   +'<div class="panel"><div class="eyebrow">Online</div><div class="optgrid one">'+liveRow+'</div></div>'
    +'<div class="panel"><div class="eyebrow">Map</div><div class="optrow">'+mapRow+'</div></div>'
    +(setupSel.mode==='live'
       ? '<div class="panel"><div class="eyebrow">Live server</div>'
