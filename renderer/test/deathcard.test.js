@@ -23,6 +23,10 @@ function lift(name){
 }
 const core = require('../../server/loadout-core.js');
 const ABILITIES = { deadeye:{n:'Deadeye'}, vampiric:{n:'Vampiric Coating'}, swift:{n:'Featherweight'} };
+const RCOL = {common:0x9BA8B0, uncommon:0x5FBF6E, rare:0x4C9BE8, epic:0xB463E8, legendary:0xE8A33D};
+// the renderer's SETS, which unlike loadout-core's carry a display name
+const SETS = [{id:'ghost', name:'Ghost Protocol', rarity:'legendary'},
+              {id:'dragon', name:'Dragonfire', rarity:'epic'}];
 const el = { innerHTML:'', classList:{ _on:false, add(){ this._on = true; }, remove(){ this._on = false; } } };
 const sandbox = {
   document: { getElementById: id => id === 'deathcard' ? el : null },
@@ -31,12 +35,21 @@ const sandbox = {
   G: { elapsed: 0 },
   deathCardUntil: 0,
   DC_SLOTS: ['frame','barrel','magazine','foregrip','stock','optic'],
+  DC_MODABBR: {dmg:'DMG', rof:'ROF', mag:'MAG', reload:'RLD', spread:'SPR', speed:'SPD'},
+  DC_LOWER_BETTER: {spread:1, reload:1},
+  DC_W: 400, RCOL, SETS,
   headToHead: new Map(),
 };
+// no THREE in here, so killWeaponDiagram bails and the card takes its text fallback -
+// which is the point: losing WebGL must not cost you the name of whoever killed you
 const vm = require('vm');
 vm.createContext(sandbox);
 vm.runInContext([lift('showDeathCard'), lift('hideDeathCard'),
-                 lift('noteKill'), lift('resetHeadToHead')].join(';'), sandbox);
+                 lift('noteKill'), lift('resetHeadToHead'),
+                 lift('dcHeight'), lift('dcRollText'), lift('dcLayout'),
+                 lift('killWeaponDiagram'), lift('dcKey'), lift('esc'), lift('RCOL_CSS'),
+                 'let dcRenderer = null, dcGLDead = false; const dcCache = new Map();'
+                 ].join(';'), sandbox);
 
 console.log('A FULL BUILD');
 {
@@ -254,6 +267,144 @@ console.log('\nHIDE');
   check('the viewmodel is hidden while dead', /vm\.visible = !me\.dead/.test(html));
   check('the HUD gets a dead state', /classList\.toggle\('dead'/.test(html) &&
         /#hud\.dead #hudbr/.test(html));
+}
+
+/* ---- THE WEAPON DIAGRAM ---------------------------------------------------------
+   The card now draws the killer's actual gun and runs a leader line from each part to
+   the metal it names. There is no WebGL in here, so the render itself is stubbed and
+   these exercise the two halves that decide whether the picture is legible: where the
+   labels go, and what they say. */
+console.log('\nMOD ROLLS');
+{
+  const t = sandbox.dcRollText({dmg:0.11, spread:0.05});
+  check('a roll is abbreviated, not spelled out', t.includes('DMG') && t.includes('SPR'));
+  check('and shown as whole percent', t.includes('11%') && t.includes('5%'));
+  check('a damage gain reads as a gain', /class="up"[^>]*>\+11% DMG/.test(t));
+  /* Lower is better for spread and reload, so judging by the raw sign would paint
+     every good roll red. This is the one thing in the formatter that can be wrong
+     while still looking plausible. */
+  check('MORE spread reads as a loss', /class="dn"[^>]*>\+5% SPR/.test(t));
+  check('LESS spread reads as a gain', /class="up"/.test(sandbox.dcRollText({spread:-0.05})));
+  check('a faster reload reads as a gain', /class="up"/.test(sandbox.dcRollText({reload:-0.06})));
+  check('a slower reload reads as a loss', /class="dn"/.test(sandbox.dcRollText({reload:0.06})));
+  check('zero mods produce nothing', sandbox.dcRollText({dmg:0}) === '' && sandbox.dcRollText(null) === '');
+}
+
+console.log('\nDIAGRAM HEIGHT');
+{
+  const h = n => sandbox.dcHeight(n);
+  check('a bare weapon gets a short box', h(0) < h(1));
+  check('and the box grows with the parts on it', h(6) > h(3) && h(3) > h(1));
+  check('but only per ROW, since labels sit two abreast', h(1) === h(2) && h(3) === h(4));
+  check('six parts still fit in a sane overlay', h(6) <= 220);
+}
+
+console.log('\nLABEL LAYOUT');
+{
+  const A = {}, eq = {};
+  // every part bunched on the left of the frame: the pathological case
+  for(const sl of sandbox.DC_SLOTS){
+    eq[sl] = { name:sl.toUpperCase(), rarity:'common' };
+    A[sl] = { x: 30, y: 20 };
+  }
+  const cal = sandbox.dcLayout(eq, A, 400, 200);
+  check('every fitted part gets a callout', cal.length === 6);
+  /* Six labels down one edge would run off the card. Whichever side is over quota
+     hands back its most central part. */
+  const l = cal.filter(c => c.side === 'l').length;
+  check('the columns are balanced even when the parts are not', l === 3, l + ' on the left');
+  for(const side of ['l','r']){
+    const ys = cal.filter(c => c.side === side).map(c => c.y).sort((a,b)=>a-b);
+    let minGap = 1e9;
+    for(let i = 1; i < ys.length; i++) minGap = Math.min(minGap, ys[i] - ys[i-1]);
+    check('no two ' + side + ' labels land on top of each other', minGap > 40, 'gap ' + minGap);
+    check('and they stay inside the box on the ' + side,
+          ys[0] > 0 && ys[ys.length-1] < 200);
+  }
+}
+{
+  const cal = sandbox.dcLayout({ barrel:{name:'X', rarity:'rare'} },
+                               { barrel:{x:200,y:50}, stock:{x:80,y:50} }, 400, 160);
+  check('an empty slot gets no callout at all', cal.length === 1);
+  check('and a part with nowhere to point gets none either',
+        sandbox.dcLayout({ optic:{name:'Y'} }, {}, 400, 160).length === 0);
+}
+
+console.log('\nTHE CARD, WITH A DIAGRAM');
+{
+  // stub the render; the anchors are what the layout and the lines are built from
+  sandbox.killWeaponDiagram = (wid, eq, W, H) => ({
+    url: 'data:image/png;base64,STUB',
+    anchors: { frame:{x:190,y:80}, barrel:{x:250,y:70}, magazine:{x:200,y:110},
+               foregrip:{x:225,y:100}, stock:{x:150,y:80}, optic:{x:195,y:55} },
+  });
+  const eq = {
+    barrel:  { name:'Ghost Bore', rarity:'legendary', set:'ghost', mods:{dmg:0.14} },
+    optic:   { name:'Ghost Lens', rarity:'legendary', set:'ghost', mods:{spread:-0.08} },
+    foregrip:{ name:'Angled Grip', rarity:'rare', ability:'vampiric', mods:{rof:0.03} },
+  };
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'ls1', eq, dist:12 });
+  const h = sandbox.document.getElementById('deathcard').innerHTML;
+  check('the gun is drawn', h.includes('dc-diag') && h.includes('data:image/png;base64,STUB'));
+  check('the weapon is still named', h.includes('LS-1 Longshot'));
+  check('one leader line per part', (h.match(/<path /g) || []).length === 3);
+  check('and a dot on the part it points at', (h.match(/<circle /g) || []).length === 3);
+  check('part names carry their rarity', (h.match(/data-r="legendary"/g) || []).length === 2);
+  check('rolls ride along under the name', h.includes('DMG') && h.includes('SPR'));
+  check('abilities are named but not explained',
+        h.includes('Vampiric Coating') && !h.includes('Heal for'));
+  /* The ask was explicitly "no text if it is not active" - an inactive set is not
+     worth a line on a card you read in four seconds. */
+  check('an ACTIVE set is named and marked active',
+        /Ghost Protocol: <b>active<\/b>/.test(h));
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'ls1',
+    eq:{ barrel:{name:'Ghost Bore', rarity:'legendary', set:'ghost'} }, dist:12 });
+  check('one piece of a two-piece set says nothing at all',
+        !sandbox.document.getElementById('deathcard').innerHTML.includes('active'));
+  sandbox.showDeathCard({ name:'ZYPPN', wid:'m17', eq:{}, dist:3 });
+  check('a stock weapon says so instead of drawing six empty lines',
+        sandbox.document.getElementById('deathcard').innerHTML.includes('No parts fitted'));
+  sandbox.killWeaponDiagram = () => null;
+}
+
+console.log('\nWIRING, DIAGRAM');
+{
+  /* The three slot builders that append a GROUP rather than loose meshes had every
+     one of their meshes left untagged, so half the callouts silently vanished. */
+  check('slot tagging walks the subtree, not just the top level',
+        /function vmTag\([\s\S]{0,900}?traverse\(o => \{ o\.userData\.slot = slot; \}\)/.test(html));
+  for(const sl of ['frame','barrel','magazine','foregrip','stock','optic'])
+    check('  ' + sl + ' is built inside a vmTag', html.includes("vmTag('" + sl + "'"));
+  /* Geometry has to be measured before it is disposed, and disposed at all: an
+     undisposed weapon per death leaks for the whole session. */
+  const dispose = html.indexOf('o.geometry.dispose()');
+  const project = html.indexOf('.project(cam)');
+  check('the anchors are projected BEFORE the geometry is freed',
+        project > 0 && dispose > project);
+  /* "contains the string dispose()" is not the claim - a dispose behind if(false)
+     satisfies that and still leaks a weapon per death. */
+  check('and the geometry IS freed', /if\(o\.geometry\) o\.geometry\.dispose\(\);/.test(html)
+        && /m\.forEach\(x => x && x\.dispose && x\.dispose\(\)\)/.test(html));
+  check('the diagram is cached, so a rematch does not re-render it',
+        /dcCache\.set\(ck, out\)/.test(html) && /dcCache\.has\(ck\)/.test(html));
+  check('the cache cannot grow without bound', /dcCache\.size > \d+\) dcCache\.clear/.test(html));
+  /* Orthographic is not a style choice: under perspective the projected centre of a
+     part at the muzzle sits off the pixels the line is pointing at. */
+  check('the diagram camera is orthographic', /OrthographicCamera/.test(html));
+  check('losing WebGL still leaves a readable card',
+        /dcGLDead = true/.test(html) && /} else \{\s*\n\s*for\(const sl of DC_SLOTS\)/.test(html));
+  /* Set pieces roll random mods, so the name cannot reproduce them and the wire has
+     to carry them or live kills show a set piece with no numbers. */
+  const srv = fs.readFileSync(path.join(__dirname, '../../server/index.js'), 'utf8');
+  check('the live wire carries part mods', /mods: 'string'/.test(srv) && /ps\.mods = LoadoutCore\.encodeMods/.test(srv));
+  check('and the client decodes them into the card',
+        /mods: LoadoutCore\.decodeMods\(q\.mods\)/.test(html));
+  const r = core.decodeMods(core.encodeMods({dmg:0.105, spread:-0.058, mag:0}));
+  check('the codec round-trips a roll exactly',
+        r.dmg === 0.105 && r.spread === -0.058 && !('mag' in r));
+  check('and drops anything it does not recognise',
+        !('junk' in core.decodeMods('junk:9,dmg:50')) && core.decodeMods('junk:9,dmg:50').dmg === 0.05);
+  check('an absent mods string decodes to nothing', Object.keys(core.decodeMods('')).length === 0);
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all death card checks passed'));

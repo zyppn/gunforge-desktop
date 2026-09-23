@@ -330,6 +330,39 @@ const SHIELD_SOAK = 0.75;
      Shared with the client rather than duplicated: the client banks stats when it
      is offline and the server banks them when it is not, and the two disagreeing
      is how you get a K/D that depends on your connection. */
+  /* Part mods, small enough to sit in a Colyseus string field.
+
+     They cannot be derived from the part's name on the receiving end: a set piece
+     takes its mods from a RANDOM template of its slot, so two "Ghost Bore" barrels
+     are genuinely different guns. Without this the death card could show a killer's
+     set pieces with no numbers on them, which are exactly the ones worth seeing.
+
+     Thousandths as integers - mods are already rounded to 3 places by scaleMods, so
+     this is lossless and about a third the characters of the decimals. */
+  const MOD_KEYS = ['dmg', 'rof', 'mag', 'reload', 'spread', 'speed'];
+  function encodeMods(mods){
+    if(!mods) return '';
+    const out = [];
+    for(const k of MOD_KEYS){
+      const v = Number(mods[k]);
+      if(v) out.push(k + ':' + Math.round(v * 1000));
+    }
+    return out.join(',');
+  }
+  function decodeMods(str){
+    const out = {};
+    if(!str) return out;
+    for(const pair of String(str).split(',')){
+      const i = pair.indexOf(':');
+      if(i < 1) continue;
+      const k = pair.slice(0, i);
+      if(MOD_KEYS.indexOf(k) < 0) continue;       // never trust a key off the wire
+      const v = Number(pair.slice(i + 1));
+      if(isFinite(v) && v) out[k] = v / 1000;
+    }
+    return out;
+  }
+
   const KD_MODES = ['ffa', 'live'];
   function countsForKD(mode){ return KD_MODES.indexOf(String(mode || '')) >= 0; }
 
@@ -623,6 +656,7 @@ const SHIELD_SOAK = 0.75;
                 HE_SPLASH_FRAC, splashDamage, HOMING, JUGG_RESIST, SHIELD_SOAK,
                 AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
                 KD_MODES, countsForKD,
+                MOD_KEYS, encodeMods, decodeMods,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node

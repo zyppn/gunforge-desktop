@@ -54,7 +54,7 @@ function liftConst(n){
   if(i < 0) throw new Error('missing const ' + n);
   return html.slice(i + 1, html.indexOf(';', i) + 1);
 }
-const FNS = ['vmCyl','vmBox','mat','partMat','vmFrame','vmBarrel','vmMagazine','vmMagazineBody',
+const FNS = ['vmCyl','vmBox','vmTag','mat','partMat','vmFrame','vmBarrel','vmMagazine','vmMagazineBody',
   'vmForegrip','vmForegripBody','vmStock','vmStockBody','fitScale','vmOptic','buildGunModel',
   'aimBone','solveArm','fitGripZ','lerp','lerp3','poseUpper','mkArm','botMesh'];
 const CONSTS = ['RCOL','FIT_SPAN','ARM','GUN_HIP','GUN_ADS','POLE',

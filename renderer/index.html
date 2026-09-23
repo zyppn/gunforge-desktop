@@ -102,7 +102,7 @@
   /* Bottom left, not the middle: the killcam is showing you the person who
      killed you and the card must not sit on top of them. */
   #deathcard{position:absolute;left:26px;bottom:88px;
-    width:326px;background:rgba(12,15,18,.93);border:1px solid var(--line);
+    width:432px;background:rgba(12,15,18,.93);border:1px solid var(--line);
     padding:14px 16px 12px;opacity:0;pointer-events:none;transition:opacity .22s;
     z-index:70;backdrop-filter:blur(3px)}
   #deathcard.on{opacity:1}
@@ -132,6 +132,39 @@
   #deathcard .dc-count{margin-top:9px;border-top:1px solid var(--line);padding-top:8px;
     font-size:11px;letter-spacing:.14em;color:#8A96A0;text-transform:uppercase;text-align:center}
   #deathcard .dc-count b{color:var(--brass);font-size:14px;font-weight:700}
+  /* ---- the weapon diagram ---- */
+  #deathcard .dc-diag{position:relative;margin:2px 0 4px}
+  #deathcard .dc-diag img{display:block;width:100%;height:auto;image-rendering:auto}
+  #deathcard .dc-diag svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+  #deathcard .dc-diag svg path{fill:none;stroke:#46535F;stroke-width:1}
+  #deathcard .dc-diag svg circle{fill:#8A96A0}
+  /* Labels are absolutely placed against the same box the anchors were projected
+     into, so the line and the text cannot drift apart at different card widths. */
+  /* Wrapping, not nowrap. A three-mod roll - "+8% ROF -16% MAG -16% RLD" - is wider
+     than the column, and nowrap let it run straight off the edge of the card. Only
+     the part name is held on one line, because a wrapped proper noun reads as two. */
+  #deathcard .dc-cal{position:absolute;transform:translateY(-50%);line-height:1.25;
+    font-size:10.5px;white-space:normal;overflow-wrap:break-word}
+  #deathcard .dc-cal .nm{white-space:nowrap}
+  #deathcard .dc-cal.l{text-align:right}
+  #deathcard .dc-cal .sl{display:block;font-size:8.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:#6F7B85}
+  #deathcard .dc-cal .nm{display:block;font-weight:700;font-size:11px;color:var(--r-common)}
+  #deathcard .dc-cal.l .ro, #deathcard .dc-cal.l .ab{text-align:right}
+  #deathcard .dc-cal[data-r=uncommon] .nm{color:var(--r-uncommon)}
+  #deathcard .dc-cal[data-r=rare]      .nm{color:var(--r-rare)}
+  #deathcard .dc-cal[data-r=epic]      .nm{color:var(--r-epic)}
+  #deathcard .dc-cal[data-r=legendary] .nm{color:var(--r-legendary)}
+  #deathcard .dc-cal .ro{display:block;font-size:9px;letter-spacing:.02em;color:#7C8792}
+  #deathcard .dc-cal .ro i{font-style:normal}
+  #deathcard .dc-cal .ro i.up{color:#5FBF6E}
+  #deathcard .dc-cal .ro i.dn{color:#C9695F}
+  #deathcard .dc-cal .ab{display:block;font-size:9.5px;color:#7FB2E8}
+  #deathcard .dc-set{font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    text-align:center;margin:2px 0 8px}
+  #deathcard .dc-set b{font-weight:700}
+  #deathcard .dc-bare{font-size:10px;color:#6F7B85;text-align:center;margin:0 0 8px;
+    letter-spacing:.06em}
   .part{border:1px solid var(--line);border-left:4px solid var(--r-common);background:var(--panel2);padding:11px 12px;font-size:12px;
     display:flex;flex-direction:column}
   .part .phead{display:flex;gap:10px;align-items:flex-start}
@@ -2319,6 +2352,21 @@ let VMT = null; // current build target group
 let VMT_AIM = null, VMT_ADS = null; // set by vmOptic: aperture point + zoom/eye-distance
 function vmCyl(m, r, l, z, y){ const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 10), m); c.rotation.x = Math.PI/2; c.position.set(0, y===undefined?0.02:y, z); VMT.add(c); return c; }
 function vmBox(m, x, y, z, px, py, pz){ const b = new THREE.Mesh(new THREE.BoxGeometry(x, y, z), m); b.position.set(px, py, pz); VMT.add(b); return b; }
+/* Which slot built which metal. The slot builders all push into the same flat VMT
+   group, so the only thing that knows a mesh is part of the barrel is WHEN it was
+   added - record the range each builder appends and stamp it. The death card needs
+   this to point a line at the actual piece it is naming. */
+function vmTag(slot, build){
+  const from = VMT.children.length;
+  const r = build();
+  /* traverse, not just the top level: the magazine, foregrip and stock builders each
+     append a GROUP, so stamping only VMT's direct children tagged a container whose
+     meshes were all untagged - three of the six callouts silently had no anchor and
+     simply did not appear. */
+  for(let i = from; i < VMT.children.length; i++)
+    VMT.children[i].traverse(o => { o.userData.slot = slot; });
+  return r;
+}
 
 function buildGunModel(wid, eqOpt){
   const w = WEAPONS.find(x=>x.id===wid) || WEAPONS[0];
@@ -2330,7 +2378,8 @@ function buildGunModel(wid, eqOpt){
   const bodyD = w.type==='Pistol'?0.26 : w.type==='SMG'?0.36 : w.type==='Sniper'?0.6 : w.type==='LMG'?0.55 : 0.48;
   const bodyH = w.type==='LMG'?0.13:0.11;
   const bodyZ = -0.28, frontZ = bodyZ - bodyD/2, rearZ = bodyZ + bodyD/2;
-  const fr = vmFrame(eq.frame, w, bodyD, bodyH, bodyZ) || { topY: bodyH/2, bw: 0.045, botY: -bodyH/2, rearMidY: 0 };
+  const fr = vmTag('frame', () => vmFrame(eq.frame, w, bodyD, bodyH, bodyZ))
+             || { topY: bodyH/2, bw: 0.045, botY: -bodyH/2, rearMidY: 0 };
   const setCount = {};
   for(const s of SLOTS){ const pp = eq[s]; if(pp && pp.set) setCount[pp.set] = (setCount[pp.set]||0)+1; }
   const act = SETS.filter(st => st.weapon===w.id && (setCount[st.id]||0) >= st.need);
@@ -2344,11 +2393,11 @@ function buildGunModel(wid, eqOpt){
   VMT.add(accent);
 
   // slot components — standard geometry, or replaced by the equipped part's variant
-  const tipZ = vmBarrel(eq.barrel, w, frontZ);
-  const gripRear = vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY);
-  vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY, gripRear);
-  vmStock(eq.stock, w, rearZ, bodyH, fr.rearMidY, bodyD);
-  vmOptic(eq.optic, w, bodyZ, bodyH, bodyD, fr.topY);
+  const tipZ = vmTag('barrel', () => vmBarrel(eq.barrel, w, frontZ));
+  const gripRear = vmTag('foregrip', () => vmForegrip(eq.foregrip, w, frontZ, bodyD, bodyH, fr.botY));
+  vmTag('magazine', () => vmMagazine(eq.magazine, w, bodyZ, bodyD, bodyH, fr.botY, gripRear));
+  vmTag('stock', () => vmStock(eq.stock, w, rearZ, bodyH, fr.rearMidY, bodyD));
+  vmTag('optic', () => vmOptic(eq.optic, w, bodyZ, bodyH, bodyD, fr.topY));
 
   const g = VMT; VMT = null;
   return {group:g, tipZ, aim:VMT_AIM, ads:VMT_ADS};
@@ -3632,21 +3681,247 @@ function nearestEnemy(e){
    `eq` arrives here as a plain object in both modes - the live handler flattens
    the MapSchema before calling, so this function never has to know which. */
 const DC_SLOTS = ['frame','barrel','magazine','foregrip','stock','optic'];
+const DC_MODABBR = {dmg:'DMG', rof:'ROF', mag:'MAG', reload:'RLD', spread:'SPR', speed:'SPD'};
+/* Lower is better for these two, so the sign and the judgement disagree: -6% reload
+   is a buff. Colouring off the raw sign would paint every good roll red. */
+const DC_LOWER_BETTER = {spread:1, reload:1};
+function dcRollText(mods){
+  if(!mods) return '';
+  const out = [];
+  for(const k of (LoadoutCore.MOD_KEYS || Object.keys(mods))){
+    const v = Number(mods[k]);
+    if(!v) continue;
+    const good = DC_LOWER_BETTER[k] ? v < 0 : v > 0;
+    out.push('<i class="' + (good ? 'up' : 'dn') + '">'
+      + (v > 0 ? '+' : '\u2212') + Math.abs(Math.round(v * 100)) + '% ' + DC_MODABBR[k] + '</i>');
+  }
+  return out.join(' ');
+}
+
+/* The assembled weapon, rendered once, plus a screen-space anchor for every slot -
+   so the card can run a line from a label to the actual piece of metal it names.
+
+   Rendered to a data URL rather than a live canvas: the card is up for 4.5 seconds
+   during a respawn, and a second animating WebGL context competing with the match
+   for the GPU is not worth a slow rotation nobody is watching. It also means the
+   anchors are computed against a frame that cannot move under them. */
+let dcRenderer = null, dcGLDead = false;
+/* You die to the same operator with the same gun several times a match, and a build
+   only changes between matches. Keyed on what the picture actually depends on, so a
+   rematch costs nothing. Bounded, because a long Live Arena lobby is eight builds and
+   there is no reason to hold yesterday's. */
+const dcCache = new Map();
+function dcKey(wid, eq, W, Hpx, gunFrac){
+  let k = wid + '|' + W + 'x' + Hpx + '|' + gunFrac;
+  for(const sl of DC_SLOTS){
+    const p = eq && eq[sl];
+    k += '|' + (p ? sl + ':' + p.name + ':' + p.rarity + ':' + (p.set || '') : '');
+  }
+  return k;
+}
+function killWeaponDiagram(wid, eq, W, Hpx, gunFrac){
+  if(dcGLDead || typeof THREE === 'undefined' || !wid) return null;
+  const ck = dcKey(wid, eq, W, Hpx, gunFrac);
+  if(dcCache.has(ck)) return dcCache.get(ck);
+  try{
+    if(!dcRenderer){
+      const cv = document.createElement('canvas');
+      // A lost context returns a blank-but-valid PNG forever after. Drop the renderer
+      // so the next death rebuilds it instead of showing an empty frame all match.
+      cv.addEventListener('webglcontextlost', ev => { ev.preventDefault(); dcRenderer = null; });
+      dcRenderer = new THREE.WebGLRenderer({canvas:cv, antialias:true, alpha:true,
+                                            preserveDrawingBuffer:true});
+    }
+    const gl = dcRenderer.getContext();
+    if(gl && gl.isContextLost && gl.isContextLost()){ dcRenderer = null; return null; }
+    dcRenderer.setPixelRatio(Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1));
+    dcRenderer.setSize(W, Hpx, false);
+    dcRenderer.setClearColor(0x000000, 0);
+
+    const scene = new THREE.Scene();
+    scene.add(new THREE.HemisphereLight(0xAFC4D8, 0x141210, 1.15));
+    const key = new THREE.DirectionalLight(0xFFE9C4, 0.95); key.position.set(2, 3, 2.5); scene.add(key);
+    const rim = new THREE.DirectionalLight(0x4C9BE8, 0.55); rim.position.set(-2.5, 1, -2); scene.add(rim);
+
+    const built = buildGunModel(wid, eq || {});
+    const holder = new THREE.Group();
+    holder.add(built.group);
+    /* Just off square. Dead flat hides the magazine behind the receiver and puts the
+       optic directly over the frame, so two labels fight for one anchor; much more
+       than this and the barrel foreshortens until the muzzle has nowhere to point. */
+    /* The gun is built down the Z axis (muzzle at negative Z), so it has to be
+       swung a quarter turn before any of it is across the screen - without this it
+       renders very nearly end-on and every label points at the same pixel. The 0.35
+       off square is what stops the magazine hiding behind the receiver. */
+    holder.rotation.y = -Math.PI / 2 + 0.35;
+    holder.rotation.x = 0.15;
+    scene.add(holder);
+    scene.updateMatrixWorld(true);
+
+    const bb = new THREE.Box3().setFromObject(holder);
+    if(!isFinite(bb.min.x)) return null;
+    const mid = bb.getCenter(new THREE.Vector3());
+    const size = bb.getSize(new THREE.Vector3());
+    /* Orthographic, not perspective. These are technical callouts: under perspective
+       the projected centre of a part at the far end of the barrel sits off the pixels
+       it is labelling, and the line points at empty air. */
+    // How much of the card's width the weapon may occupy. Tight when there are
+    // labels either side of it, generous when the gun is the only thing to look at.
+    const GUN_FRAC = gunFrac || 0.40;
+    const halfW = Math.max(size.x / GUN_FRAC, (size.y / 0.66) * (W / Hpx)) / 2;
+    const halfH = halfW * (Hpx / W);
+    const cam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, -50, 50);
+    cam.position.set(mid.x, mid.y, mid.z + 10);
+    cam.lookAt(mid);
+    cam.updateMatrixWorld(true);
+    cam.updateProjectionMatrix();
+    dcRenderer.render(scene, cam);
+    const url = dcRenderer.domElement.toDataURL('image/png');
+    /* The picture is a PNG now; the meshes behind it are not reachable from anywhere
+       and three.js does not free GPU buffers on garbage collection. Without this,
+       every death that is not a cache hit leaks a weapon's worth of geometry for the
+       rest of the session. The boxes below are read BEFORE the dispose, from the
+       Object3D graph, which survives it. */
+
+    const boxes = {};
+    holder.traverse(o => {
+      const sl = o.userData && o.userData.slot;
+      if(!sl || !o.isMesh) return;
+      (boxes[sl] || (boxes[sl] = new THREE.Box3())).expandByObject(o);
+    });
+    const anchors = {};
+    for(const sl in boxes){
+      const p = boxes[sl].getCenter(new THREE.Vector3()).project(cam);
+      anchors[sl] = { x: (p.x + 1) / 2 * W, y: (1 - p.y) / 2 * Hpx };
+    }
+    holder.traverse(o => {
+      if(!o.isMesh) return;
+      if(o.geometry) o.geometry.dispose();
+      const m = o.material;
+      if(Array.isArray(m)) m.forEach(x => x && x.dispose && x.dispose());
+      else if(m && m.dispose) m.dispose();
+    });
+
+    const out = { url, anchors };
+    if(dcCache.size > 16) dcCache.clear();
+    dcCache.set(ck, out);
+    return out;
+  }catch(e){
+    // One failure is enough: if WebGL will not give us a context it will not give us
+    // one in four seconds either, and the card must still appear.
+    dcGLDead = true;
+    return null;
+  }
+}
+
+/* Place the labels. Anything with an equipped part and a projected anchor gets one;
+   empty slots get no callout at all, because six lines to an unmodified gun is a lot
+   of furniture around the word "none". */
+function dcLayout(eq, anchors, W, Hpx){
+  const items = [];
+  for(const sl of DC_SLOTS){
+    const p = eq && eq[sl];
+    if(p && p.name && anchors[sl]) items.push({ sl, p, a: anchors[sl] });
+  }
+  if(!items.length) return [];
+  const cols = { l: [], r: [] };
+  for(const it of items) cols[it.a.x < W / 2 ? 'l' : 'r'].push(it);
+  /* Balance the sides. A bullpup puts almost everything forward of centre, which
+     would stack five labels down one edge and leave the other empty. Whichever side
+     is over quota gives up its most central part, which has the shortest line to
+     redraw and so the least to lose by crossing. */
+  const cap = Math.ceil(items.length / 2);
+  for(const from of ['l', 'r']){
+    const to = from === 'l' ? 'r' : 'l';
+    while(cols[from].length > cap){
+      cols[from].sort((x, y) => (from === 'l' ? y.a.x - x.a.x : x.a.x - y.a.x));
+      cols[to].push(cols[from].shift());
+    }
+  }
+  const out = [];
+  for(const side of ['l', 'r']){
+    const list = cols[side].sort((x, y) => x.a.y - y.a.y);
+    const n = list.length;
+    // Even spacing rather than "next to the part": labels that merely track their
+    // anchors overlap the moment two parts sit at a similar height, and two
+    // overlapping labels are worth less than two slightly longer lines.
+    for(let i = 0; i < n; i++){
+      out.push(Object.assign({ side, y: Hpx * (i + 0.5) / n }, list[i]));
+    }
+  }
+  return out;
+}
 const headToHead = new Map();          // name -> [YOUR kills on them, theirs on you]
+/* The diagram's own coordinate space, in card pixels. The height is not fixed: a
+   two-part gun laid out in a box sized for six is mostly empty space with a small
+   weapon marooned in the middle of it. */
+const DC_W = 400;
+function dcHeight(n){ return n ? 104 + 28 * Math.ceil(n / 2) : 118; }
 function showDeathCard(info){
   const el = document.getElementById('deathcard'); if(!el) return;
   const w = WEAPONS.find(x => x.id === info.wid);
   const rec = info.name ? headToHead.get(info.name) : null;
+
+  /* The diagram, with the six-row list kept as the fallback. If WebGL is gone the
+     card still has to tell you who killed you and what they were holding. */
+  const nFit = DC_SLOTS.filter(sl => info.eq && info.eq[sl] && info.eq[sl].name).length;
+  const DC_H = dcHeight(nFit);
+  const diag = killWeaponDiagram(info.wid, info.eq, DC_W, DC_H, nFit ? 0.40 : 0.70);
   let rows = '';
-  for(const sl of DC_SLOTS){
-    const pt = info.eq && info.eq[sl];
-    const nm = pt && pt.name ? pt.name : '—';
-    const r  = pt && pt.rarity ? pt.rarity : 'common';
-    const ab = pt && pt.ability ? ABILITIES[pt.ability] : null;
-    rows += '<div class="dc-slot' + (pt ? '' : ' empty') + '" data-r="' + r + '">' +
-            '<span class="sl">' + sl + '</span>' +
-            (ab ? '<span class="ab">' + ab.n + '</span>' : '') +
-            '<span class="nm">' + nm + '</span></div>';
+  if(diag){
+    const cal = dcLayout(info.eq, diag.anchors, DC_W, DC_H);
+    /* Where the label columns begin. The weapon renders across the middle 40% -
+       x 120 to 280 - so a column ending at 111 clears it with room to spare. Raising
+       GUN_FRAC without lowering this is what puts a stat line on top of a receiver. */
+    const GUT = 116;
+    let paths = '', labels = '';
+    for(const c of cal){
+      const left = c.side === 'l';
+      const gx = left ? GUT : DC_W - GUT;
+      const knee = left ? gx + 16 : gx - 16;
+      paths += '<circle cx="' + c.a.x.toFixed(1) + '" cy="' + c.a.y.toFixed(1) + '" r="1.7"/>'
+             + '<path d="M' + c.a.x.toFixed(1) + ' ' + c.a.y.toFixed(1)
+             + ' L' + knee + ' ' + c.y.toFixed(1)
+             + ' L' + gx + ' ' + c.y.toFixed(1) + '"/>';
+      const ab = c.p.ability ? ABILITIES[c.p.ability] : null;
+      const roll = dcRollText(c.p.mods);
+      labels += '<div class="dc-cal ' + (left ? 'l' : 'r') + '" data-r="'
+        + (c.p.rarity || 'common') + '" style="'
+        + (left ? 'right:' + (DC_W - gx + 5) + 'px' : 'left:' + (gx + 5) + 'px')
+        + ';top:' + c.y.toFixed(1) + 'px;max-width:' + (GUT - 6) + 'px">'
+        + '<span class="sl">' + c.sl + '</span>'
+        + '<span class="nm">' + esc(c.p.name) + '</span>'
+        + (roll ? '<span class="ro">' + roll + '</span>' : '')
+        + (ab ? '<span class="ab">' + esc(ab.n) + '</span>' : '')
+        + '</div>';
+    }
+    rows = '<div class="dc-diag" style="height:' + DC_H + 'px">'
+      + '<img src="' + diag.url + '" alt="">'
+      + '<svg viewBox="0 0 ' + DC_W + ' ' + DC_H + '" preserveAspectRatio="none">' + paths + '</svg>'
+      + labels + '</div>';
+    if(!cal.length) rows += '<div class="dc-bare">No parts fitted \u2014 stock weapon.</div>';
+    // Only ACTIVE sets are named, and only by name and state. The full bonus text is
+    // four lines of prose and you have four seconds.
+    const act = (LoadoutCore.activeSets && info.wid)
+      ? (LoadoutCore.activeSets(info.wid, info.eq || {}) || []) : [];
+    for(const st of act){
+      // loadout-core's SETS carry the rules; only the renderer's copy carries the
+      // display name, so the id is the join. Without it this read "undefined: ACTIVE".
+      const disp = SETS.find(x => x.id === st.id);
+      rows += '<div class="dc-set" style="color:' + RCOL_CSS(st.rarity) + '">\u2B22 '
+        + esc((disp && disp.name) || st.id) + ': <b>active</b></div>';
+    }
+  } else {
+    for(const sl of DC_SLOTS){
+      const pt = info.eq && info.eq[sl];
+      const nm = pt && pt.name ? pt.name : '\u2014';
+      const r  = pt && pt.rarity ? pt.rarity : 'common';
+      const ab = pt && pt.ability ? ABILITIES[pt.ability] : null;
+      rows += '<div class="dc-slot' + (pt ? '' : ' empty') + '" data-r="' + r + '">' +
+              '<span class="sl">' + sl + '</span>' +
+              (ab ? '<span class="ab">' + ab.n + '</span>' : '') +
+              '<span class="nm">' + nm + '</span></div>';
+    }
   }
   el.innerHTML =
     '<div class="dc-eyebrow">Eliminated by' +
@@ -5556,7 +5831,15 @@ function startLiveMatch(){
         // is sitting in state - no extra round trip to show it.
         const k = m.killerId && room.state && room.state.players.get(m.killerId);
         const eq = {};
-        if(k && k.eq) DC_SLOTS.forEach(sl => { const q = k.eq.get ? k.eq.get(sl) : k.eq[sl]; if(q) eq[sl] = q; });
+        // Copy into plain objects rather than passing the schema rows through: the
+        // card reads .mods as an object and the wire carries it as a string.
+        if(k && k.eq) DC_SLOTS.forEach(sl => {
+          const q = k.eq.get ? k.eq.get(sl) : k.eq[sl];
+          if(!q) return;
+          eq[sl] = { name:q.name, rarity:q.rarity || 'common', slot:sl,
+                     set:q.set || null, ability:q.ability || null,
+                     mods: LoadoutCore.decodeMods(q.mods) };
+        });
         showDeathCard({ name:m.killer, wid:(k && k.wid) || null, eq,
           hp:k ? k.hp : null,
           dist:k ? Math.hypot(k.x - G.me.x, k.z - G.me.z) : null });

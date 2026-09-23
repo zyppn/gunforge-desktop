@@ -76,6 +76,9 @@ function circleRect(cx, cz, r, w){
 class PartState extends Schema {}
 defineTypes(PartState, {
   name: 'string', rarity: 'string', set: 'string', ability: 'string',
+  // encoded mods: the death card draws the killer's actual rolls, and a set piece's
+  // mods are random per drop, so the name alone cannot reproduce them
+  mods: 'string',
 });
 class PlayerState extends Schema {}
 defineTypes(PlayerState, {
@@ -167,6 +170,7 @@ class ArenaRoom extends Room {
       ps.rarity = cp.rarity || 'common';
       ps.set = cp.set || '';
       ps.ability = cp.ability || '';
+      ps.mods = LoadoutCore.encodeMods(cp.mods);
       p.eq.set(slot, ps);
     }
     // verify identity from the JWT the client sent — server trusts the token, not the name
