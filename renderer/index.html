@@ -240,6 +240,9 @@
   #modal{position:fixed;inset:0;background:rgba(5,8,11,.7);display:none;align-items:center;justify-content:center;z-index:50}
   #modal.on{display:flex}
   #modal .mbox{background:var(--panel);border:1px solid var(--brass);padding:20px;max-width:380px;width:92%}
+  /* A drain can credit several matches at once, so the box has to be able to run
+     past the viewport and scroll rather than clipping the last part card. */
+  #modal .mbox{max-height:84vh;overflow:auto}
   #modal input{width:100%;background:#0A0E13;border:1px solid var(--line);color:var(--ink);font-family:var(--mono);padding:8px;margin-top:10px;font-size:14px}
   #toasts{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:60;text-align:center}
   .toast{background:var(--panel);border:1px solid var(--brass);color:var(--ink);padding:8px 16px;margin-top:6px;font-size:12.5px;animation:tfade 3.4s forwards}
@@ -582,6 +585,8 @@ async function outboxDrain(){
   await sSet(OUTBOX_KEY, left);
   return got;
 }
+// Superseded by rewardModal() for the drain paths. Kept because it is the only
+// one-line summary of a drain, and a caller that cannot open a modal needs one.
 // "2 MATCHES CREDITED · +330 CR · +490 XP · Ghost Bore [LEGENDARY]"
 function drainToast(got){
   if(!got || !got.length) return '';
@@ -592,6 +597,65 @@ function drainToast(got){
   if(cr || xp) t += ' \u00B7 +'+cr+' CR \u00B7 +'+xp+' XP';
   if(parts.length) t += ' \u00B7 '+parts.join(' \u00B7 ');
   return t;
+}
+
+/* Queued rewards used to land as a single fading line of text - "2 MATCHES CREDITED
+   · +330 CR · +485 XP · Ghost Bore [LEGENDARY]". But that IS the end-of-match
+   reveal, just arriving late: same credits, same XP, same part, and the part is the
+   thing the player actually cares about. Announcing a legendary in a toast that
+   disappears in 3.4 seconds - with no card, no image, no mods, no fanfare - threw
+   away the moment and left people unsure whether they had been paid at all.
+
+   Same panel, same card, same sound as the results screen. The only difference is
+   the header, which says these are matches being caught up on. */
+function rewardModal(got, lvlBefore){
+  // A duplicate is the server saying "already had this one" - it grants nothing, so
+  // counting it would open a fanfare over +0 CR and claim a match was credited twice.
+  const real = (got || []).filter(g => g && !g.duplicate);
+  const dup  = (got || []).length - real.length;
+  if(!real.length){
+    if(dup) toast(dup + ' MATCH' + (dup>1?'ES':'') + ' ALREADY CREDITED');
+    return;
+  }
+  const cr = real.reduce((a,g)=>a+(g.credits|0), 0);
+  const xp = real.reduce((a,g)=>a+(g.xp|0), 0);
+  const parts = real.filter(g=>g.part).map(g=>g.part);
+  const forfeit = real.filter(g=>g.lockerFull).length;
+  const lvlUp = typeof lvlBefore === 'number' && P && P.level > lvlBefore;
+
+  let h = '<div style="text-align:center">'
+    + '<div class="eyebrow">\u25C6 Queued rewards credited</div>'
+    + '<div class="bigres" style="color:var(--brass);font-size:26px">'
+      + real.length + ' MATCH' + (real.length>1?'ES':'') + '</div>'
+    + '<div class="note">Held on the server while you were unreachable.</div>'
+    + '<div style="margin-top:14px">'
+    + '<div class="resline"><span>XP earned</span><b>+' + xp + '</b></div>'
+    + '<div class="resline"><span>Credits earned</span><b style="color:var(--brass)">+' + cr + '</b></div>'
+    + (lvlUp ? '<div class="resline"><span>Rank</span><b style="color:var(--brass)">LEVEL UP \u2192 ' + P.level + '</b></div>' : '')
+    + '</div>';
+  if(parts.length){
+    h += '<div class="eyebrow" style="margin-top:18px">\u25C6 Field salvage recovered</div>';
+    // one card per part - two legendaries in one drain are two reveals, not a list
+    for(const p of parts) h += '<div class="dropcard">' + partCard(p) + '</div>';
+  }
+  // Same distinction the results screen draws: a forfeited drop is not no drop.
+  if(forfeit) h += '<div class="note" style="margin-top:14px;color:#E05A4E">\u25C6 '
+    + forfeit + ' SALVAGE FORFEITED \u2014 your locker is full at ' + PART_CAP + ' parts. '
+    + 'Scrap or auction something and the next drop will land.</div>';
+  if(!parts.length && !forfeit) h += '<div class="note" style="margin-top:16px">'
+    + 'No salvage recovered. Drop odds rise with eliminations.</div>';
+  if(dup) h += '<div class="note" style="margin-top:10px;opacity:.55">'
+    + dup + ' further match' + (dup>1?'es were':' was') + ' already credited.</div>';
+  h += '<div class="btnrow" style="justify-content:center;margin-top:16px">'
+    + (parts.length ? '<button class="btn primary" onclick="closeModal();renderInventory()">PARTS LOCKER</button>' : '')
+    + '<button class="btn" onclick="closeModal()">DISMISS</button></div></div>';
+  modal(h);
+  hydrateThumbs();
+  if(parts.length){
+    // the rarest part wins the fanfare; a legendary should not be announced by a common
+    const best = parts.slice().sort((a,b)=>RKEYS.indexOf(b.rarity)-RKEYS.indexOf(a.rarity))[0];
+    setTimeout(()=>playDropSound(best.rarity), 260);
+  }
 }
 
 // Load (or create) this account's cloud profile. Returns a profile object
@@ -856,8 +920,10 @@ function flushLoadoutCloud(){
 window.addEventListener('online', () => {
   outboxDrain().then(async got => {
     if(!got.length) return;
+    // read the level BEFORE the fresh profile lands, or the level-up row can never fire
+    const lvlBefore = P ? P.level : undefined;
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
-    toast(drainToast(got));
+    rewardModal(got, lvlBefore);
     refreshPendingBadge();
   }).catch(()=>{});
 });
@@ -1097,9 +1163,10 @@ async function refreshPendingBadge(){
 async function retryPending(){
   const got = await outboxDrain();
   if(got.length){
+    const lvlBefore = P ? P.level : undefined;
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
-    toast(drainToast(got));
     renderMenu();
+    rewardModal(got, lvlBefore);   // after renderMenu, or the repaint drops the overlay
   } else {
     toast('STILL UNREACHABLE — MATCHES REMAIN QUEUED');
   }
@@ -6028,12 +6095,12 @@ function liveExitToLobby(){
 /* ---------------- boot ---------------- */
 (async function boot(){
   try{
-    let cloud = null;
+    // replayed is read after the menu paints, so it cannot live inside the uplink block
+    let cloud = null, replayed = [];
     if(HAS_SUPABASE()){
       $('#boot').innerHTML = '<div class="panel">ESTABLISHING UPLINK... AUTHENTICATING OPERATOR...</div>';
       // Replay any match whose reward never reached the server, BEFORE pulling the
       // profile, so freshly granted parts are in the inventory we load.
-      let replayed = [];
       try{ replayed = await outboxDrain(); }
       catch(e){ console.error('outbox drain failed', e); }
       // A loadout saved while offline must reach the server BEFORE we read the
@@ -6042,7 +6109,9 @@ function liveExitToLobby(){
       try{ await flushPendingLoadout(); }catch(e){}
       try{ cloud = await loadCloudProfile(); }
       catch(e){ console.error('cloud profile failed, using local', e); }
-      if(replayed.length) setTimeout(()=>toast(drainToast(replayed)), 900);
+      // The reveal waits for the menu (below). Firing it on a timer from here raced
+      // the rest of boot and could drop a modal over "ESTABLISHING UPLINK".
+
     }
     if(cloud){
       P = cloud;
@@ -6060,6 +6129,9 @@ function liveExitToLobby(){
     refreshChips();
     renderMenu();
     if(cloud) toast('SIGNED IN — INVENTORY SYNCED FROM CLOUD');
+    // lvlBefore is meaningless at boot: the profile we just loaded already contains
+    // the replayed XP, so there is no "before" to compare against.
+    if(replayed.length) setTimeout(()=>rewardModal(replayed), 700);
   }catch(e){
     console.error(e);
     $('#boot').innerHTML = '<div class="panel">UPLINK ERROR — profile storage unavailable. Reload to retry.</div>';
