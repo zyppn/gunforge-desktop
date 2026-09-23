@@ -3301,13 +3301,22 @@ function botMesh(color, grunt, gunInfo){
     collar.position.y = 1.56;
     const helm = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.24, 0.32), mat(c));
     helm.position.y = 1.74;
-    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.05, 0.10), mat(us));
-    brow.position.set(0, 1.845, 0.15);
+    /* The face was dark chin, bright visor, dark brow, with about 3cm of helmet left
+       showing between the visor and the brow - so a head read as a black slab with a
+       light bar in it, and the team colour never reached the top of the body. The
+       visor drops and the brow becomes a plated forehead in the team colour, with a
+       thin dark lip between them so the edge stays crisp instead of washing out. */
     const chin = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.11, 0.15), mat(us));
     chin.position.set(0, 1.635, 0.12);   // a jawline is what makes the facing readable
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.09, 0.04), mat(0x0D1117, 0x9BE8FF, 1.2));
-    visor.position.set(0, 1.745, 0.17);
-    g.add(collar, helm, brow, chin, visor);
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.085, 0.04), mat(0x0D1117, 0x9BE8FF, 1.2));
+    visor.position.set(0, 1.725, 0.17);
+    // flush with the helmet at 0.28, not proud at 0.30: a wider dark strip reads as a
+    // rail floating off the side of the head from every angle but dead on
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(0.281, 0.022, 0.102), mat(us));
+    lip.position.set(0, 1.778, 0.151);
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.085, 0.10), mat(c));
+    brow.position.set(0, 1.832, 0.15);
+    g.add(collar, helm, brow, lip, chin, visor);
     legL = mkLeg(-0.155, 0.19, 0.74, 0.74);
     legR = mkLeg( 0.155, 0.19, 0.74, 0.74);
     for(const lg of [legL, legR]){       // boot and knee ride the leg, so they animate
