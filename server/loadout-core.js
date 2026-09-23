@@ -318,6 +318,21 @@ const SHIELD_SOAK = 0.75;
      enough time to read that. */
   const RESPAWN_MS = 4500;
 
+  /* Which modes write to the career kill/death record.
+
+     K/D is read as a claim about how you do against other people on even terms.
+     Campaign is a horde mode - kills are free and deaths are a single-life reset,
+     so it inflates one side and understates the other. TDM and KotH are objective
+     modes where trading your life for the point is the correct play, and a record
+     that punishes that teaches people to stop playing the objective. That leaves
+     the two straight fights.
+
+     Shared with the client rather than duplicated: the client banks stats when it
+     is offline and the server banks them when it is not, and the two disagreeing
+     is how you get a K/D that depends on your connection. */
+  const KD_MODES = ['ffa', 'live'];
+  function countsForKD(mode){ return KD_MODES.indexOf(String(mode || '')) >= 0; }
+
   const HE_SPLASH_FRAC = 0.60;
   function splashDamage(dealt){
     return Math.max(0, Number(dealt) || 0) * HE_SPLASH_FRAC;
@@ -607,6 +622,7 @@ const SHIELD_SOAK = 0.75;
                 BULWARK,
                 HE_SPLASH_FRAC, splashDamage, HOMING, JUGG_RESIST, SHIELD_SOAK,
                 AP_WALL, OVERCHARGE, ADS_SLOW, adsSlow, RESPAWN_MS,
+                KD_MODES, countsForKD,
                 PART_POOL, RAR };   // exported so the balance test can be exhaustive
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // Node

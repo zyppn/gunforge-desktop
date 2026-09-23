@@ -322,7 +322,10 @@ class ArenaRoom extends Room {
       const xp = 30 + r.kills*12 + (place===1?40:place===2?20:0);
       // server rolls the loot drop (same odds as before), so the client can't fabricate parts
       const part = LoadoutCore.rollServerDrop(r.kills);
-      const statsDelta = { kills:r.kills, deaths:r.deaths, matches:1, wins: place===1?1:0 };
+      // Live Arena is one of the two modes that count, but ask rather than assume:
+      // the list lives in loadout-core so it cannot drift between here and the client.
+      const statsDelta = { matches: 1, wins: place===1 ? 1 : 0 };
+      if(LoadoutCore.countsForKD('live')){ statsDelta.kills = r.kills; statsDelta.deaths = r.deaths; }
       Admin.grantReward(pid, { credits, xp, part, statsDelta })
         .then(res => {
           const g = res && res.granted;
@@ -777,7 +780,15 @@ const server = http.createServer((req, res) => {
         // server rolls the drop (client can't fabricate parts); offline drops are BOUND
         const drop = LoadoutCore.rollServerDrop(kills);
         if(drop){ drop.source = 'offline'; drop.bound = true; }
-        const statsDelta = { kills, deaths: Math.max(0,Math.min(50,Number(data.deaths)||0)), matches:1, wins: win?1:0 };
+        const deaths = Math.max(0, Math.min(50, Number(data.deaths) || 0));
+        /* Matches and wins count everywhere; only the straight fights touch K/D.
+           The keys are OMITTED rather than sent as zero. add_progress is documented
+           as additive, in which case the two are the same - but it is defined in the
+           database and not in this repo, so that is a comment rather than something
+           this code can check. If it ever merges instead of adding, a zero would
+           overwrite a career K/D and an absent key cannot. */
+        const statsDelta = { matches: 1, wins: win ? 1 : 0 };
+        if(LoadoutCore.countsForKD(mode)){ statsDelta.kills = kills; statsDelta.deaths = deaths; }
         const result = await Admin.grantReward(pid, { credits, xp, part: drop, statsDelta });
         sendJson(res, 200, { ok: true, credits, xp,
           part: (result.granted && result.granted.part) ? drop : null,

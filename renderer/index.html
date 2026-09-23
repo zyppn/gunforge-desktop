@@ -1326,6 +1326,11 @@ function renderMenu(){
    +'<div class="statline"><span>Wins</span><b>'+P.stats.wins+'</b></div>'
    +'<div class="statline"><span>K / D</span><b>'+P.stats.kills+' / '+P.stats.deaths+'</b></div>'
    +'</div>'
+   // A number that silently ignores three of the five modes needs to say so, or it
+   // reads as broken the first time someone goes 20-2 in Campaign and nothing moves.
+   +'<div class="note" style="margin-top:8px;opacity:.6">K / D counts '
+   + LoadoutCore.KD_MODES.map(m => (MODES.find(x=>x.id===m)||{name:m}).name).join(' and ').toLowerCase()
+   + ' only. Matches and wins count everywhere.</div>'
    +'<div class="note" style="margin-top:10px;opacity:.55">CLIENT BUILD '+CLIENT_BUILD+'</div>'
    +'<div class="btnrow"><button class="btn sm" onclick="renameOp()">CHANGE CALLSIGN</button>'
    +'<button class="btn sm" onclick="menuSettings()">SETTINGS</button></div>'
@@ -5297,7 +5302,10 @@ function endMatch(campWin){
 
   function bankLocalReward(){
     const d = rollDrop(kills, true);
-    P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+    P.stats.matches++;
+    // Same rule the server applies in /reward/offline, from the same shared list -
+    // otherwise your K/D would depend on whether you were signed in that evening.
+    if(LoadoutCore.countsForKD(mode)){ P.stats.kills += kills; P.stats.deaths += deaths; }
     if(win) P.stats.wins++;
     grantXp(localXp); P.credits += localCr;
     if(d) P.inventory.push(d);
@@ -6005,7 +6013,8 @@ async function endLiveMatch(){
       const xp = 30 + kills*12 + (place===1 ? 40 : place===2 ? 20 : 0);
       const cr = 40 + kills*10 + (place===1 ? 50 : place===2 ? 25 : 0);
       const drop = rollDrop(kills, true);
-      P.stats.matches++; P.stats.kills += kills; P.stats.deaths += deaths;
+      P.stats.matches++;
+      if(LoadoutCore.countsForKD('live')){ P.stats.kills += kills; P.stats.deaths += deaths; }
       if(place===1) P.stats.wins++;
       grantXp(xp); P.credits += cr;
       if(drop) P.inventory.push(drop);
