@@ -83,6 +83,8 @@ defineTypes(PlayerState, {
   hp: 'number', kills: 'number', deaths: 'number', dead: 'boolean',
   wid: 'string',              // weapon id for remote rendering
   eq: { map: PartState },     // equipped parts by slot, for remote rendering
+  ads: 'number',              // 0..1 sight blend, so others can pose the remote body
+  reloading: 'boolean',       // cosmetic: drives the reload tilt on remote models
   burnT: 'number',            // seconds of incendiary burn remaining
   slowT: 'number',            // seconds of cryo slow remaining
   shield: 'number',           // Bulwark set: absorbs damage before HP
@@ -136,6 +138,7 @@ class ArenaRoom extends Room {
         mx: clampN(msg.mx), mz: clampN(msg.mz),
         yaw: num(msg.yaw), pitch: clamp(num(msg.pitch), -1.4, 1.4),
         ads: clamp(num(msg.ads), 0, 1),   // whitelisted, or the ADS speed match never arrives
+        reloading: !!msg.reloading,       // cosmetic, but unwhitelisted means undefined
         fire: !!msg.fire,
       });
     });
@@ -175,7 +178,7 @@ class ArenaRoom extends Room {
     const s = this.spawns[this.clients.length % this.spawns.length];
     p.x = s[0]; p.z = s[1]; p.yaw = 0;
     p.hp = 100; p.kills = 0; p.deaths = 0; p.dead = false;
-    p.burnT = 0; p.slowT = 0; p.shield = 0;
+    p.burnT = 0; p.slowT = 0; p.shield = 0; p.ads = 0; p.reloading = false;
     this.burnSpread.delete(client.sessionId);
     this.state.players.set(client.sessionId, p);
     this.broadcast('presence', { name: p.name, on: true }, { except: client });
@@ -242,14 +245,21 @@ class ArenaRoom extends Room {
       const inp = this.inputs.get(id);
       if(!inp) return;
       p.yaw = inp.yaw;
+      // Aim and reload onto the schema BEFORE the movement branch, so a player who is
+      // standing still still broadcasts a sight pose. Cosmetic for other clients; the
+      // authoritative uses of ads (move speed, spread) read the same value below.
+      p.ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
+      p.reloading = !!inp.reloading;
       // server-side movement with wall collision — the client cannot teleport
       const len = Math.hypot(inp.mx, inp.mz);
       if(len > 0.01){
         // honour the loadout's speed modifier — it was being ignored, so +10% move
         // speed parts did nothing in live PvP. Clamped so a bad part can't fly.
         const pl = this.loadouts.get(id);
-        // the client slows to 60% while aiming; mirror it or ADS guarantees drift
-        const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
+        // the client slows to 60% while aiming; mirror it or ADS guarantees drift.
+        // Read the schema copy rather than re-clamping the input: two clamps of one
+        // number is exactly the shape that let PvP and offline drift apart before.
+        const ads = p.ads;
         const chill = p.slowT > 0 ? PVP.slowMul : 1;   // cryo
         // Ghost Protocol lifts the scope movement tax entirely
         const adsPen = LoadoutCore.adsSlow((pl && pl.abilities) || []);
@@ -377,7 +387,8 @@ class ArenaRoom extends Room {
     // and then tightens by (1 - adsT * 0.55) when aimed. The server used raw L.spread
     // and no ADS term at all, so it rolled a pattern ~1.8x wider than the one you saw
     // and aiming down sights made you slower without making you more accurate.
-    const ads = Math.max(0, Math.min(1, Number(inp.ads) || 0));
+    // Read the schema copy the tick already wrote, not a third clamp of the raw input.
+    const ads = p.ads;
     // The 0.55 is the base cone both sides bake in; the ADS tightening lives in
     // loadout-core so the client cannot disagree with the server about it.
     const sprd = LoadoutCore.fireSpread((Number(ld.spread) || 0) * 0.55, ads);

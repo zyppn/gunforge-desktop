@@ -3057,17 +3057,57 @@ function hydrateThumbs(retry){
   if(missed && !retry) requestAnimationFrame(() => hydrateThumbs(true));
 }
 
+/* How far the arms travel between hip-fire and the sight. Tuned so the hands stay on
+   the weapon while the gun climbs 0.32 and pulls inboard to x 0.1. */
+const ARM_ADS = { rx: -0.38, rz: -0.30, lx: -0.30, lz: -0.10 };
+
+/* ONE upper-body pose for both worlds. Every animation touch-up before this was
+   written against the offline path and silently did nothing in live PvP - seven times
+   now - because offline walks G.ents and live walks live.remotes. A single function
+   both call is the only version of this that cannot drift apart. */
+function poseArms(u, aim){
+  if(u.armR && u.armRB){
+    u.armR.rotation.x = u.armRB.x + ARM_ADS.rx * aim;
+    u.armR.rotation.z = u.armRB.z + ARM_ADS.rz * aim;
+  }
+  if(u.armL && u.armLB){
+    u.armL.rotation.x = u.armLB.x + ARM_ADS.lx * aim;
+    u.armL.rotation.z = u.armLB.z + ARM_ADS.lz * aim;
+  }
+}
+function poseUpper(u, aim, reloading, dt, kickRate){
+  poseArms(u, aim);
+  if(!u.gun || !u.gunBase) return;
+  u.kick = Math.max(0, (u.kick || 0) - dt*kickRate);
+  const tiltTarget = reloading ? 0.85 : 0;
+  u.gun.rotation.x += (tiltTarget - u.gun.rotation.x) * Math.min(1, dt*9);
+  u.gun.position.x = u.gunBase.x + (0.1 - u.gunBase.x) * aim;   // pulls inboard...
+  u.gun.position.z = u.gunBase.z - u.kick*0.07 - 0.02*aim;
+  u.gun.position.y = u.gunBase.y + 0.32*aim                     // ...and up to the visor
+    - (reloading ? 0.06 : 0) * Math.min(1, u.gun.rotation.x/0.85);
+}
+
 function botMesh(color, grunt, gunInfo){
   const g = new THREE.Group();
   const c = new THREE.Color(color);
   const dark = new THREE.Color(color).multiplyScalar(0.55);
-  let legL=null, legR=null, gun=null, gunMuzzle=null, gunBase=null;
+  // Neutral undersuit. Tinting EVERY surface with the team colour is most of why the
+  // old body read as one flat blob past about 15m; the hue now rides on plates only.
+  const us = 0x2A3138;
+  let legL=null, legR=null, gun=null, gunMuzzle=null, gunBase=null, armL=null, armR=null;
 
   const mkLeg = (x, w2, h2, topY) => {
     const lg = new THREE.Group(); lg.position.set(x, topY, 0);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w2, h2, w2*1.1), mat(dark.getHex()));
     mesh.position.y = -h2/2; lg.add(mesh); g.add(lg);
     return lg;
+  };
+  // Shoulder-pivoted arm GROUP, so the arm can follow the gun. See poseArms.
+  const mkArm = (x, y, z, len, w2, rx, rz) => {
+    const ag = new THREE.Group(); ag.position.set(x, y, z);
+    const lm = new THREE.Mesh(new THREE.BoxGeometry(w2, len, w2), mat(us));
+    lm.position.y = -len/2; ag.add(lm);
+    ag.rotation.set(rx, 0, rz); g.add(ag); return ag;
   };
 
   if(grunt){
@@ -3090,24 +3130,55 @@ function botMesh(color, grunt, gunInfo){
     gunBase = gun.position.clone();
     g.add(gun);
   } else {
-    // humanoid rig: torso, hips, head, legs, arms, and a REAL generated gun
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.32), mat(c));
-    torso.position.y = 1.18;
-    const hips = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.2, 0.3), mat(dark.getHex()));
-    hips.position.y = 0.8;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), mat(c));
-    head.position.y = 1.7;
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.1), mat(0x0D1117, 0x9BE8FF, 0.9));
-    visor.position.set(0, 1.72, 0.19);
-    g.add(torso, hips, head, visor);
-    legL = mkLeg(-0.15, 0.17, 0.72, 0.72);
-    legR = mkLeg( 0.15, 0.17, 0.72, 0.72);
-    // arms angled toward the weapon
-    const armR = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.13), mat(dark.getHex()));
-    armR.position.set(0.32, 1.22, 0.14); armR.rotation.x = -0.9;
-    const armL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.4, 0.12), mat(dark.getHex()));
-    armL.position.set(-0.05, 1.2, 0.3); armL.rotation.x = -1.15; armL.rotation.z = -0.7;
-    g.add(armR, armL);
+    // Plated chest over the undersuit: tapered ribs, a pinched waist and a flared
+    // pelvis, so the body has a shape instead of three boxes of one width. Everything
+    // stays inside the server's hit cylinder (r 0.68, y 0..1.9) - the old sphere head
+    // poked 4cm above it, which made the crown of everyone's head unhittable.
+    const chest = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.28, 0.33), mat(c));
+    chest.position.y = 1.41;
+    const ribs = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.20, 0.31), mat(c));
+    ribs.position.y = 1.21;
+    const waist = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.15, 0.26), mat(us));
+    waist.position.y = 1.06;
+    const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.19, 0.30), mat(c));
+    pelvis.position.y = 0.89;
+    const vee = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.04), mat(0x0D1117, color, 0.8));
+    vee.position.set(0, 1.435, 0.172);
+    const rig = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.19, 0.05), mat(us));
+    rig.position.set(0, 1.23, 0.168);
+    g.add(chest, ribs, waist, pelvis, vee, rig);
+    for(const s of [-1, 1]){
+      const pch = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.12, 0.06), mat(us));
+      pch.position.set(s*0.12, 1.11, 0.18); g.add(pch);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.21, 0.32), mat(c));
+      cap.position.set(s*0.33, 1.44, 0); cap.rotation.z = s*0.15; g.add(cap);
+      const capRim = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.045, 0.34), mat(us));
+      capRim.position.set(s*0.335, 1.315, 0); capRim.rotation.z = s*0.15; g.add(capRim);
+    }
+    const collar = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.10, 0.27), mat(us));
+    collar.position.y = 1.56;
+    const helm = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.24, 0.32), mat(c));
+    helm.position.y = 1.74;
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.05, 0.10), mat(us));
+    brow.position.set(0, 1.845, 0.15);
+    const chin = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.11, 0.15), mat(us));
+    chin.position.set(0, 1.635, 0.12);   // a jawline is what makes the facing readable
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.09, 0.04), mat(0x0D1117, 0x9BE8FF, 1.2));
+    visor.position.set(0, 1.745, 0.17);
+    g.add(collar, helm, brow, chin, visor);
+    legL = mkLeg(-0.155, 0.19, 0.74, 0.74);
+    legR = mkLeg( 0.155, 0.19, 0.74, 0.74);
+    for(const lg of [legL, legR]){       // boot and knee ride the leg, so they animate
+      const bt = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.25), mat(dark.getHex()));
+      bt.position.set(0, -0.68, 0.03); lg.add(bt);
+      const kn = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.13, 0.07), mat(c));
+      kn.position.set(0, -0.36, 0.11); lg.add(kn);
+    }
+    // Trigger arm to the grip, support arm across the body to the foregrip. The old
+    // rig angled its support arm AWAY from the weapon (rotation.z -0.7 on a shoulder
+    // already left of centre); one flat colour is the only reason it never showed.
+    armR = mkArm( 0.31, 1.42, 0.02, 0.42, 0.13, -0.95, 0.00);
+    armL = mkArm(-0.26, 1.42, 0.02, 0.44, 0.12, -1.05, 0.85);
     // the actual gun, same modular builder as the player's — attachments and all
     gun = new THREE.Group();
     const built = buildGunModel(gunInfo.wid, gunInfo.eq);
@@ -3139,7 +3210,10 @@ function botMesh(color, grunt, gunInfo){
     new THREE.MeshBasicMaterial({color:0x4C9BE8, transparent:true, opacity:0.18, depthWrite:false}));
   shSphere.position.y = 1.0; shSphere.visible = false;
   g.add(shSphere);
-  g.userData = {hbFg:fg, hbGroup:hbG, shSphere, legL, legR, gun, gunMuzzle, gunBase, kick:0};
+  g.userData = {hbFg:fg, hbGroup:hbG, shSphere, legL, legR, gun, gunMuzzle, gunBase, kick:0,
+    armL, armR,                                   // null on grunts, so callers must guard
+    armLB: armL ? armL.rotation.clone() : null,   // rest pose, the ADS lerp works from it
+    armRB: armR ? armR.rotation.clone() : null};
   return g;
 }
 
@@ -4393,18 +4467,9 @@ function tick(now){
         u.legR.rotation.x = -sw;
         e.mesh.position.y = Math.abs(Math.sin(e.walkPhase)) * 0.045 * e.walkAmp; // step bounce
       }
-      // gun: recoil kick, muzzle flash decay, reload tilt
-      if(u.gun){
-        u.kick = Math.max(0, u.kick - dt*7);
-        const tiltTarget = e.reloading ? 0.85 : 0;
-        u.gun.rotation.x += (tiltTarget - u.gun.rotation.x) * Math.min(1, dt*9);
-        const bAim = e.aimT || 0;
-        u.gun.position.x = u.gunBase.x + (0.1 - u.gunBase.x) * bAim;   // pulls inboard...
-        u.gun.position.z = u.gunBase.z - u.kick*0.07 - 0.02*bAim;
-        u.gun.position.y = u.gunBase.y + 0.32*bAim                      // ...and up to the visor
-          - (e.reloading ? 0.06 : 0) * Math.min(1, u.gun.rotation.x/0.85);
-        u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*10);
-      }
+      // gun + arms: recoil kick, muzzle flash decay, reload tilt, sight pose
+      poseUpper(u, e.aimT || 0, !!e.reloading, dt, 7);
+      if(u.gunMuzzle) u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*10);
     }
   }
 
@@ -5227,6 +5292,7 @@ function liveTick(dt){
       mx, mz,
       ads: canAct ? adsT : 0,    // server mirrors the 40% ADS slowdown — but a paused
                                  // player is not aiming, and shouldn't be taxed for it
+      reloading: !!me.reloading, // cosmetic only: lets everyone else see the reload tilt
       yaw: Math.atan2(fwdZ, fwdX),
       pitch,
       fire: (locked && !live.results && !paused) && act('fire') && !me.reloading && !me.dead
@@ -5345,7 +5411,10 @@ function liveTick(dt){
     const amp = Math.min(1, speed/4) * 0.5;
     if(u.legL){ u.legL.rotation.x = Math.sin(r.phase)*amp; u.legR.rotation.x = -Math.sin(r.phase)*amp; }
     if(u.gunMuzzle){ u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*6); }
-    if(u.kick){ u.kick = Math.max(0, u.kick - dt*5); if(u.gun && u.gunBase) u.gun.position.z = u.gunBase.z - u.kick*0.07; }
+    // t.ads and t.reloading are new on the schema. They were always SENT to the server
+    // (it taxes movement speed and spread with them) but never broadcast, so remote
+    // players never shouldered a weapon and never tilted to reload.
+    poseUpper(u, t.ads || 0, !!t.reloading, dt, 5);
   });
 
   // ---- remote tracers (cosmetic) ----
