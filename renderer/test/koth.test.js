@@ -227,8 +227,17 @@ function run(G, secs, dt){
   while(G.teamScore.blue < TARGET && t < 600){ run(G, 1); t += 1; }
   ok('an unopposed hold wins in about ' + TARGET + 's (took ' + t + 's)',
      t >= TARGET && t <= TARGET + 3);
-  ok('which is longer than the 180s match clock, so a real match ends on time or on a rout',
-     TARGET > 180 * 0.5);
+  /* The old bound here read TARGET > 90 under a comment claiming the target was
+     LONGER than the match - the check and the sentence never agreed, and neither
+     described the thing that matters. What matters is that the score is winnable:
+     the clock is 180s, points only accrue while you are alone on the ring, and
+     three other teams are trying to stop that. If clean possession has to exceed
+     most of the match, nothing but a walkover ever reaches the number and every
+     game ends on time with the score bar as decoration. */
+  ok('the target is winnable inside the 180s clock with time lost to fighting ('
+     + TARGET + 's of clean hold out of 180)', TARGET < 180 * 0.75);
+  ok('but not so low that one early grab ends it before the fight starts',
+     TARGET >= 180 * 0.2);
 }
 
 { // the banner fires on a change of hands, not every frame

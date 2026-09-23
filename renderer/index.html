@@ -1890,7 +1890,13 @@ const MAPS = [
    single point interesting for a whole match. */
 const KOTH_TEAMS = ['blue','red','green','yellow'];
 const TEAM_COL = { blue:0x4C9BE8, red:0xE05A4E, green:0x5FBF6E, yellow:0xE8C44A };
-const KOTH_TARGET = 150;   // points, paid at 1/s while you hold it alone
+/* Points are paid at 1/s, and ONLY while your team is alone on the ring - so the
+   target is a stopwatch on uncontested possession, not on time survived. At 150 that
+   was 150 seconds of clean hold inside a 180-second match, with three other teams
+   walking in to break it: reachable only if the other three never showed up. Every
+   match ended on the clock, which makes the score bar decoration. 50 is a real race
+   an actual fight can finish. */
+const KOTH_TARGET = 50;    // points, paid at 1/s while you hold it alone
 const KOTH_LOCK   = 1.0;   // seconds alone on the hill before it is yours
 const KOTH_SQUAD  = 2;     // per team, the player filling one blue slot: eight bodies
 const KOTH_LEASH  = 18;    // how far a bot will chase before the point wins
@@ -1899,7 +1905,7 @@ const CLIENT_BUILD = 'live-27';
 const MODES = [
   {id:'ffa',  name:'FREE-FOR-ALL',   d:'You vs 7 combat AI. First to 20 kills or top score at 3:00.'},
   {id:'tdm',  name:'TEAM DEATHMATCH',d:'4v4 with AI squadmates. First team to 30 or top score at 3:00.'},
-  {id:'koth', name:'KING OF THE HILL',d:'Four teams, one hill. Hold it alone to score. First to 150.'},
+  {id:'koth', name:'KING OF THE HILL',d:'Four teams, one hill. Hold it alone to score. First to 50.'},
   {id:'camp', name:'CAMPAIGN',       d:'PvE. Survive 8 escalating waves of hostiles. One life per run.'},
   // online:true pulls it out of the offline grid and into its own panel below, so
   // four local modes tile evenly instead of leaving a fifth card on a row of two
