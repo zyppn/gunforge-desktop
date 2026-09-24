@@ -2348,6 +2348,11 @@ function buildScene(map){
        equipped parts REPLACE with their own geometry, length and color.
        buildGunModel() is shared by the in-match viewmodel AND the armory preview ---- */
 const RCOL = {common:0x9BA8B0, uncommon:0x5FBF6E, rare:0x4C9BE8, epic:0xB463E8, legendary:0xE8A33D};
+/* Each set owns an accent colour, so the kit you are carrying is readable from the glow
+   alone: Hornet amber, Dragonfire molten orange, Ghost cyan. Ghost's was already the
+   tracer's hue and nothing else; it is a named constant now because the parts use it too
+   and two copies of a colour drift. */
+const GHOST_CYAN = 0x8FE9FF;
 // Set emissive was 0.75. Emissive is FLAT - it adds the same value to every face - so at
 // 0.75 an epic set piece (R180 B232) pinned both channels on all six faces: the part lost
 // its facet shading entirely and read as a pale pink cutout bleeding over whatever it sat
@@ -2619,7 +2624,42 @@ function vmBarrel(p, w, frontZ){
     collar(0.03);
     tipPad = 0.01;
   }
-  else if(n.includes('Match') || n.includes('Ghost')){
+  else if(n.includes('Ghost')){
+    /* GHOST BORE. It used to share the Match barrel - a thin fluted rod with a target
+       crown - so the signature piece of the pierce set was the epic marksman barrel in
+       gold.
+       Ghost Protocol's rounds pass through everything, so the barrel is a cage you can
+       see through: a hairline bore inside five hex rings on three converging rails,
+       which is the Ghost Lens's exact parts list repeated down the barrel. The rings
+       shrink toward the muzzle so a 50cm sniper barrel has a direction instead of
+       reading as scaffolding. */
+    len = base*0.96;
+    const ringAt = t => 0.038 - 0.014*t;
+    const hexSeg = (r0, r1, L, mtl, z) => {
+      const g = new THREE.CylinderGeometry(r0, r1, L, 6); g.rotateY(Math.PI/6);
+      const c = new THREE.Mesh(g, mtl); c.rotation.x = Math.PI/2;
+      c.position.set(0, 0.02, z); VMT.add(c);
+    };
+    hexSeg(0.012, 0.009, len, tone(0.52), frontZ - len/2);              // the bore
+    for(let i = 0; i < 5; i++){
+      const t = 0.08 + 0.21*i;
+      const rg = new THREE.Mesh(new THREE.TorusGeometry(ringAt(t), 0.0065, 5, 6),
+                                i%2 ? m : tone(0.58));
+      rg.position.set(0, 0.02, frontZ - len*t); VMT.add(rg);
+    }
+    for(const sx of [-1, 1])                                            // side rails
+      vmBox(m, 0.0075, 0.0075, len*0.88, sx*0.026, 0.02, frontZ - len*0.50).rotation.y = sx*0.018;
+    vmBox(m, 0.0075, 0.0075, len*0.88, 0, 0.048, frontZ - len*0.50).rotation.x = -0.018;
+    for(const sx of [-1, 1])                                            // charge, down the bore
+      vmBox(glowB(GHOST_CYAN), 0.0035, 0.008, len*0.52, sx*0.0125, 0.02, frontZ - len*0.50);
+    hexSeg(0.026, 0.021, 0.030, m, frontZ - len - 0.015);               // muzzle step
+    vmCyl(voidM(), 0.017, 0.020, frontZ - len - 0.038);
+    const ap = new THREE.Mesh(new THREE.CircleGeometry(0.014, 14), glowB(GHOST_CYAN));
+    ap.position.set(0, 0.02, frontZ - len - 0.050); VMT.add(ap);
+    collar(0.030);
+    tipPad = 0.056;
+  }
+  else if(n.includes('Match')){
     len = base*1.45;
     vmCyl(m, 0.015, len, frontZ - len/2);
     vmBox(dark(), 0.003, 0.002, len*0.7, 0, 0.0355, frontZ - len/2); // barrel fluting
@@ -3158,8 +3198,46 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     strip(0.0035, 0.0035, rc, 1, 0, cy, z - 0.007);
     riser(0.072, 0.046, cy - 0.0275);   // mount shoe spanning both side plates
     setAim(0, cy, z, 0.22, 24);
-  } else if(n.includes('ACOG') || n.includes('Lens')){
-    const long = n.includes('Lens');
+  } else if(n.includes('Lens')){
+    /* GHOST LENS. It used to be the ACOG with a flag that made the tube longer, so the
+       only thing that was really its own was the cyan reticle.
+       Now it is an open ring sight: three hex rings stepping down in size on three
+       converging rails, with the reticle on the front ring. Nothing to look THROUGH,
+       which is the point of a set whose rounds go through everything, and it gives the
+       barrel its vocabulary.
+       Sized to the rule the tubes follow: the rear rim has to subtend less than the
+       aimed field of view, so the world stays visible around the sight rather than
+       behind it. */
+    const LR = 0.040, cy = mountCy(LR + 0.007);
+    const ltone = k => shade(RCOL[p.rarity], k);
+    const lring = (r, tube, zz, mtl) => {
+      const t = new THREE.Mesh(new THREE.TorusGeometry(r, tube, 5, 6), mtl);
+      t.position.set(0, cy, zz); VMT.add(t);
+    };
+    /* The three rings are sized so they subtend the SAME angle from the aiming eye, which
+       is what lets you see through all of them at once. Ratio the radii to their distance
+       from the eye or the nearest ring becomes the aperture and chokes the sight: at the
+       first sizing (1.00 / 0.80 / 0.60) the rear ring was the bottleneck at 3.2 degrees
+       and the two in front of it were doing nothing. 1.00 / 0.90 / 0.80 puts all three
+       within a tenth of a degree of each other and opens the window to 4.7 degrees, while
+       still stepping down enough to read as a tunnel in the locker. */
+    lring(LR,        0.0068, z - 0.042, m);
+    lring(LR*0.90,   0.0068, z - 0.004, ltone(0.58));
+    lring(LR*0.80,   0.0068, z + 0.034, m);
+    for(const sx of [-1, 1])
+      vmBox(m, 0.0072, 0.0072, 0.082, sx*LR*0.78, cy, z - 0.004).rotation.y = sx*0.055;
+    vmBox(m, 0.0072, 0.0072, 0.082, 0, cy + LR*0.86, z - 0.004).rotation.x = -0.055;
+    strip(LR*1.5, 0.0008, GHOST_CYAN, 0.95, 0, cy, z - 0.042);
+    strip(0.0008, LR*1.5, GHOST_CYAN, 0.95, 0, cy, z - 0.042);
+    /* A HOLLOW centre, like the integral scope's. A filled 3.5mm dot at 34cm covers 1.2
+       degrees, and a standing target at 32m is only 1.6 degrees tall - the aim point was
+       hiding most of what you were aiming at. */
+    const ctr = new THREE.Mesh(new THREE.RingGeometry(0.0013, 0.0021, 16), glowM(GHOST_CYAN, 0.95));
+    ctr.position.set(0, cy, z - 0.043); VMT.add(ctr);
+    riser(0.024, 0.030, cy - (LR + 0.007));
+    setAim(0, cy, z, 0.30, 46);
+  } else if(n.includes('ACOG')){
+    const long = false;
     const r = long ? 0.041 : 0.028, len = long ? 0.10 : 0.08;
     const cy = mountCy(r + 0.006), cz = z - (long?0.02:0);
     tube(r, 0.006, len, cz, cy, m); // shell wears the part's rarity color
@@ -4341,7 +4419,7 @@ function fire(e, dir){
     // EXHALE reads as a fat ember rather than a tracer: where Ghost is a thin 5x
     // streak, this is short and thick, so the two never get confused at a glance.
     const drake = ab.has('fire_nova');
-    const color = ghost  ? 0x8FE9FF
+    const color = ghost  ? GHOST_CYAN
                 : seeker ? 0x9FE870
                 : drake  ? 0xFF7A2A
                 : e.isPlayer ? 0xF5C468 : (e.grunt ? 0xB0685E : 0xD8DEE6);

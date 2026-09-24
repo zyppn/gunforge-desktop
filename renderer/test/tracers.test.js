@@ -11,14 +11,28 @@ const need = (re, what) => { const m = html.match(re); if(!m){ ok('source has ' 
 const rgb = h => [(h>>16)&255, (h>>8)&255, h&255];
 const far = (a, b) => rgb(a).reduce((s,v,i) => s + Math.abs(v - rgb(b)[i]), 0);
 
-/* the four projectile treatments, read out of the shipped source */
+/* The four projectile treatments, read out of the shipped source.
+   A branch may name a CONSTANT instead of a literal - Ghost's cyan is GHOST_CYAN now,
+   because the Ghost Bore and the Ghost Lens wear the same colour and a second copy of it
+   would drift. So resolve an identifier through its own `const NAME = 0x...;`. Matching
+   only literals made this test fail the moment a colour was given a name, which is the
+   wrong incentive: it would have pushed the duplication back into the source. */
+const litOrConst = tok => {
+  if(/^0x/i.test(tok)) return parseInt(tok, 16);
+  const d = html.match(new RegExp('const\\s+' + tok + '\\s*=\\s*(0x[0-9A-Fa-f]+)\\s*;'));
+  return d ? parseInt(d[1], 16) : null;
+};
 const C = {};
-for(const [k, re] of [['ghost', /ghost\s*\?\s*(0x[0-9A-Fa-f]+)/],
-                      ['seeker', /seeker\s*\?\s*(0x[0-9A-Fa-f]+)/],
-                      ['drake', /drake\s*\?\s*(0x[0-9A-Fa-f]+)/],
-                      ['plain', /e\.isPlayer\s*\?\s*(0x[0-9A-Fa-f]+)\s*:\s*\(e\.grunt/]]){
+for(const [k, re] of [['ghost', /ghost\s*\?\s*(0x[0-9A-Fa-f]+|[A-Z_][A-Z0-9_]*)/],
+                      ['seeker', /seeker\s*\?\s*(0x[0-9A-Fa-f]+|[A-Z_][A-Z0-9_]*)/],
+                      ['drake', /drake\s*\?\s*(0x[0-9A-Fa-f]+|[A-Z_][A-Z0-9_]*)/],
+                      ['plain', /e\.isPlayer\s*\?\s*(0x[0-9A-Fa-f]+|[A-Z_][A-Z0-9_]*)\s*:\s*\(e\.grunt/]]){
   const m = need(re, k + ' tracer colour');
-  if(m) C[k] = parseInt(m[1], 16);
+  if(m){
+    const val = litOrConst(m[1]);
+    ok(k + ' tracer colour resolves (' + m[1] + ')', val !== null);
+    if(val !== null) C[k] = val;
+  }
 }
 ok('all four tracer colours present', Object.keys(C).length === 4);
 if(Object.keys(C).length === 4){
