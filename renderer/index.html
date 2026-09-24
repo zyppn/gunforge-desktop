@@ -81,7 +81,10 @@
   .wrow .ty{color:var(--dim);font-size:11px;letter-spacing:1px;text-transform:uppercase}
   .wrow .lk{margin-left:auto;font-size:11px;color:var(--dim)}
   .wrow .eqd{margin-left:auto;font-size:11px;color:var(--brass)}
-  .slotrow{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px dashed var(--line);padding:9px 2px}
+  .slotrow{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px dashed var(--line);padding:9px 2px;
+    border-left:2px solid transparent;transition:background .12s,border-color .12s}
+  /* The row has to look hoverable or nobody discovers that it lights the model. */
+  .slotrow.hot{background:rgba(232,163,61,.07);border-left-color:var(--brass)}
   .slotrow .sl{width:86px;color:var(--dim);font-size:11px;letter-spacing:1px;text-transform:uppercase;flex:none}
   .slotrow .pn{flex:1;font-size:13px}
   .statline{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px dotted #22303E}
@@ -1512,7 +1515,11 @@ function renderLoadout(sel){
   const eq = equippedParts(w.id);
   const slotRows = SLOTS.map(s=>{
     const p = eq[s];
-    return '<div class="slotrow"><div class="sl">'+SLOTN[s]+'</div>'
+    // Empty slots light up too: the standard part is still a piece of the gun, and
+    // seeing which one is how you work out what fitting something there would change.
+    return '<div class="slotrow" onmouseenter="pvHighlight(\''+s+'\');this.classList.add(\'hot\')"'
+     +' onmouseleave="pvHighlight(null);this.classList.remove(\'hot\')">'
+     +'<div class="sl">'+SLOTN[s]+'</div>'
      +'<div class="pn">'+(p ? '<span class="rc-'+p.rarity+'">'+esc(p.name)+'</span>'+(p.set?' <span class="rc-epic">⬡</span>':'') : '<span style="color:var(--dim)">Standard '+SLOTN[s]+' (default)</span>')+'</div>'
      +(p ? '<button class="btn sm" onclick="unequipSlot(\''+w.id+'\',\''+s+'\')">REMOVE</button>' : '')
      +'</div>';
@@ -3103,10 +3110,44 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
 /* ---- armory preview: rotating, draggable render of the assembled gun ---- */
 let pvRenderer=null, pvScene=null, pvCam=null, pvGun=null, pvRAF=0, pvLast=0;
 let pvDrag=false, pvVelY=0.7, pvIdle=0;
+/* Which slot the armory is pointing at, or null. Every mesh already carries
+   userData.slot - that was the groundwork for the death card's leader lines - so
+   lighting one part is a traverse and a material tweak rather than a second model.
+
+   The armory deliberately keeps its spin instead of the card's static callouts: the
+   slot rows already name every part, and the one thing they cannot tell you is WHICH
+   lump of metal a name refers to. This answers exactly that and nothing else. */
+let pvLit = null;
+function pvHighlight(slot){
+  pvLit = slot || null;
+  if(!pvGun) return;
+  pvGun.traverse(o => {
+    if(!o.isMesh || !o.userData.slot) return;   // never touch the set-status strip
+    const m = o.material;
+    if(!m || Array.isArray(m) || !m.emissive) return;
+    // remember the finish the part shipped with, once, before anything changes it
+    if(m.userData.pvBase === undefined){
+      m.userData.pvBase = m.emissiveIntensity || 0;
+      m.userData.pvEm = m.emissive.getHex();
+      m.userData.pvCol = m.color.getHex();
+    }
+    m.color.setHex(m.userData.pvCol);
+    if(o.userData.slot !== pvLit){
+      m.emissive.setHex(m.userData.pvEm);
+      m.emissiveIntensity = m.userData.pvBase;
+      /* Dim everything else rather than only brightening the one. Every part on this
+         gun is already a different saturated colour by rarity, so glow alone just
+         made the hovered piece a lighter shade of what it already was - readable
+         side by side, not readable at a glance. Taking the rest down is unambiguous
+         whatever colour the part happens to be. */
+      if(pvLit) m.color.multiplyScalar(0.42);
+    }
+  });
+}
 function killPreview(){
   if(pvRAF){ cancelAnimationFrame(pvRAF); pvRAF=0; }
   if(pvRenderer){ try{ pvRenderer.dispose(); pvRenderer.forceContextLoss(); }catch(e){} pvRenderer=null; }
-  pvScene=null; pvGun=null;
+  pvScene=null; pvGun=null; pvLit=null;   // a new gun starts with nothing lit
 }
 function initPreview(wid){
   killPreview();
@@ -3143,7 +3184,7 @@ function initPreview(wid){
   pvScene.add(grid);
 
   // drag to inspect (auto-rotation resumes after release)
-  pvDrag=false; pvVelY=0.7; pvIdle=0;
+  pvDrag=false; pvVelY=0.7; pvIdle=0; pvLit=null;
   pcv.onmousedown = e=>{ pvDrag=true; e.preventDefault(); };
   pcv.onmousemove = e=>{
     if(!pvDrag || !pvGun) return;
@@ -3161,9 +3202,24 @@ function initPreview(wid){
     if(!pvDrag){
       pvIdle += dt;
       if(pvIdle > 0.8){
-        pvGun.rotation.y += dt*0.7;
+        /* Slowed while a part is lit, not stopped. Stopping felt right until the part
+           you are hovering happens to be on the far side, and then the highlight is
+           on a face you cannot see with no way to bring it round but dragging. */
+        pvGun.rotation.y += dt*0.7*(pvLit ? 0.25 : 1);
         pvGun.rotation.x *= (1 - dt*1.5); // ease pitch back to level
       }
+    }
+    if(pvLit){
+      // pulse, because a static glow on a low-poly part reads as "this bit is a
+      // different colour" rather than "this bit is the one you asked about"
+      const k = 0.45 + 0.22*Math.sin(t*0.006);
+      pvGun.traverse(o => {
+        if(!o.isMesh || o.userData.slot !== pvLit) return;
+        const m = o.material;
+        if(!m || Array.isArray(m) || !m.emissive) return;
+        m.emissive.copy(m.color);
+        m.emissiveIntensity = k;
+      });
     }
     pvRenderer.render(pvScene, pvCam);
     pvRAF = requestAnimationFrame(loop);
