@@ -72,11 +72,14 @@ function fight(A,B,d,q,st){
 /* templates cached per weapon+pieces+crit bucket - per-kit fitting does not finish */
 const TPL=new Map();
 function build(tag,wid,sp,kit,setAb){
-  const b=mkBuild(tag,wid,sp,[...kit,...setAb]);
+  // which set is this, and therefore how good are its pieces
+  const st=C.SETS.find(s=>s.weapon===wid && setAb.indexOf(s.effect)>=0);
+  const setScale=st?C.RAR[st.rarity].scale:undefined;
+  const b=mkBuild(tag,wid,sp,[...kit,...setAb],setScale);
   b.tag=tag; b.killshield=setAb.indexOf('killshield')>=0;
   const bucket=Math.round(b.crit*100/6)*6;
-  const key=wid+'|'+sp.join(',')+'|'+bucket;
-  if(!TPL.has(key)){ const p=mkBuild('p',wid,sp,[]); p.crit=bucket/100;
+  const key=wid+'|'+sp.join(',')+'|'+bucket+'|'+(setScale||0);
+  if(!TPL.has(key)){ const p=mkBuild('p',wid,sp,[],setScale); p.crit=bucket/100;
     fitTemplate(p,0.85); TPL.set(key,p.S); }
   /* The template is fitted from a build with NO abilities, so any ability that lands
      in the STAT block rather than on the build object is erased when S is copied over.

@@ -78,14 +78,14 @@ if(process.env.DUEL_VERBOSE) console.log('  STACK read from source:', JSON.strin
 const stack=(kind,n)=>{ if(!n) return 0; const s=STACK[kind];
   return Math.min(s.cap, s.first + s.extra*(n-1)); };
 
-function mkBuild(name, wid, setPieces, ab){
+function mkBuild(name, wid, setPieces, ab, setScale){
   const nDead = ab.filter(a=>a==='deadeye').length;
   const nSwift= ab.filter(a=>a==='swift').length;
   const has = a=>ab.indexOf(a)>=0;
   let crit = nDead ? stack('deadeye', nDead) : 0;
   if(has('critheal')) crit += 0.15;                 // Saint carries its own
   const w = C.weaponById(wid);
-  return { name, wid, setPieces, ab, has,
+  return { name, wid, setPieces, ab, has, setScale,
     crit: Math.min(0.6, crit),
     tspd: TSPD * (1 + stack('swift', nSwift)),
     vamp: has('vampiric'), burn: has('incendiary')||has('fire_nova'),
@@ -99,7 +99,10 @@ function mkBuild(name, wid, setPieces, ab){
 function statsFor(B, pick){
   const w=C.weaponById(B.wid); const m={dmg:1,rof:1,mag:1,reload:1,spread:1};
   for(let i=0;i<C.SLOTS.length;i++){
-    const sc = B.setPieces.indexOf(C.SLOTS[i])>=0 ? EPI : LEG;
+    /* A set piece scales by ITS SET's rarity, not always epic. Ghost Protocol and
+       Juggernaut are legendary sets (scale 4.0); this hardcoded 3.0 for every set,
+       so both have been measured carrying weaker pieces than the game gives them. */
+    const sc = B.setPieces.indexOf(C.SLOTS[i])>=0 ? (B.setScale || EPI) : LEG;
     const t = C.PART_POOL[C.SLOTS[i]][pick[i]].mods;
     for(const k in t) if(k in m) m[k]+=+(t[k]*sc).toFixed(3);
   }
