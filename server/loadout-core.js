@@ -262,7 +262,23 @@
    0.7 in the renderer, which is the same two-copies-of-a-number shape that let the PvP
    and offline paths of this very set drift apart before. It also means the balance model
    can read the shipped value instead of restating it. */
-const JUGG_RESIST = 0.30;
+/* 0.30 -> 0.25. Juggernaut measured at a 75.1% ceiling - top of the game by 4.4
+   points, seven of the top nine builds - and beat its nearest rival at EVERY range,
+   93% of the time inside 10m. It had no losing condition.
+
+   That was invisible until the duel model was fixed to scale set pieces by their own
+   set's rarity; Juggernaut is legendary and four of its pieces were being measured as
+   epic. The earlier reading of 68.8% with a clean 16m crossover was an artifact.
+
+   25% puts the two ceilings level (71.2 Goliath, 70.6 Raptor) and restores a real
+   crossover: the Goliath owns inside 16m, the Raptor owns past it. 20% measured
+   better still - it gives the Raptor the higher ceiling and the crossover moves to
+   14m - but this is the headline number on a legendary four-piece set, the most
+   expensive thing in the game to assemble, and a third off it is a lot to take on
+   duel evidence alone. The model never sees the Goliath survive a three-way fight on
+   the hill, which is what the resist is for. 20% is the fallback if it still feels
+   inevitable in Crucible. */
+const JUGG_RESIST = 0.25;
 const SHIELD_SOAK = 0.75;
 
   /* The shield POOL, which is the lever that actually adds mitigation. The

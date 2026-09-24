@@ -11,6 +11,7 @@
        DIRECTLY rather than extrapolating - the uptime sweep's 100% row is this.
    These pin it flat. If a condition ever creeps back, this suite says so. */
 const path = require('path'), Module = require('module');
+const CORE = require('../loadout-core.js');   // the figure, read not restated
 const SRV = path.join(__dirname, '..');
 let Captured = null;
 class FakeRoom {
@@ -105,9 +106,11 @@ ok('firingResistOn is still defined once',
   };
   const lossBraced = 100 - hpAfter(braced);
   const lossPlain  = 100 - hpAfter(plain);
-  ok('a target that is not firing still takes 30% less (' +
+  // read the figure from the constant; it moved once (0.30 -> 0.25) and two tests
+  // restated it as a literal rather than asking
+  ok('a target that is not firing still takes ' + Math.round(CORE.JUGG_RESIST*100) + '% less (' +
      lossBraced.toFixed(2) + ' vs ' + lossPlain.toFixed(2) + ')',
-     Math.abs(lossBraced - lossPlain * 0.7) < 0.01);
+     Math.abs(lossBraced - lossPlain * (1 - CORE.JUGG_RESIST)) < 0.01);
 }
 
 console.log(fails ? '\n  jugg.test.js: ' + fails + ' FAILED' : '  jugg.test.js: all passed');

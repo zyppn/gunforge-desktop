@@ -78,8 +78,9 @@ console.log('\nspecific effects:');
     x.r.loadouts.get('B').abilities.push('firing_resist');
     shoot(x); resist += 100 - x.b.hp; }
   console.log('    plain ' + (plain/400).toFixed(2) + ' vs vs-a-firing-juggernaut ' + (resist/400).toFixed(2));
-  check('firing_resist cuts incoming damage 30% while the target shoots',
-        Math.abs((resist/400) / (plain/400) - 0.7) < 0.02, (resist/plain).toFixed(3)); }
+  const RES = require('../loadout-core.js').JUGG_RESIST;
+  check('firing_resist cuts incoming damage ' + Math.round(RES*100) + '% while the target shoots',
+        Math.abs((resist/400) / (plain/400) - (1 - RES)) < 0.02, (resist/plain).toFixed(3)); }
 { const s = scenario(null, 'm17');
   s.r.loadouts.get('A').abilities.push('killshield');
   s.b.hp = 5; shoot(s);
