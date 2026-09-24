@@ -29,6 +29,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "oauth-loopback.js",
       "renderer/**/*"
     ],
     "win": {

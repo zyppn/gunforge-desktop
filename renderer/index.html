@@ -457,7 +457,7 @@ const HAS_NATIVE = typeof window!=='undefined' && window.gunforgeNative && typeo
 const HAS_SUPABASE = () => !!(BACKEND.supabaseUrl && BACKEND.supabaseAnonKey);
 
 /* ---- Auth: anonymous sign-in so every request carries a real auth.uid() and RLS applies ---- */
-const AUTH = { token: null, refresh: null, uid: null, expires: 0, anon: undefined, email: null };
+const AUTH = { token: null, refresh: null, uid: null, expires: 0, anon: undefined, email: null, name: null };
 function authToken(){ return AUTH.token || BACKEND.supabaseAnonKey; }
 // requests use the USER's JWT when signed in (RLS sees auth.uid()); anon key only pre-auth
 function sbHeaders(){ return {'apikey':BACKEND.supabaseAnonKey, 'Authorization':'Bearer '+authToken(), 'Content-Type':'application/json'}; }
@@ -473,12 +473,14 @@ function authApply(session){
   if(session.user){
     AUTH.anon  = session.user.is_anonymous !== false && !session.user.email;
     AUTH.email = session.user.email || null;
+    const md = session.user.user_metadata || {};
+    AUTH.name  = md.full_name || md.name || md.user_name || (md.custom_claims && md.custom_claims.global_name) || null;
   }
   AUTH.expires = Date.now() + ((session.expires_in||3600) * 1000) - 60000; // refresh 1min early
   authSave();
 }
 function authSave(){ try{ localStorage.setItem('gf_auth', JSON.stringify({token:AUTH.token, refresh:AUTH.refresh,
-  uid:AUTH.uid, expires:AUTH.expires, anon:AUTH.anon, email:AUTH.email})); }catch(e){} }
+  uid:AUTH.uid, expires:AUTH.expires, anon:AUTH.anon, email:AUTH.email, name:AUTH.name})); }catch(e){} }
 async function authAnonymousSignIn(){
   const r = await fetch(BACKEND.supabaseUrl+'/auth/v1/signup', {
     method:'POST',
@@ -559,7 +561,9 @@ async function authCall(method, pathQ, body, withUser){
   const headers = {'apikey':BACKEND.supabaseAnonKey, 'Content-Type':'application/json'};
   if(withUser) headers.Authorization = 'Bearer ' + AUTH.token;
   let r;
-  try{ r = await fetch(BACKEND.supabaseUrl + pathQ, { method, headers, body: JSON.stringify(body || {}) }); }
+  const init = { method, headers };
+  if(method !== 'GET') init.body = JSON.stringify(body || {});     // fetch throws on a GET with a body
+  try{ r = await fetch(BACKEND.supabaseUrl + pathQ, init); }
   catch(e){ return { ok:false, status:0, code:'offline', msg:'Could not reach the account server.' }; }
   let j = null; try{ j = await r.json(); }catch(e){}
   if(r.ok) return { ok:true, status:r.status, data:j };
@@ -1483,6 +1487,75 @@ function renderMenu(){
   show('menu');
   refreshPendingBadge();
 }
+/* ---- Discord ----------------------------------------------------------------------
+   Same promise as the email flow: LINKING attaches Discord to the guest's existing
+   Supabase user, so the uid - and with it players.auth_uid and the whole locker - does
+   not change. SIGNING IN finds the user a Discord account is already attached to.
+   Steam, later, is one more identity on that same user.
+
+   PKCE, so the code that comes back through the loopback listener (oauth-loopback.js,
+   in main) is worthless without the verifier, which never leaves this function.
+
+     link     GET  /auth/v1/user/identities/authorize?provider=discord&...   (as the guest)
+     sign in  GET  /auth/v1/authorize?provider=discord&...                   (in the browser)
+     both     POST /auth/v1/token?grant_type=pkce  {auth_code, code_verifier}
+   Linking needs "Manual linking" enabled in Supabase - see server/AUTH_SETUP.md. */
+const DISCORD_SCOPES = 'identify email';
+function b64url(bytes){
+  let s = ''; const a = new Uint8Array(bytes);
+  for(let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function pkcePair(){
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  return { verifier, challenge };
+}
+function discordErrText(r){
+  const c = String(r.error_code || r.code || ''), d = String(r.error_description || r.msg || '');
+  if(r.timeout) return 'Timed out waiting for Discord. Try again.';
+  if(r.cancelled) return 'Cancelled.';
+  if(c === 'identity_already_exists') return 'That Discord account is already linked to a different GUNFORGE account.';
+  if(c === 'manual_linking_disabled') return 'Discord linking is not switched on yet (server setup).';
+  if(r.error === 'access_denied') return 'Discord sign-in was cancelled.';
+  if(r.error === 'no_port') return 'Could not open a local callback port. Close other apps using ports 53682-53684 and try again.';
+  if(r.status === 0) return 'Could not reach the account server. Check your connection.';
+  return d || 'Discord sign-in did not finish.';
+}
+/* mode 'link' keeps this account and attaches Discord; 'login' switches to whichever
+   account that Discord belongs to (creating one if it belongs to none). */
+async function discordAuth(mode){
+  const nat = window.gunforgeNative;
+  if(!nat || !nat.oauthListen) return { ok:false, err:'Discord sign-in needs the desktop app.' };
+  if(mode === 'link' && !await ensureAuth()) return { ok:false, err:'Could not reach the account server.' };
+  const before = AUTH.uid;
+  const lis = await nat.oauthListen();
+  if(!lis || !lis.redirect) return { ok:false, err:discordErrText(lis || {}) };
+  const { verifier, challenge } = await pkcePair();
+  const q = new URLSearchParams({ provider:'discord', redirect_to: lis.redirect, scopes: DISCORD_SCOPES,
+                                  code_challenge: challenge, code_challenge_method: 's256' });
+  let url;
+  if(mode === 'link'){
+    q.set('skip_http_redirect', 'true');
+    const res = await authCall('GET', '/auth/v1/user/identities/authorize?' + q, null, true);
+    if(!res.ok || !res.data || !res.data.url){ nat.oauthCancel && nat.oauthCancel(); return { ok:false, err:discordErrText(res) }; }
+    url = res.data.url;
+  } else {
+    url = BACKEND.supabaseUrl + '/auth/v1/authorize?' + q;
+  }
+  const cb = await nat.oauthOpen(url);
+  if(!cb || !cb.code) return { ok:false, err:discordErrText(cb || {}), code:(cb && cb.error_code) || '' };
+  const tok = await authCall('POST', '/auth/v1/token?grant_type=pkce', { auth_code: cb.code, code_verifier: verifier });
+  if(!tok.ok || !tok.data || !tok.data.access_token) return { ok:false, err:discordErrText(tok) };
+  authApply(tok.data);
+  AUTH_NEEDS_SIGNIN = false;
+  /* The uid MUST survive a link - that is the whole guarantee. If it ever moved, the
+     locker would silently be someone else's; refuse loudly instead. */
+  if(mode === 'link' && AUTH.uid !== before)
+    return { ok:false, err:'Account error: linking changed the account. Contact support.', uidChanged:true };
+  return { ok:true, uid:AUTH.uid, name:AUTH.name };
+}
+
 /* ---- account: guest / secured ------------------------------------------------------
    The warning is deliberately blunt. "Guest" alone does not tell anyone that a reinstall
    deletes their legendaries, and that is the one fact that makes securing worth a click. */
@@ -1494,16 +1567,47 @@ function maskEmail(e){
 function accountRowHtml(){
   if(!HAS_SUPABASE()) return '';
   if(AUTH_NEEDS_SIGNIN)
-    return '<div class="acctrow warn"><div><b>SESSION EXPIRED</b><span>Sign in with your email to restore your locker.</span></div>'
-      + '<button class="btn sm primary" onclick="openSignIn()">SIGN IN</button></div>';
+    return '<div class="acctrow warn"><div><b>SESSION EXPIRED</b><span>Sign in with Discord to restore your locker.</span></div>'
+      + '<button class="btn sm primary" onclick="discordStart(\'login\')">SIGN IN WITH DISCORD</button></div>';
   if(AUTH.anon === false)
-    return '<div class="acctrow"><div><b>ACCOUNT SECURED</b><span>' + maskEmail(AUTH.email)
+    return '<div class="acctrow"><div><b>ACCOUNT SECURED</b><span>'
+      + (AUTH.name ? 'Discord: ' + esc(AUTH.name) : maskEmail(AUTH.email))
       + ' — your locker follows you to any PC.</span></div>'
-      + '<button class="btn sm" onclick="openSignIn()">SWITCH ACCOUNT</button></div>';
+      + '<button class="btn sm" onclick="discordStart(\'login\')">SWITCH ACCOUNT</button></div>';
   return '<div class="acctrow warn"><div><b>GUEST ACCOUNT</b><span>Your parts live on this PC only. '
     + 'Reinstalling or switching computers loses them.</span></div>'
-    + '<div class="btnrow" style="margin:0"><button class="btn sm primary" onclick="openSecureAccount()">SECURE ACCOUNT</button>'
-    + '<button class="btn sm" onclick="openSignIn()">SIGN IN</button></div></div>';
+    + '<button class="btn sm primary" onclick="discordStart(\'auto\')">CONNECT DISCORD</button></div>';
+}
+function guestHasProgress(){ return AUTH.anon !== false && P && (((P.inventory||[]).length > 0) || (P.level||1) > 1); }
+/* 'auto' is the guest's one button. A guest with nothing to keep just signs in: that
+   finds their account if this Discord already has one, or starts one - one trip to the
+   browser either way. A guest with progress LINKS, which keeps it. Only if that Discord
+   already belongs to another account do they get asked which one to keep. */
+async function discordStart(mode){
+  if(mode === 'auto') mode = guestHasProgress() ? 'link' : 'login';
+  modal('<div class="eyebrow">Account</div><h2>Continue in your browser</h2>'
+    + '<p class="note">A Discord page has opened in your browser. Approve it there and you will be brought back here.</p>'
+    + '<div class="btnrow"><button class="btn" onclick="discordCancel()">CANCEL</button></div>');
+  const r = await discordAuth(mode);
+  if(!r.ok){
+    if(r.code === 'identity_already_exists') return discordConflict();
+    modal('<div class="eyebrow">Account</div><h2>Discord</h2><p class="note" style="color:var(--bad,#E8734A)">' + esc(r.err) + '</p>'
+      + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'' + mode + '\')">TRY AGAIN</button>'
+      + '<button class="btn" onclick="closeModal()">CLOSE</button></div>');
+    return;
+  }
+  closeModal();
+  toast(mode === 'link' ? 'DISCORD CONNECTED — ACCOUNT SECURED' : 'SIGNED IN' + (r.name ? ' AS ' + String(r.name).toUpperCase() : ''));
+  if(mode === 'login'){ try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); } }
+  renderMenu();
+}
+function discordCancel(){ const n = window.gunforgeNative; if(n && n.oauthCancel) n.oauthCancel(); closeModal(); }
+function discordConflict(){
+  modal('<div class="eyebrow">Account</div><h2>That Discord already has an account</h2>'
+    + '<p class="note">It is linked to a different GUNFORGE account. You can switch to that one, but this PC\'s guest progress (LVL '
+    + P.level + ', ' + (P.inventory||[]).length + ' parts) stays behind on the guest and will not come with you.</p>'
+    + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SWITCH TO THAT ACCOUNT</button>'
+    + '<button class="btn" onclick="closeModal()">KEEP PLAYING AS GUEST</button></div>');
 }
 /* One two-step modal for both flows: email -> code. `mode` is 'link' or 'login'. */
 let ACCT_FLOW = null;

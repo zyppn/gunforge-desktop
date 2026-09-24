@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
+const { oauthListen, isAuthUrl } = require('./oauth-loopback');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
@@ -38,6 +39,27 @@ ipcMain.handle('open:releases', () => {
   shell.openExternal('https://github.com/zyppn/gunforge-desktop/releases/latest');
   return true;
 });
+/* Discord sign-in. The renderer asks for a callback address first (the authorize URL
+   has to contain it), then asks us to open the URL in the player's browser and wait. */
+let pendingOAuth = null;
+ipcMain.handle('oauth:listen', async () => {
+  if(pendingOAuth){ pendingOAuth.close(); pendingOAuth = null; }   // a second click replaces the first
+  try{ pendingOAuth = await oauthListen(); return { redirect: pendingOAuth.redirect }; }
+  catch(e){ return { error: 'no_port', error_description: e.message }; }
+});
+ipcMain.handle('oauth:open', async (e, url) => {
+  const mine = pendingOAuth;
+  if(!mine) return { error: 'no_listener' };
+  if(!isAuthUrl(url)){ mine.close(); pendingOAuth = null; return { error: 'bad_url' }; }
+  shell.openExternal(url);
+  const r = await mine.result;
+  if(pendingOAuth === mine) pendingOAuth = null;
+  // bring the game back in front of the browser tab the player just used
+  if(win){ if(win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  if(process.platform === 'darwin') app.focus({ steal: true });
+  return r;
+});
+ipcMain.handle('oauth:cancel', () => { if(pendingOAuth){ pendingOAuth.close(); pendingOAuth = null; } return true; });
 ipcMain.handle('win:fullscreen', (e, on) => {
   if(win) win.setFullScreen(!!on);
   return true;

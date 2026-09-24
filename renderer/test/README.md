@@ -32,3 +32,11 @@ signing in on a new PC lands on that uid, a flaky Supabase (network down, 503, 4
 never swaps the player onto a fresh guest, and concurrent callers at boot share one.
 
     node renderer/test/account.test.js
+
+`oauth.test.js` runs the Discord loopback listener (`oauth-loopback.js`) on real
+localhost sockets: a code arrives, a busy port falls through, an error arrives in the
+query or only in the #fragment, an abandoned tab times out, and main only ever opens
+Supabase or Discord URLs. It also fails if main.js requires a file that electron-builder
+would not ship.
+
+    node renderer/test/oauth.test.js

@@ -34,13 +34,16 @@ const SRC = [
   line(/const AUTH = \{[^\n]*\};/), line(/const AUTH_EMAIL_RE = [^\n]*;/),
   line(/let AUTH_NEEDS_SIGNIN = [^\n]*;/), line(/let _authInflight = [^\n]*;/),
   ...['authStore','authApply','authSave','authAnonymousSignIn','authRefresh','ensureAuth','_ensureAuth',
-      'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode'].map(lift),
+      'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode',
+      'b64url','pkcePair','discordErrText','discordAuth'].map(lift),
+  line(/const DISCORD_SCOPES = [^\n]*;/),
 ].join('\n');
 
 /* ---- a fake GoTrue ---------------------------------------------------------------- */
 function fakeAuth(){
   const S = { users: new Map(), refresh: new Map(), access: new Map(), pending: new Map(), seq: 0,
-              calls: [], mode: 'up', sent: [] };
+              calls: [], mode: 'up', sent: [], oauth: new Map(), codes: new Map(), redirects: [],
+              manualLinking: true, discord: 'd100', approve: true };
   const newUser = extra => { const id = 'u' + (++S.seq); const u = Object.assign({ id, is_anonymous: true, email: null }, extra); S.users.set(id, u); return u; };
   const session = u => { const a = 'at' + (++S.seq), r = 'rt' + (++S.seq);
     S.access.set(a, u.id); S.refresh.set(r, u.id);
@@ -82,7 +85,51 @@ function fakeAuth(){
       if(pd.type === 'email_change'){ usr.email = b.email; usr.is_anonymous = false; }
       return resp(200, session(usr));
     }
+    if(u.pathname === '/auth/v1/user/identities/authorize' && opt.method === 'GET'){
+      if(opt.body !== undefined) throw new TypeError('Request with GET/HEAD method cannot have body.');
+      const id = who(); if(!id) return resp(401, { msg: 'no session' });
+      if(!S.manualLinking) return resp(404, { error_code: 'manual_linking_disabled', msg: 'Manual linking is disabled' });
+      const st = 'st' + (++S.seq);
+      S.oauth.set(st, { kind: 'link', uid: id, challenge: u.searchParams.get('code_challenge'),
+                        redirect: u.searchParams.get('redirect_to') });
+      return resp(200, { url: 'https://discord.com/oauth2/authorize?client_id=1&state=' + st });
+    }
+    if(p === '/auth/v1/token?grant_type=pkce'){
+      const c = S.codes.get(b.auth_code);
+      if(!c) return resp(400, { error_code: 'flow_state_not_found', msg: 'invalid flow state' });
+      const h = require('crypto').createHash('sha256').update(b.code_verifier).digest('base64url');
+      if(h !== c.challenge) return resp(400, { error_code: 'bad_code_verifier', msg: 'code challenge does not match' });
+      S.codes.delete(b.auth_code);
+      return resp(200, session(S.users.get(c.uid)));
+    }
     return resp(404, { msg: 'no route ' + p });
+  };
+  /* The player's browser and Discord. `S.discord` is who they are signed in to Discord
+     as; `S.approve` false is them clicking Cancel. Returns what the loopback would. */
+  S.browser = url => {
+    const u = new URL(url);
+    if(S.approve === false) return { error: 'access_denied', error_description: 'The resource owner denied the request' };
+    let flow;
+    if(u.hostname === 'discord.com') flow = S.oauth.get(u.searchParams.get('state'));
+    else if(u.pathname === '/auth/v1/authorize')
+      flow = { kind: 'login', challenge: u.searchParams.get('code_challenge'), redirect: u.searchParams.get('redirect_to') };
+    if(!flow || !flow.challenge) return { error: 'invalid_request', error_description: 'no flow' };
+    const owner = [...S.users.values()].find(x => x.discord === S.discord);
+    let uid;
+    if(flow.kind === 'link'){
+      if(owner && owner.id !== flow.uid) return { error: 'server_error', error_code: 'identity_already_exists', error_description: 'Identity is already linked to another user' };
+      const usr = S.users.get(flow.uid);
+      usr.discord = S.discord; usr.is_anonymous = false; usr.email = S.discord + '@discord.example';
+      usr.user_metadata = { full_name: 'Op ' + S.discord };
+      uid = usr.id;
+    } else {
+      uid = owner ? owner.id : newUser({ discord: S.discord, is_anonymous: false, email: S.discord + '@discord.example',
+                                          user_metadata: { full_name: 'Op ' + S.discord } }).id;
+    }
+    const code = 'code' + (++S.seq);
+    S.codes.set(code, { uid, challenge: flow.challenge });
+    S.redirects.push(flow.redirect);
+    return { code };
   };
   return S;
 }
@@ -95,7 +142,14 @@ function client(S, store){
     toast: m => { ctx.__toasts.push(m); }, __toasts: [],
     BACKEND: { supabaseUrl: 'https://proj.supabase.co', supabaseAnonKey: 'anon' },
     HAS_SUPABASE: () => true,
+    crypto: globalThis.crypto, TextEncoder, URLSearchParams, btoa, Uint8Array,
+    gunforgeNative: {
+      oauthListen: async () => ({ redirect: 'http://127.0.0.1:53682/auth/callback' }),
+      oauthOpen: async url => S.browser(url),
+      oauthCancel: async () => true,
+    },
   });
+  ctx.window = ctx;
   vm.runInContext(SRC + '\nthis.__get = () => ({ AUTH, AUTH_NEEDS_SIGNIN });', ctx);
   ctx.store = store;
   return ctx;
@@ -173,6 +227,53 @@ const expire = c => { const a = JSON.parse(c.store.get('gf_auth')); a.expires = 
     const [a, b, d] = await Promise.all([c.ensureAuth(), c.ensureAuth(), c.ensureAuth()]);
     ok('three callers at boot share one guest', a && a === b && b === d
        && S.calls.filter(x => x === 'POST /auth/v1/signup').length === 1);
+  }
+
+  /* ---- 5. Discord ---- */
+  {
+    const S = fakeAuth(), c = client(S);
+    const uid = await c.ensureAuth();
+    const r = await c.discordAuth('link');
+    ok('Discord link succeeds', r.ok, r.err);
+    ok('THE UID IS UNCHANGED after linking Discord', r.uid === uid, uid + ' -> ' + r.uid);
+    ok('  the account reads as secured, with the Discord name', c.__get().AUTH.anon === false && c.__get().AUTH.name === 'Op d100');
+    ok('  the callback went to the loopback listener', S.redirects[0] === 'http://127.0.0.1:53682/auth/callback');
+
+    const pc2 = client(S);
+    await pc2.ensureAuth();
+    const s2 = await pc2.discordAuth('login');
+    ok('signing in with Discord on a new PC lands on the ORIGINAL uid', s2.ok && s2.uid === uid, s2.uid);
+
+    const pc3 = client(S);
+    const g3 = await pc3.ensureAuth();
+    const clash = await pc3.discordAuth('link');
+    ok('linking a Discord that already has an account says so', !clash.ok && clash.code === 'identity_already_exists', clash.err);
+    ok('  and leaves this PC on its own guest', pc3.__get().AUTH.uid === g3);
+
+    S.discord = 'd200';
+    const fresh = client(S); await fresh.ensureAuth();
+    const n = await fresh.discordAuth('login');
+    ok('a Discord with no account yet gets a new one on sign-in', n.ok && n.uid !== uid);
+
+    S.approve = false;
+    const den = await client(S).discordAuth('login');
+    ok('cancelling on Discord is reported in plain language', !den.ok && /cancelled/i.test(den.err), den.err);
+    S.approve = true;
+
+    S.manualLinking = false;
+    const off = client(S); await off.ensureAuth();
+    const dis = await off.discordAuth('link');
+    ok('linking with manual linking switched off says it is a setup problem', !dis.ok && /server setup/.test(dis.err), dis.err);
+    S.manualLinking = true;
+  }
+  {
+    // the verifier is the only thing that makes the code worth anything
+    const S = fakeAuth(), c = client(S);
+    await c.ensureAuth();
+    const orig = S.browser;
+    S.browser = url => { const r = orig(url); const k = S.codes.get(r.code); k.challenge = 'someone-elses-challenge'; return r; };
+    const r = await c.discordAuth('login');
+    ok('a code that does not match our PKCE verifier is refused', !r.ok);
   }
 
   console.log(fails ? '\naccount: ' + fails + ' failure(s)' : '\naccount: all clear');
