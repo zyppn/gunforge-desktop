@@ -60,9 +60,11 @@ console.log('\nspecific effects:');
 { const s = scenario('explosive', 'm17');
   shoot(s);
   const C2 = require('../loadout-core.js');
-  // HE Payload is a FRACTION of the hit now, not a flat 10, so a 13-damage M17
-  // round splashes 7.8 and an LS-1 round splashes 44. Assert the ratio, not a number.
-  const want = 100 - C2.splashDamage(13);
+  /* HE Payload is a FRACTION of the hit, not a flat 10, so the splash tracks
+     whatever the weapon does. This used to hardcode the M17's 13 and broke the day
+     the M17's damage changed - read it from the table, which is the thing being
+     asserted about anyway. */
+  const want = 100 - C2.splashDamage(C2.weaponById('m17').dmg);
   check('explosive splashes a bystander for a share of the hit',
         Math.abs(s.c.hp - want) < 0.5,
         'bystander hp=' + s.c.hp.toFixed(1) + ', expected ' + want.toFixed(1));
@@ -304,9 +306,11 @@ console.log('\nDragon set - EXHALE:');
   check('a plain round dies in 1u of cover', !shoot(null, 1.0).hit);
   const thin = shoot('pierce', 1.0);
   check('an AP round comes through 1u of cover', thin.hit, 'target hp=' + thin.hp.toFixed(1));
+  // read the clean hit from the table rather than restating it; the number moved once
+  const CLEAN = C5.weaponById('m17').dmg;
   check('but lands at ' + (C5.AP_WALL.dmgMul*100) + '% damage',
-        Math.abs((100 - thin.hp) - 13 * C5.AP_WALL.dmgMul) < 0.6,
-        'took ' + (100 - thin.hp).toFixed(1) + ', a clean hit is 13');
+        Math.abs((100 - thin.hp) - CLEAN * C5.AP_WALL.dmgMul) < 0.6,
+        'took ' + (100 - thin.hp).toFixed(1) + ', a clean hit is ' + CLEAN);
   /* 1.5u is the depth of every long barrier on these maps, and the budget has
      to EXCEED it - a budget equal to the wall is consumed to exactly zero at
      the far face and the round dies inside. Shipped at 1.5 once; it pierced

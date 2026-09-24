@@ -10,11 +10,28 @@
 (function (root) {
   'use strict';
 
+  /* Weapon damage. Measured against the whole field as freebuilds - six legendary
+     parts, no set - every build against every other at five ranges and three lead
+     qualities. The M17 and the Warden were 38% and 44% while three automatics sat
+     at 68-70%, so a new player's first two guns were free kills for anyone holding
+     a third.
+
+     Raising those two closed the ladder from a 32-point spread to 22, and the top
+     three fell to 64-66 on their own, purely from meeting real opposition. Nothing
+     was nerfed to do it. Every attempt to nerf down instead moved nothing: the
+     Raptor lost 1 damage, 80 bullet speed and gained 29% spread in three separate
+     runs and finished within a point of 70% each time - those are not the stats
+     deciding these fights. */
   const WEAPONS = [
-    {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:13, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
+    // 13 -> 16. Unlock 1, so it should be the weakest gun; 38% against the field
+    // is not weakest, it is unusable, and it is the only thing a new account owns.
+    {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:16, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
     {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:10, rof:95,   mag:30, reload:1500, spread:0.110, bspd:520,  pellets:1},
     {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
-    {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:8,  rof:700,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
+    // 8 -> 9 per pellet, so 64 -> 72 a shell. An unlock-8 weapon has no business
+    // at 44%. A 700ms cadence means one missed shell is most of a second with
+    // nothing coming out, and the damage has to be worth that wait.
+    {id:'warden',  name:'Warden W12',    type:'Shotgun',       unlock:8,  dmg:9,  rof:700,  mag:6,  reload:2000, spread:0.120, bspd:560,  pellets:8},
     {id:'ls1',     name:'LS-1 Longshot', type:'Sniper',        unlock:12, dmg:65, rof:1100, mag:5,  reload:2100, spread:0.005, bspd:1150, pellets:1},
     {id:'goliath', name:'Goliath GX',    type:'LMG',           unlock:15, dmg:11, rof:125,  mag:80, reload:2600, spread:0.100, bspd:600,  pellets:1},
   ];
