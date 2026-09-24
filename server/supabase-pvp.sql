@@ -47,10 +47,16 @@ create table if not exists listings (
   -- rows, so cascading would erase an unpaid sale when someone tidies a locker.
   -- Nullable for the same reason. See migration 012.
   part_uid      uuid references parts(uid) on delete set null,
-  seller_id     uuid not null references players(id),
+  -- CASCADE: the only reason to delete a player is that they asked to be erased,
+  -- and their own listings are their data. Also forced: parts.owner_id cascades, so
+  -- their parts go first, and the check below then refuses to leave an ACTIVE
+  -- listing pointing at nothing. See migration 013.
+  seller_id     uuid not null references players(id) on delete cascade,
   price         int  not null check (price between 1 and 1000000),
   status        text not null default 'active' check (status in ('active','sold','cancelled')),
-  buyer_id      uuid references players(id),
+  -- SET NULL, not cascade: a sale is not the BUYER's row to erase. The seller may
+  -- still be owed credits on it, and this row is the only record it happened.
+  buyer_id      uuid references players(id) on delete set null,
   created_at    timestamptz not null default now(),
   resolved_at   timestamptz
 );
