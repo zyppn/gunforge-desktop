@@ -1,0 +1,9 @@
+[Unit]
+Description=GUNFORGE nightly database backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/gunforge-backup.env
+ExecStart=/home/ubuntu/gunforge-desktop/server/ops/backup-db.sh

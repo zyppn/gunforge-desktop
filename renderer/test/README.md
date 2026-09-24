@@ -25,3 +25,10 @@ lower its own baseline.
 
     node renderer/test/zfight.test.js
     ZFIGHT_VERBOSE=1 node renderer/test/zfight.test.js   # print the offending bounds
+
+`account.test.js` runs the shipped auth code against a fake GoTrue. It checks the
+promises accounts make: linking an email keeps the same uid (so the locker stays),
+signing in on a new PC lands on that uid, a flaky Supabase (network down, 503, 429)
+never swaps the player onto a fresh guest, and concurrent callers at boot share one.
+
+    node renderer/test/account.test.js

@@ -279,6 +279,10 @@
   /* A drain can credit several matches at once, so the box has to be able to run
      past the viewport and scroll rather than clipping the last part card. */
   #modal .mbox{max-height:84vh;overflow:auto}
+  .acctrow{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px}
+  .acctrow.warn{border-color:rgba(232,163,61,.45);background:rgba(232,163,61,.06)}
+  .acctrow b{display:block;font-family:var(--mono);font-size:12px;letter-spacing:.08em}
+  .acctrow span{display:block;font-size:12px;opacity:.75;margin-top:2px}
   #modal input{width:100%;background:#0A0E13;border:1px solid var(--line);color:var(--ink);font-family:var(--mono);padding:8px;margin-top:10px;font-size:14px}
   #toasts{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:60;text-align:center}
   .toast{background:var(--panel);border:1px solid var(--brass);color:var(--ink);padding:8px 16px;margin-top:6px;font-size:12.5px;animation:tfade 3.4s forwards}
@@ -453,20 +457,28 @@ const HAS_NATIVE = typeof window!=='undefined' && window.gunforgeNative && typeo
 const HAS_SUPABASE = () => !!(BACKEND.supabaseUrl && BACKEND.supabaseAnonKey);
 
 /* ---- Auth: anonymous sign-in so every request carries a real auth.uid() and RLS applies ---- */
-const AUTH = { token: null, refresh: null, uid: null, expires: 0 };
+const AUTH = { token: null, refresh: null, uid: null, expires: 0, anon: undefined, email: null };
 function authToken(){ return AUTH.token || BACKEND.supabaseAnonKey; }
 // requests use the USER's JWT when signed in (RLS sees auth.uid()); anon key only pre-auth
 function sbHeaders(){ return {'apikey':BACKEND.supabaseAnonKey, 'Authorization':'Bearer '+authToken(), 'Content-Type':'application/json'}; }
 
 function authStore(){ try{ return JSON.parse(localStorage.getItem('gf_auth')||'null'); }catch(e){ return null; } }
-function authSave(){ try{ localStorage.setItem('gf_auth', JSON.stringify({token:AUTH.token, refresh:AUTH.refresh, uid:AUTH.uid, expires:AUTH.expires})); }catch(e){} }
 function authApply(session){
   AUTH.token = session.access_token;
   AUTH.refresh = session.refresh_token;
   AUTH.uid = (session.user && session.user.id) || AUTH.uid;
+  /* Who this account belongs to. A session saved before this field existed has no
+     `anon` key, and every account made before email linking was anonymous, so an
+     absent value reads as a guest. The next refresh returns the user and fills it in. */
+  if(session.user){
+    AUTH.anon  = session.user.is_anonymous !== false && !session.user.email;
+    AUTH.email = session.user.email || null;
+  }
   AUTH.expires = Date.now() + ((session.expires_in||3600) * 1000) - 60000; // refresh 1min early
   authSave();
 }
+function authSave(){ try{ localStorage.setItem('gf_auth', JSON.stringify({token:AUTH.token, refresh:AUTH.refresh,
+  uid:AUTH.uid, expires:AUTH.expires, anon:AUTH.anon, email:AUTH.email})); }catch(e){} }
 async function authAnonymousSignIn(){
   const r = await fetch(BACKEND.supabaseUrl+'/auth/v1/signup', {
     method:'POST',
@@ -478,26 +490,122 @@ async function authAnonymousSignIn(){
   authApply(s);
   return s;
 }
+/* 'ok' | 'dead' | 'offline' | 'none'. The distinction is the whole point.
+   This used to return a bare false for ANY non-2xx, and ensureAuth answered false by
+   creating a brand-new anonymous account and saving it over the old one - so a single
+   503 or 429 from Supabase at launch threw away the only refresh token that could ever
+   reach the player's locker. Only a 400/401 means the token itself is gone. */
 async function authRefresh(){
-  if(!AUTH.refresh) return false;
-  const r = await fetch(BACKEND.supabaseUrl+'/auth/v1/token?grant_type=refresh_token', {
-    method:'POST',
-    headers:{'apikey':BACKEND.supabaseAnonKey, 'Content-Type':'application/json'},
-    body: JSON.stringify({ refresh_token: AUTH.refresh })
-  });
-  if(!r.ok) return false;
-  authApply(await r.json());
-  return true;
+  if(!AUTH.refresh) return 'none';
+  let r;
+  try{
+    r = await fetch(BACKEND.supabaseUrl+'/auth/v1/token?grant_type=refresh_token', {
+      method:'POST',
+      headers:{'apikey':BACKEND.supabaseAnonKey, 'Content-Type':'application/json'},
+      body: JSON.stringify({ refresh_token: AUTH.refresh })
+    });
+  }catch(e){ return 'offline'; }
+  if(r.ok){ authApply(await r.json()); return 'ok'; }
+  if(r.status === 400 || r.status === 401) return 'dead';
+  return 'offline';
 }
-// ensure a valid session before any authed call; returns uid or null
-async function ensureAuth(){
+/* Set when a SECURED account's session can no longer be refreshed. The menu turns this
+   into a sign-in prompt instead of quietly handing the player an empty guest locker. */
+let AUTH_NEEDS_SIGNIN = false;
+let _authInflight = null;
+// ensure a valid session before any authed call; returns uid or null.
+// Single-flight: the outbox drain and the profile load both call this at boot, and two
+// concurrent calls with no session used to mint two separate guest accounts.
+function ensureAuth(){
+  if(!_authInflight) _authInflight = _ensureAuth().finally(() => { _authInflight = null; });
+  return _authInflight;
+}
+async function _ensureAuth(){
   if(!HAS_SUPABASE()) return null;
   const saved = authStore();
   if(saved && saved.token){ Object.assign(AUTH, saved); }
   if(AUTH.token && Date.now() < AUTH.expires) return AUTH.uid;
-  if(AUTH.refresh && await authRefresh()) return AUTH.uid;
+  if(AUTH.refresh){
+    const st = await authRefresh();
+    if(st === 'ok') return AUTH.uid;
+    if(st === 'offline') return null;           // keep the account; try again later
+    // 'dead': nothing can refresh this session any more
+    if(AUTH.anon === false){ AUTH_NEEDS_SIGNIN = true; return null; }
+    // A guest with a dead token is unrecoverable by anyone - there is no identity to
+    // prove. Starting a fresh guest is the only option left, but it is no longer silent.
+    try{ toast('GUEST SESSION EXPIRED — STARTED A NEW GUEST ACCOUNT'); }catch(e){}
+  }
   try{ await authAnonymousSignIn(); return AUTH.uid; }
   catch(e){ console.error('auth failed', e); return null; }
+}
+
+/* ---- email accounts ---------------------------------------------------------------
+   A guest account lives in this machine's localStorage and nowhere else. Linking an
+   email upgrades that SAME Supabase user in place - the uid does not change, so
+   players.auth_uid still points at the same row and the locker comes along with no
+   migration at all. Signing in on another machine proves the email and gets a session
+   for that user. Every other identity added later (Steam included) attaches the same
+   way: to the user, never to the row.
+
+   Raw GoTrue endpoints, like the rest of this file:
+     link     PUT  /auth/v1/user    {email}                  (as the guest)
+              POST /auth/v1/verify  {type:'email_change', email, token}
+     sign in  POST /auth/v1/otp     {email, create_user:false}
+              POST /auth/v1/verify  {type:'email', email, token}
+   The emails carry a 6-digit code only if the "Change Email Address" and "Magic Link"
+   templates include {{ .Token }} - see server/AUTH_SETUP.md. */
+const AUTH_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+async function authCall(method, pathQ, body, withUser){
+  const headers = {'apikey':BACKEND.supabaseAnonKey, 'Content-Type':'application/json'};
+  if(withUser) headers.Authorization = 'Bearer ' + AUTH.token;
+  let r;
+  try{ r = await fetch(BACKEND.supabaseUrl + pathQ, { method, headers, body: JSON.stringify(body || {}) }); }
+  catch(e){ return { ok:false, status:0, code:'offline', msg:'Could not reach the account server.' }; }
+  let j = null; try{ j = await r.json(); }catch(e){}
+  if(r.ok) return { ok:true, status:r.status, data:j };
+  return { ok:false, status:r.status, code:(j && (j.error_code || j.code || j.error)) || '',
+           msg:(j && (j.msg || j.message || j.error_description)) || ('HTTP ' + r.status) };
+}
+/* Plain-language errors. GoTrue's own strings ("Signups not allowed for otp") mean
+   nothing to a player, and the two that matter most need to say what to do next. */
+function authErrText(res, stage){
+  const c = String(res.code || ''), m = String(res.msg || '').toLowerCase();
+  if(res.status === 0) return 'Could not reach the account server. Check your connection.';
+  if(res.status === 429 || c === 'over_email_send_rate_limit' || c === 'over_request_rate_limit')
+    return 'Too many attempts. Wait a minute and try again.';
+  if(c === 'email_exists' || m.includes('already been registered'))
+    return 'That email already has an account. Use SIGN IN instead.';
+  if(c === 'otp_disabled' || m.includes('signups not allowed'))
+    return 'No account uses that email. Use SECURE ACCOUNT to attach it to this one.';
+  if(c === 'otp_expired' || m.includes('expired') || m.includes('invalid'))
+    return stage === 'verify' ? 'That code is wrong or has expired. Request a new one.' : res.msg;
+  return res.msg;
+}
+async function authLinkEmail(email){
+  if(!AUTH_EMAIL_RE.test(email)) return { ok:false, err:'Enter a valid email address.' };
+  if(!await ensureAuth()) return { ok:false, err:'Could not reach the account server.' };
+  if(AUTH.anon === false) return { ok:false, err:'This account is already secured.' };
+  const res = await authCall('PUT', '/auth/v1/user', { email }, true);
+  return res.ok ? { ok:true } : { ok:false, err:authErrText(res, 'send') };
+}
+async function authSendLoginCode(email){
+  if(!AUTH_EMAIL_RE.test(email)) return { ok:false, err:'Enter a valid email address.' };
+  const res = await authCall('POST', '/auth/v1/otp', { email, create_user:false });
+  return res.ok ? { ok:true } : { ok:false, err:authErrText(res, 'send') };
+}
+/* type 'email_change' finishes a link, 'email' finishes a sign-in. verify returns a
+   full session for both; if a future GoTrue returns only the user for email_change,
+   the refresh picks up the upgraded user on the existing session instead. */
+async function authVerifyCode(email, code, type){
+  const token = String(code || '').replace(/\s+/g, '');
+  if(!/^\d{6,10}$/.test(token)) return { ok:false, err:'Enter the code from the email.' };
+  const res = await authCall('POST', '/auth/v1/verify', { type, email, token }, type === 'email_change');
+  if(!res.ok) return { ok:false, err:authErrText(res, 'verify') };
+  const d = res.data || {};
+  if(d.access_token) authApply(d);
+  else if(await authRefresh() !== 'ok') return { ok:false, err:'Verified, but the session did not refresh. Restart the game.' };
+  AUTH_NEEDS_SIGNIN = false;
+  return { ok:true, uid:AUTH.uid, email:AUTH.email };
 }
 
 /* =====================================================================
@@ -1367,12 +1475,99 @@ function renderMenu(){
    +'<div class="note" style="margin-top:8px;opacity:.6">K / D counts '
    + LoadoutCore.KD_MODES.map(m => (MODES.find(x=>x.id===m)||{name:m}).name).join(' and ').toLowerCase()
    + ' only. Matches and wins count everywhere.</div>'
+   +accountRowHtml()
    +'<div class="note" style="margin-top:10px;opacity:.55">CLIENT BUILD '+CLIENT_BUILD+'</div>'
    +'<div class="btnrow"><button class="btn sm" onclick="renameOp()">CHANGE CALLSIGN</button>'
    +'<button class="btn sm" onclick="menuSettings()">SETTINGS</button></div>'
    +'</div>';
   show('menu');
   refreshPendingBadge();
+}
+/* ---- account: guest / secured ------------------------------------------------------
+   The warning is deliberately blunt. "Guest" alone does not tell anyone that a reinstall
+   deletes their legendaries, and that is the one fact that makes securing worth a click. */
+function maskEmail(e){
+  const [u, d] = String(e || '').split('@');
+  if(!d) return esc(e || '');
+  return esc(u.slice(0, 2) + '•••@' + d);
+}
+function accountRowHtml(){
+  if(!HAS_SUPABASE()) return '';
+  if(AUTH_NEEDS_SIGNIN)
+    return '<div class="acctrow warn"><div><b>SESSION EXPIRED</b><span>Sign in with your email to restore your locker.</span></div>'
+      + '<button class="btn sm primary" onclick="openSignIn()">SIGN IN</button></div>';
+  if(AUTH.anon === false)
+    return '<div class="acctrow"><div><b>ACCOUNT SECURED</b><span>' + maskEmail(AUTH.email)
+      + ' — your locker follows you to any PC.</span></div>'
+      + '<button class="btn sm" onclick="openSignIn()">SWITCH ACCOUNT</button></div>';
+  return '<div class="acctrow warn"><div><b>GUEST ACCOUNT</b><span>Your parts live on this PC only. '
+    + 'Reinstalling or switching computers loses them.</span></div>'
+    + '<div class="btnrow" style="margin:0"><button class="btn sm primary" onclick="openSecureAccount()">SECURE ACCOUNT</button>'
+    + '<button class="btn sm" onclick="openSignIn()">SIGN IN</button></div></div>';
+}
+/* One two-step modal for both flows: email -> code. `mode` is 'link' or 'login'. */
+let ACCT_FLOW = null;
+function acctModal(mode, step, msg){
+  ACCT_FLOW = Object.assign(ACCT_FLOW || {}, { mode, step });
+  const link = mode === 'link';
+  const title = link ? 'Secure this account' : 'Sign in';
+  const lead = link
+    ? 'Attach an email to this account. Nothing moves: your parts, credits and level stay exactly where they are, and you can sign in with this email on any PC.'
+    : 'Sign in to an account you already secured with an email.';
+  let body;
+  if(step === 'email'){
+    /* Signing in replaces this machine's session. If it is a guest with anything worth
+       keeping, say so before they do it - that progress stays on the guest account. */
+    const guestHas = !link && AUTH.anon !== false && P && ((P.inventory||[]).length || (P.level||1) > 1);
+    body = '<input id="acctemail" type="email" autocomplete="email" placeholder="you@example.com" value="'
+      + esc(ACCT_FLOW.email || '') + '" onkeydown="if(event.key===\'Enter\')acctSend()">'
+      + (guestHas ? '<p class="note" style="margin-top:8px;color:var(--warn,#E8A33D)">This PC\'s guest progress (LVL ' + P.level
+          + ', ' + (P.inventory||[]).length + ' parts) stays on the guest account and will not come with you. '
+          + 'To keep it, use SECURE ACCOUNT instead.</p>' : '')
+      + '<div class="btnrow"><button class="btn primary" id="acctgo" onclick="acctSend()">SEND CODE</button>'
+      + '<button class="btn" onclick="closeModal()">CANCEL</button></div>';
+  } else {
+    body = '<p class="note" style="margin-top:8px">We sent a code to <b>' + esc(ACCT_FLOW.email) + '</b>. It can take a minute.</p>'
+      + '<input id="acctcode" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" '
+      + 'onkeydown="if(event.key===\'Enter\')acctVerify()">'
+      + '<div class="btnrow"><button class="btn primary" id="acctgo" onclick="acctVerify()">VERIFY</button>'
+      + '<button class="btn" onclick="acctModal(\'' + mode + '\',\'email\')">CHANGE EMAIL</button>'
+      + '<button class="btn" onclick="closeModal()">CANCEL</button></div>';
+  }
+  modal('<div class="eyebrow">Account</div><h2>' + title + '</h2><p class="note">' + lead + '</p>' + body
+    + '<p class="note" id="accterr" style="margin-top:8px;color:var(--bad,#E8734A);min-height:1em">' + (msg ? esc(msg) : '') + '</p>');
+  setTimeout(() => { const el = document.getElementById(step === 'email' ? 'acctemail' : 'acctcode'); if(el) el.focus(); }, 30);
+}
+function openSecureAccount(){ ACCT_FLOW = {}; acctModal('link', 'email'); }
+function openSignIn(){ ACCT_FLOW = {}; acctModal('login', 'email'); }
+function acctBusy(on){ const b = document.getElementById('acctgo'); if(b){ b.disabled = on; b.textContent = on ? 'WORKING…' : b.textContent; } }
+async function acctSend(){
+  const email = ($('#acctemail').value || '').trim().toLowerCase();
+  ACCT_FLOW.email = email;
+  acctBusy(true);
+  const r = ACCT_FLOW.mode === 'link' ? await authLinkEmail(email) : await authSendLoginCode(email);
+  if(!r.ok){ acctModal(ACCT_FLOW.mode, 'email', r.err); return; }
+  acctModal(ACCT_FLOW.mode, 'code');
+}
+async function acctVerify(){
+  const code = ($('#acctcode').value || '').trim();
+  acctBusy(true);
+  const link = ACCT_FLOW.mode === 'link';
+  const before = AUTH.uid;
+  const r = await authVerifyCode(ACCT_FLOW.email, code, link ? 'email_change' : 'email');
+  if(!r.ok){ acctModal(ACCT_FLOW.mode, 'code', r.err); return; }
+  closeModal();
+  if(link){
+    /* The uid MUST be unchanged - that is the entire guarantee this flow makes. If it
+       ever moved, the locker would silently belong to someone else; refuse loudly. */
+    if(r.uid !== before){ console.error('[account] link changed uid', before, '->', r.uid); toast('ACCOUNT ERROR — CONTACT SUPPORT'); return; }
+    toast('ACCOUNT SECURED');
+  } else {
+    toast('SIGNED IN');
+    try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
+  }
+  ACCT_FLOW = null;
+  renderMenu();
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'
