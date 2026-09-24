@@ -40,7 +40,13 @@ create index if not exists parts_owner on parts(owner_id);
 -- ---- auction listings ----
 create table if not exists listings (
   id            uuid primary key default gen_random_uuid(),
-  part_uid      uuid not null references parts(uid),
+  -- ON DELETE SET NULL, not the default NO ACTION: a sold listing is a receipt,
+  -- and a receipt outlives the part. With NO ACTION the part could never be
+  -- deleted again, so anything ever listed - or ever BOUGHT at auction - was
+  -- permanently unscrappable. Not CASCADE: backpay_sellers() pays out of these
+  -- rows, so cascading would erase an unpaid sale when someone tidies a locker.
+  -- Nullable for the same reason. See migration 012.
+  part_uid      uuid references parts(uid) on delete set null,
   seller_id     uuid not null references players(id),
   price         int  not null check (price between 1 and 1000000),
   status        text not null default 'active' check (status in ('active','sold','cancelled')),
@@ -48,6 +54,11 @@ create table if not exists listings (
   created_at    timestamptz not null default now(),
   resolved_at   timestamptz
 );
+-- SET NULL must never orphan a LIVE listing: it would sit on the board with no
+-- part behind it and buy_listing would transfer nothing.
+alter table listings drop constraint if exists listings_active_has_part;
+alter table listings add constraint listings_active_has_part
+  check (status <> 'active' or part_uid is not null);
 create index if not exists listings_active on listings(status) where status = 'active';
 
 -- ============================================================

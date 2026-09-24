@@ -108,5 +108,26 @@ sortBy('obtained');
   sortBy('obtained');
 }
 
+/* ---- scrapping a part that was once listed ----------------------------------------
+   scrap_part guarded only against an ACTIVE listing, but listings.part_uid was a bare
+   `references parts(uid)` - NO ACTION - so the delete was blocked by ANY listing row.
+   Cancel a listing and that part was unscrappable forever; buy one at auction and the
+   sold row followed the part to its new owner, so every auction purchase was
+   unscrappable too. The player saw a raw Postgres constraint error on a button that
+   should just work. */
+{
+  const fk = schema.match(/part_uid[^,]*references parts\(uid\)[^,\n]*/);
+  ok('listings still points at parts', !!fk);
+  ok('and releases the part when it is deleted, or nothing listed can ever be scrapped',
+     !!fk && /on delete set null/i.test(fk[0]));
+  /* CASCADE would also fix the error, and would also delete unpaid sale rows as a
+     side effect of tidying a locker - backpay_sellers() pays out of exactly those. */
+  ok('but does NOT cascade, which would eat the rows back-pay is computed from',
+     !!fk && !/on delete cascade/i.test(fk[0]));
+  ok('a receipt may outlive its part', !!fk && !/not null/i.test(fk[0]));
+  ok('but a LIVE listing may never be orphaned',
+     /check \(status <> 'active' or part_uid is not null\)/.test(schema));
+}
+
 if(fails){ console.error('\nlocker: ' + fails + ' failure(s)'); process.exit(1); }
 console.log('locker: ok');
