@@ -2550,36 +2550,36 @@ function vmBarrel(p, w, frontZ){
   }
   else if(n.includes('Sting')){
     /* The Hornet Sting was folded in with the CQB barrel, so the signature piece of
-       the game's only seeker set shipped as the epic stubby in gold. It is an
-       abdomen now: banded beads pinched at the joints, the ports the swarm leaves
-       from, and a needle past the muzzle.
-       Beads, not a taper - a cone reads as a drill bit. And they are scaled to a
-       COMMON half-length rather than a common aspect ratio; scaling each to its own
-       radius squashed the fat one into a disc and drew the thin one out into a rod. */
-    len = base*0.86;
-    const L = len/3, rad = [0.038, 0.032, 0.026];
-    for(let i = 0; i < 3; i++){
-      const b = new THREE.Mesh(new THREE.SphereGeometry(rad[i], 14, 9), i%2 ? dark() : m);
-      b.scale.set(1, 1, (L*0.58)/rad[i]);
-      b.position.set(0, 0.02, frontZ - L*(i + 0.5));
-      VMT.add(b);
+       the game's only seeker set shipped as the epic stubby in gold.
+       Hard bands, not beads. The first pass built it from spheres and it read as a
+       chess pawn: nothing else this renderer draws is smooth, so an organic bulge
+       looks like it wandered in from another game. A hexagonal shroud in alternating
+       stripes is a wasp AND is cut the same way as the receiver it bolts to. */
+    len = base*0.82;
+    const seg = len/4, rAt = i => 0.037 - 0.0042*i;
+    for(let i = 0; i < 4; i++){
+      const g = new THREE.CylinderGeometry(rAt(i), rAt(i+1), seg, 6);
+      g.rotateY(Math.PI/6);                                       // flat-top, like the frame
+      const c = new THREE.Mesh(g, i%2 ? tone(0.40) : m);          // banding
+      c.rotation.x = Math.PI/2;
+      c.position.set(0, 0.02, frontZ - seg*(i + 0.5));
+      VMT.add(c);
     }
-    for(let i = 1; i < 3; i++){                                   // pinch rings on the joints
-      const t = new THREE.Mesh(new THREE.TorusGeometry((rad[i-1] + rad[i])*0.29, 0.0065, 6, 14), tone(0.45));
-      t.position.set(0, 0.02, frontZ - L*i); VMT.add(t);
+    for(let i = 0; i < 3; i++) for(const sx of [-1, 1])           // seeker ports, cut in the flanks
+      vmBox(glowB(0xFFD777), 0.004, 0.011, 0.018, sx*rAt(i + 0.5)*0.88, 0.02, frontZ - seg*(i + 1));
+    collar(0.040);
+    for(const a of [0.785, 2.356, 3.927, 5.498]){                 // swept barbs off the last band
+      const barb = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.044, 4), tone(0.62));
+      barb.scale.set(1, 1, 0.55);
+      barb.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(Math.cos(a)*0.55, Math.sin(a)*0.55, -1).normalize());
+      barb.position.set(Math.cos(a)*0.024, 0.02 + Math.sin(a)*0.024, frontZ - len + 0.004);
+      VMT.add(barb);
     }
-    for(const a of [0.5, 2.6, 4.7]){                              // seeker ports, PROUD of the bead
-      const port = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), glowB(0xFFD777));
-      port.position.set(Math.cos(a)*0.040, 0.02 + Math.sin(a)*0.040, frontZ - L*0.5);
-      VMT.add(port);
-    }
-    collar(0.038);   // tucks UNDER the first bead; at 0.044 it stood proud as a flange
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.019, 0.082, 10), m);
-    tip.rotation.x = -Math.PI/2;                                  // apex forward
-    tip.position.set(0, 0.02, frontZ - len - 0.037); VMT.add(tip);
-    const venom = new THREE.Mesh(new THREE.SphereGeometry(0.0095, 8, 6), glowB(0xFFD777));
-    venom.position.set(0, 0.02, frontZ - len - 0.074); VMT.add(venom);
-    tipPad = 0.088;
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.019, 0.060, 6), m);
+    spike.rotation.x = -Math.PI/2;                                // apex forward
+    spike.position.set(0, 0.02, frontZ - len - 0.028); VMT.add(spike);
+    tipPad = 0.062;
   }
   else if(n.includes('CQB')){
     len = base*0.62;
@@ -2816,38 +2816,28 @@ function vmMagazineBody(p, w){
     plate.add(tab);
     well(0.045, 0.06);
   } else if(n.includes('Hive')){
-    /* Was two leaning boxes and a clamp - a twin magazine, not a hive. Now a comb:
-       a hex body with real cells on EVERY flat, so it reads from any angle the locker
-       or the viewmodel puts it at, and brood cells lit amber where the swarm is
-       loaded. Cells on two flanks only were invisible at the -0.7 rad the thumbnail
-       uses, and the body turns 30 degrees so a FLAT faces each side; unrotated it
-       presents a vertex and every cell floats off the edge. */
-    const h = 0.140, cy = topIn - h/2, R = 0.047, flat = R*Math.cos(Math.PI/6);
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(R, R*0.88, h, 6), m);
-    body.rotation.y = Math.PI/6;
-    body.position.set(0, cy, z); VMT.add(body);
-    const ringG = new THREE.TorusGeometry(0.0125, 0.0045, 4, 6);
-    const capG  = new THREE.CylinderGeometry(0.0105, 0.0105, 0.004, 6);
-    const lit   = mat(0xFFC246, 0xFFB030, 2.2);
-    const up = new THREE.Vector3(0, 0, 1), yUp = new THREE.Vector3(0, 1, 0);
-    for(let f = 0; f < 6; f++){
-      const a = f*Math.PI/3, nx = Math.cos(a), nz = Math.sin(a);
-      const nrm = new THREE.Vector3(nx, 0, nz);
-      [0.030, 0.006, -0.018].forEach((dy, r) => {
-        const d = flat*(1 - ((dy + h/2)/h)*0.10);      // follow the body taper
-        const ring = new THREE.Mesh(ringG, tone(0.55));
-        ring.quaternion.setFromUnitVectors(up, nrm);
-        ring.position.set(nx*(d + 0.001), cy + dy, z + nz*(d + 0.001)); VMT.add(ring);
-        const brood = (f + r) % 3 === 0;               // a scattered third of the comb is loaded
-        const cap = new THREE.Mesh(capG, brood ? lit : voidM());
-        cap.quaternion.setFromUnitVectors(yUp, nrm);
-        cap.position.set(nx*(d - 0.003), cy + dy, z + nz*(d - 0.003)); VMT.add(cap);
-      });
-    }
-    const mouth = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.010, 6), lit);
-    mouth.position.set(0, cy - h/2 + 0.002, z); VMT.add(mouth);   // where the swarm leaves
-    vmBox(dark(), 0.056, 0.011, 0.056, 0, cy - h/2 - 0.004, z);   // comb floor
-    well(0.080, 0.080);
+    /* Big cells, few of them, on the faces the player actually sees.
+       Four attempts. Two leaning boxes and a clamp is a twin magazine. Small cell rings
+       on all six flats of a hex body read as scribble at 128px. A bundle of vertical
+       tubes was structurally right but aimed all seven openings at the floor. A bundle
+       of horizontal tubes lost its mass and came apart into blobs.
+       What works is the ordinary magazine silhouette with five REAL bores in it, sized
+       a quarter of the body each, so one glance says comb. */
+    const h = 0.120, cy = topIn - h/2;
+    vmBox(m, 0.048, h, 0.058, 0, cy, z);                              // the comb block
+    const lit = mat(0xFFC246, 0xE07A12, 1.15);   // amber, not blown to white
+    const bores = [[-0.0135, -0.030], [-0.0135, -0.062], [-0.0135, -0.094],
+                   [ 0.0135, -0.046], [ 0.0135, -0.078]];
+    bores.forEach(([bz, by], i) => { for(const sx of [-1, 1]){
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.0168, 0.004, 4, 6), tone(0.62));
+      rim.rotation.y = Math.PI/2;                                     // hex ring around the bore
+      rim.position.set(sx*0.0250, topIn + by, z + bz); VMT.add(rim);
+      const pg = new THREE.CylinderGeometry(0.0142, 0.0142, 0.008, 6); pg.rotateZ(Math.PI/2);
+      const plug = new THREE.Mesh(pg, (i === 1 || i === 3) ? lit : voidM());
+      plug.position.set(sx*0.0225, topIn + by, z + bz); VMT.add(plug); // recessed inside the rim
+    }});
+    vmBox(dark(), 0.052, 0.010, 0.062, 0, topIn - h - 0.003, z);      // floor
+    well(0.048, 0.058);
   } else {
     const h = 0.14;
     const b = vmBox(m, 0.05, h, 0.062, 0, topIn - h/2, z); b.rotation.x = -0.1;
