@@ -26,8 +26,30 @@
     // 13 -> 16. Unlock 1, so it should be the weakest gun; 38% against the field
     // is not weakest, it is unusable, and it is the only thing a new account owns.
     {id:'m17',     name:'M17',           type:'Pistol',        unlock:1,  dmg:16, rof:230,  mag:12, reload:1100, spread:0.050, bspd:560,  pellets:1},
-    {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:10, rof:95,   mag:30, reload:1500, spread:0.110, bspd:520,  pellets:1},
-    {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:12, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
+    /* spread 0.110 -> 0.120. Paired with the Raptor's damage cut, not independent of
+       it: at dmg 11 the rifle's lead over this at 45u fell to 9.5% and balance.test.js
+       failed "the Havoc-9 loses badly to it at range". The role gap belongs in the
+       SMG's own accuracy rather than in the rifle's damage - fixing it on the Raptor's
+       side would have handed back the balance win it was bought with. 2.21s to kill at
+       45u against the rifle's 1.68s; up close it still beats the rifle, which is the
+       trade an SMG is supposed to make. */
+    {id:'havoc9',  name:'Havoc-9',       type:'SMG',           unlock:3,  dmg:10, rof:95,   mag:30, reload:1500, spread:0.120, bspd:520,  pellets:1},
+    /* 12 -> 11. It was the all-rounder with no weakness: near-top damage, the best
+       accuracy of any automatic, and the fastest round that is not a sniper's. On a
+       full six-ability build that compounded - crit, lifesteal and burn all scale off
+       damage per shot - and it pulled 6.3 points clear while everything else flattened.
+       One point off the top of that chain drops the lead to 1.1 and tightens
+       best-to-worst from 20 to 14.
+       Spread and bullet speed are deliberately untouched: what it loses is being best
+       at everything, not what makes it a VK Raptor.
+
+       I tried tightening spread to 0.070 to pay back the range identity and backed it
+       out. It appeared to cost the Raptor 12 points at the lower tiers, which is not
+       a thing 15 thousandths of spread can do - fitTemplate picks parts by one-way TTK
+       rather than by duel win rate, and the tighter base flipped it from a damage
+       build (dmg 14.52, rof 100) to an accuracy build (dmg 13.20, rof 114) that no
+       player would choose. The harness changed its mind; the gun did not. */
+    {id:'vkraptor',name:'VK Raptor',     type:'Assault Rifle', unlock:5,  dmg:11, rof:130,  mag:30, reload:1700, spread:0.085, bspd:640,  pellets:1},
     // 8 -> 9 per pellet, so 64 -> 72 a shell. An unlock-8 weapon has no business
     // at 44%. A 700ms cadence means one missed shell is most of a second with
     // nothing coming out, and the damage has to be worth that wait.
