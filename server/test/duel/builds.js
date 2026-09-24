@@ -39,8 +39,16 @@ function setResistUptime(u){ RESIST_UP = u; }
 const PC=new Map();
 function pFor(A,D,d,q){const ts=D.tspd*(A.cryo?0.80:1),
   k=A.tag+'|'+A.wid+'|'+A.S.spread.toFixed(5)+'|'+A.S.bspd+'|'+(A.homing?1:0)+'|'+ts.toFixed(3)+'|'+d+'|'+q;
-  if(PC.has(k))return PC.get(k); seed(13);
+  if(PC.has(k))return PC.get(k);
+  /* hitP burns 5000*3 draws from this module's generator, and pFor only reached it on a
+     cache MISS - so whether a fight got a fresh stream or a continued one depended on how
+     warm PC already was, i.e. on what had been measured earlier in the process. Two runs
+     that scored the identical build could disagree by two points, and a "choose any 2 of 3
+     slots" sweep scored BELOW the forced pair it contains, which is impossible. Sampling
+     must not be observable from the outside: save the stream and put it back. */
+  const _keep=_s; seed(13);
   const r=hitP(d,C.fireSpread(A.S.spread*0.55,1),A.S.bspd/9,q,ts,A.homing,5000);
+  _s=_keep;
   PC.set(k,r);return r;}
 function fight(A,B,d,q,st){
   const pA=pFor(A,B,d,q),pB=pFor(B,A,d,q);
