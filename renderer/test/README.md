@@ -14,3 +14,14 @@ matching and runs it in a VM against a stub DOM, so the test exercises the
 shipped source rather than a copy of it. No browser needed.
 
     node renderer/test/deathcard.test.js
+
+`zfight.test.js` measures z-fighting instead of waiting for someone to spot it in a
+render. Two coplanar faces at the same depth make the depth buffer choose per pixel,
+which shows up as a stippled band along the seam — from some angles only, which is why
+it survives review. Almost every mesh here is an axis-aligned box, so for each pair that
+interpenetrates, the test checks whether they share an exact plane. It is a ratchet:
+each set records the pairs it has today, and the test fails either way, so a fix has to
+lower its own baseline.
+
+    node renderer/test/zfight.test.js
+    ZFIGHT_VERBOSE=1 node renderer/test/zfight.test.js   # print the offending bounds

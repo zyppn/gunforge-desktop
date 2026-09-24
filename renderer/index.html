@@ -2375,6 +2375,31 @@ function shade(hex, k){
   const c = new THREE.Color(hex).multiplyScalar(k);
   return mat(new THREE.Color(Math.min(1,c.r), Math.min(1,c.g), Math.min(1,c.b)).getHex());
 }
+
+/* ---- Bulwark's curved shield ----
+   A solid curved plate, which this renderer has no other way to make. The obvious
+   route - an open CylinderGeometry wall - is a SURFACE with no thickness: it vanishes
+   edge-on and reads as paper. Laying solid boxes tangent along the arc gives it depth
+   but leaves a visible seam at every facet. So the cross-section is drawn as a 2D
+   annular sector (outer arc at R+t/2, inner arc back at R-t/2, closed) and extruded
+   through the plate's height: one closed solid, one continuous curve, thickness in the
+   profile rather than stacked. cy is the CENTRE height - rotateX(+90) sends the
+   extrusion range z:[0,h] to y:[-h,0], so the translate has to put it back. */
+function curvedPlate(R, t, halfArc, h, mtl, cx, cy, cz){
+  const a0 = -Math.PI/2 - halfArc, a1 = -Math.PI/2 + halfArc;
+  const sh = new THREE.Shape();
+  sh.absarc(0, 0, R + t/2, a0, a1, false);
+  sh.absarc(0, 0, R - t/2, a1, a0, true);
+  const g = new THREE.ExtrudeGeometry(sh, { depth: h, bevelEnabled: false, curveSegments: 28 });
+  g.rotateX(Math.PI/2);
+  g.translate(cx, cy + h/2, cz + R);
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, mtl);
+  VMT.add(mesh); return mesh;
+}
+/* Bulwark's accent, taken from an effect the player already sees: the shield bubble
+   (0x4C9BE8) and the health bar (0x6FA8DC), lifted to read at reticle brightness. */
+const WARD_BLUE = 0x7FB7F0;
 /* ---- Juggernaut's hazard striping ----
    A stripe is the CHORD a diagonal band cuts across the face it is painted on, and it
    has to be computed as one. The first attempt made each stripe a box the size of the
@@ -2555,7 +2580,10 @@ function vmFrame(p, w, bodyD, bodyH, bodyZ){
   VMT.add(grip);
   const guardZ = bodyZ + bodyD*0.14;
   vmBox(tone(0.72), 0.012, 0.004, 0.07, 0, -0.072, guardZ);                 // trigger guard bottom
-  vmBox(tone(0.72), 0.012, 0.026, 0.004, 0, -0.058, guardZ - 0.034);        // guard front
+  /* 0.0105 not 0.012, and 0.025 not 0.026: at equal width the guard's front and bottom
+     shared both side planes where they meet, and its top sat exactly on the magazine's.
+     Three coplanar pairs on every weapon in the game, flickering at the guard corner. */
+  vmBox(tone(0.72), 0.0105, 0.025, 0.004, 0, -0.0585, guardZ - 0.034);      // guard front
   vmBox(steel(), 0.006, 0.022, 0.006, 0, -0.055, guardZ + 0.012);           // trigger
   return { topY, bw, botY, rearMidY };
 }
@@ -3024,22 +3052,37 @@ function vmForegripBody(p, w){
     }
     vmBox(steel(), 0.03, 0.01, 0.03, 0, mountY - 0.06, z); // cross brace
   } else if(n.includes('Brace')){
-    /* Was a bare 0.09 x 0.07 x 0.11 box with four rivets - the plainest object
-       in the game, on an EPIC set piece. Now a shield brace: a narrow core with
-       splayed armour wings, banded and riveted. */
+    /* A tower shield hung under the barrel, standing 50mm clear of the grip with nothing
+       bridging the gap - the shield's own top edge is what meets the receiver. Every
+       earlier attempt put a strut across that void at the shield's height, and a strut
+       there welds the two masses into one lump however wide the gap is.
+       Two numbers matter and both are solved, not eyeballed:
+        - vmForegrip places this group at the frame's bottom, so LOCAL y = 0 IS the
+          receiver's underside. The plate's top is set 1.5mm into it.
+        - vmForegrip also clamps the group back if anything reaches past the muzzle end,
+          which parks the shield exactly on the frame's front face. The top rim band used
+          to be built 5mm thicker than the plate and so stood 2.5mm proud of it - the one
+          piece sticking out past that plane, z-fighting the frame along the seam. There
+          is no top band now; the bottom one sits 2mm below the plate so no two faces
+          share a plane either. */
+    const SEP = 0.050, t = 0.014, halfArc = 0.62, R = 0.072, h2 = 0.055;
+    const CY = 0.0015 - h2;                                        // 1.5mm into the receiver
+    const coreH = 0.068, coreD = 0.064, coreY = mountY - 0.012 - coreH/2;
+    const CZ = (z - coreD/2) - SEP - R*(1 - Math.cos(halfArc)) - t/2;
+
     rail(0.062, 0.12);
-    hang(new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.072, 0.10), m), 0.072);
-    for(const sx of [-1, 1]){                                   // pauldron wings
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.058, 0.094), tone(0.86));
-      wing.position.set(sx*0.026, mountY - 0.042, z);           // 0.026 so the inner face bites into the core
-      wing.rotation.z = -sx*0.20;
-      VMT.add(wing);
+    vmBox(m, 0.038, coreH, coreD, 0, coreY, z);                    // the grip you hold
+    vmBox(dark(), 0.044, 0.012, coreD + 0.006, 0, mountY - 0.019, z);  // collar, 1mm into the rail
+    vmBox(dark(), 0.042, 0.010, coreD - 0.006, 0, mountY - 0.076, z);  // heel, shallower than the core
+
+    curvedPlate(R, t, halfArc, h2*2, m, 0, CY, CZ);                // the shield
+    curvedPlate(R, t + 0.005, halfArc, 0.010, tone(0.72), 0, CY - h2 + 0.003, CZ);  // rim lip
+    const boss = new THREE.Mesh(new THREE.SphereGeometry(0.017, 12, 9), tone(0.88));
+    boss.scale.set(1, 1, 0.5); boss.position.set(0, CY, CZ - t/2 - 0.004); VMT.add(boss);
+    for(const sx of [-0.034, 0.034]) for(const sy of [h2*0.66, -h2*0.66]){
+      const rv = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 8, 6), mat(0xC9D4DE));
+      rv.position.set(sx, CY + sy, CZ - 0.004); VMT.add(rv);
     }
-    vmBox(dark(), 0.054, 0.012, 0.106, 0, mountY - 0.026, z);   // upper armour band
-    vmBox(dark(), 0.050, 0.010, 0.096, 0, mountY - 0.064, z);   // lower armour band
-    for(const sx of [-0.034, 0.034]) for(const dz of [-0.034, 0.034])
-      vmBox(steel(), 0.007, 0.007, 0.007, sx, mountY - 0.046, z + dz);   // wing rivets
-    vmBox(steel(), 0.022, 0.008, 0.014, 0, mountY - 0.079, z - 0.040);   // front deflector lip
   } else {
     rail(0.05, 0.062);
     hang(new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.06), m), 0.06);
@@ -3156,20 +3199,23 @@ function vmStockBody(p, w, rearZ, bodyH){
     vmBox(steel(), 0.012, 0.012, 0.012, 0, 0.03, rearZ + 0.008);  // joint bolts
     vmBox(steel(), 0.012, 0.012, 0.012, 0, -0.028, rearZ + 0.148);
   } else if(n.includes('Chassis')){
-    /* Was one 0.09 x 0.11 x 0.12 slab. Three stepped plates of different widths
-       give it a silhouette; the seam bands and rivet lines give it a surface.
-       Every step differs in at least one dimension so no two faces share a plane. */
-    // One body with a spine and a proud recoil pad. The first attempt stepped
-    // narrow-wide-narrow and the middle plate read as a pair of flanges.
-    vmBox(m, 0.090, 0.106, 0.104, 0, -0.005, rearZ + 0.052);      // body
-    vmBox(dark(), 0.094, 0.013, 0.092, 0, 0.046, rearZ + 0.050);  // dorsal spine
-    vmBox(dark(), 0.094, 0.011, 0.086, 0, -0.055, rearZ + 0.050); // under rail
-    vmBox(m, 0.078, 0.118, 0.030, 0, -0.005, rearZ + 0.117);      // recoil pad, taller and narrower
-    vmBox(dark(), 0.056, 0.064, 0.005, 0, -0.005, rearZ + 0.133); // recessed back panel
-    for(const sx of [-0.040, 0.040]) for(const dz of [0.022, 0.062, 0.098])
-      vmBox(steel(), 0.007, 0.007, 0.007, sx, 0.020, rearZ + dz);   // rivet lines
-    for(const sx of [-0.040, 0.040]) for(const dz of [0.022, 0.062, 0.098])
-      vmBox(steel(), 0.007, 0.007, 0.007, sx, -0.032, rearZ + dz);
+    /* Battlement: a crenellated dorsal run and splayed buttresses. The old version was
+       three stepped plates, which read as a slab from the locker angle. */
+    // no throat block here: vmStockBody already calls coupler() for every stock, and
+    // drawing a second one at the same coordinates is six coplanar faces on one object
+    vmBox(m, 0.084, 0.098, 0.124, 0, -0.004, rearZ + 0.072);       // body
+    for(const dz of [0.026, 0.072, 0.118])                          // merlons along the spine
+      vmBox(m, 0.088, 0.020, 0.022, 0, 0.054, rearZ + dz);
+    for(const sx of [-1, 1]){                                       // buttresses
+      const b = vmBox(tone(0.86), 0.012, 0.070, 0.044, sx*0.044, -0.014, rearZ + 0.052);
+      b.rotation.z = -sx*0.16;
+    }
+    vmBox(m, 0.080, 0.112, 0.022, 0, -0.004, rearZ + 0.146);        // recoil pad
+    vmBox(dark(), 0.056, 0.082, 0.006, 0, -0.004, rearZ + 0.158);   // recessed panel
+    for(const sx of [-0.044, 0.044]) for(const dy of [0.024, -0.034]) for(const dz of [0.038, 0.104]){
+      const rv = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 8, 6), mat(0xC9D4DE));
+      rv.position.set(sx, dy, rearZ + dz); VMT.add(rv);
+    }
   } else if(n.includes('Frame')){
     vmBox(m, 0.09, 0.11, 0.12, 0, -0.005, rearZ + 0.06);
     vmBox(dark(), 0.066, 0.07, 0.005, 0, -0.005, rearZ + 0.121);
@@ -3386,22 +3432,29 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     riser(0.014, 0.014, cy - 0.039);
     setAim(0, cy, z, 0.3, 24);
   } else if(n.includes('Ward')){
-    // armored WINDOW: generous opening, thin bezel, chunky plates pushed outboard
-    const hw = 0.04, hh = 0.028, bz = 0.008;
+    /* Armoured window with a crenellated brow, so the optic carries the set's battlement
+       like the other two pieces. Generous opening, thin bezel, plates pushed outboard. */
+    const hw = 0.040, hh = 0.028, bz = 0.008;
     const cy = mountCy(hh + bz);
-    vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy+hh+bz/2, z);          // top bar
-    vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy-hh-bz/2, z);          // bottom bar
-    vmBox(m, bz, hh*2, 0.05, -(hw+bz/2), cy, z);              // side bezels
-    vmBox(m, bz, hh*2, 0.05, (hw+bz/2), cy, z);
-    lineBlack(hw*2, 0.003, 0, cy+hh-0.0015, z);
-    lineBlack(hw*2, 0.003, 0, cy-hh+0.0015, z);
-    lineBlack(0.003, hh*2-0.006, -(hw-0.0015), cy, z);
-    lineBlack(0.003, hh*2-0.006, (hw-0.0015), cy, z);
-    const slitGlass = new THREE.Mesh(new THREE.PlaneGeometry(hw*2-0.002, hh*2-0.002), glowM(0x9BE8FF, 0.14));
-    slitGlass.position.set(0, cy, z - 0.02); glassPane(slitGlass, 0.14);
-    strip(hw*1.6, 0.0012, 0x9BE8FF, 0.9, 0, cy, z - 0.021);
-    strip(0.0016, 0.012, 0x9BE8FF, 0.95, 0, cy, z - 0.022);
-    riser(0.056, 0.044, cy - hh - bz);  // armour shoe: the window used to hang on nothing
+    vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy + hh + bz/2, z);            // top bar
+    vmBox(m, (hw+bz)*2, bz, 0.05, 0, cy - hh - bz/2, z);            // bottom bar
+    vmBox(m, bz, hh*2, 0.05, -(hw+bz/2), cy, z);                    // side bezels
+    vmBox(m, bz, hh*2, 0.05,  (hw+bz/2), cy, z);
+    lineBlack(hw*2, 0.003, 0, cy + hh - 0.0015, z);
+    lineBlack(hw*2, 0.003, 0, cy - hh + 0.0015, z);
+    lineBlack(0.003, hh*2 - 0.006, -(hw - 0.0015), cy, z);
+    lineBlack(0.003, hh*2 - 0.006,  (hw - 0.0015), cy, z);
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(hw*2 - 0.002, hh*2 - 0.002), glowM(WARD_BLUE, 0.16));
+    pane.position.set(0, cy, z - 0.02); glassPane(pane, 0.16);
+    for(const dx of [-0.030, 0, 0.030])                             // crenellated brow
+      vmBox(m, 0.018, 0.014, 0.030, dx, cy + hh + bz + 0.007, z);
+    for(const sx of [-1, 1]){                                       // outboard armour plates
+      const b = vmBox(shade(rc, 0.86), 0.010, 0.030, 0.026, sx*(hw + bz), cy - hh*0.4, z - 0.010);
+      b.rotation.z = -sx*0.22;                                      // vmOptic has rc, not tone
+    }
+    strip(hw*1.4, 0.0012, WARD_BLUE, 0.95, 0, cy, z - 0.021);
+    strip(0.0016, 0.012, WARD_BLUE, 0.95, 0, cy, z - 0.022);
+    riser(0.056, 0.044, cy - hh - bz);
     setAim(0, cy, z, 0.26, 24);
   } else {
     // unknown optics: hollow window frame, never a solid block in your face
