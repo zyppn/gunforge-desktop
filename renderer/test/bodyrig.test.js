@@ -57,8 +57,13 @@ function liftConst(n){
 const FNS = ['vmCyl','vmBox','vmTag','mat','shade','partMat','vmFrame','vmBarrel','vmMagazine','vmMagazineBody',
   'vmForegrip','vmForegripBody','vmStock','vmStockBody','fitScale','vmOptic','buildGunModel',
   'aimBone','solveArm','fitGripZ','lerp','lerp3','poseUpper','mkArm','botMesh'];
+/* Every top-level `const NAME = 0x...;` in the renderer, lifted automatically.
+   Listing them by hand meant this file broke every time a set was given an accent
+   colour - GHOST_CYAN once, SAINT_IVORY again - which trains you to add the name and
+   move on rather than read the failure. */
+const COLOR_CONSTS = [...html.matchAll(/^const ([A-Z][A-Z0-9_]*) = 0x[0-9A-Fa-f]+;/gm)].map(m => m[1]);
 const CONSTS = ['RCOL','FIT_SPAN','ARM','GUN_HIP','GUN_ADS','POLE',
-  '_v1','_pole','_elbow','_DOWN','_pR'];
+  '_v1','_pole','_elbow','_DOWN','_pR'].concat(COLOR_CONSTS);
 
 const ctx = vm.createContext({
   THREE, Math, console,

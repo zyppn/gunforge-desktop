@@ -2353,6 +2353,11 @@ const RCOL = {common:0x9BA8B0, uncommon:0x5FBF6E, rare:0x4C9BE8, epic:0xB463E8, 
    tracer's hue and nothing else; it is a named constant now because the parts use it too
    and two copies of a colour drift. */
 const GHOST_CYAN = 0x8FE9FF;
+/* Sidearm Saint's ivory-gold. It was already in the source as the Eye's reticle colour
+   and nothing else; naming it lets the barrel wear it too. It matters more here than
+   for the other sets: Saint and Dragonfire are both EPIC, so both sets of parts are the
+   same purple, and the accent is the only thing telling them apart at a glance. */
+const SAINT_IVORY = 0xFFE9A0;
 // Set emissive was 0.75. Emissive is FLAT - it adds the same value to every face - so at
 // 0.75 an epic set piece (R180 B232) pinned both channels on all six faces: the part lost
 // its facet shading entirely and read as a pale pink cutout bleeding over whatever it sat
@@ -2762,14 +2767,27 @@ function vmBarrel(p, w, frontZ){
     tipPad = 0.062;
   }
   else if(n.includes('Whisper')){
-    len = base*1.15;
-    vmCyl(m, 0.018, len, frontZ - len/2);
-    vmCyl(m, 0.034, 0.14, frontZ - len - 0.06); // suppressor can
-    vmCyl(dark(), 0.036, 0.01, frontZ - len + 0.006);  // can rear cap
-    vmCyl(dark(), 0.036, 0.01, frontZ - len - 0.126);  // can front cap
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.0348, 0.0016, 6, 16), glowB(RCOL[p.rarity])); // etched band
-    band.position.set(0, 0.02, frontZ - len - 0.06); VMT.add(band);
-    tipPad = 0.13;
+    /* SAINT'S WHISPER. It had its own branch already, but the branch was a plain
+       suppressor can - nothing about it said Saint, and on the smallest weapon in the
+       game surface ornament is invisible anyway. Every decorated version I tried
+       vanished at locker size; what survives on a pistol is SILHOUETTE.
+       So the can gets much longer and fatter - the name is Whisper, so lean on it - and
+       carries three ivory bands. It nearly doubles the M17's outline, which is the one
+       change you can actually see. */
+    len = base*1.95;
+    vmCyl(tone(0.58), 0.012, len*0.34, frontZ - len*0.17);          // exposed bore
+    vmCyl(m, 0.031, len*0.70, frontZ - len*0.62);                   // the can
+    vmCyl(dark(), 0.034, 0.012, frontZ - len*0.28);                 // rear cap
+    vmCyl(dark(), 0.034, 0.012, frontZ - len + 0.006);              // front cap
+    for(const t of [0.44, 0.62, 0.80]){
+      const b = new THREE.Mesh(new THREE.TorusGeometry(0.0325, 0.0045, 6, 18),
+        new THREE.MeshBasicMaterial({color:SAINT_IVORY, transparent:true, opacity:0.9,
+          side:THREE.DoubleSide, depthWrite:false}));
+      b.position.set(0, 0.02, frontZ - len*t); VMT.add(b);
+    }
+    vmCyl(voidM(), 0.013, 0.014, frontZ - len - 0.004);
+    collar(0.024);
+    tipPad = 0.012;
   }
   else {
     vmCyl(m, 0.026, len, frontZ - len/2);
@@ -3248,11 +3266,35 @@ function vmOptic(p, w, bodyZ, bodyH, bodyD, frameTop){
     }
     return;
   }
-  if(n.includes('Red Dot') || n.includes('Eye')){
+  if(n.includes('Eye')){
+    /* SAINT'S EYE was the Red Dot with the dot recoloured gold - that recolour was
+       genuinely the only difference between an epic set piece and a common one.
+       It is a crowned halo now: a ring under a sunburst, with an ivory halo across the
+       glass. The spikes sit OUTSIDE the ring, so they read at a glance without taking
+       anything off the sight picture. */
+    const cy = mountCy(0.032);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.0055, 6, 18), m);
+    ring.position.set(0, cy, z); VMT.add(ring);
+    for(let i = 0; i < 5; i++){                                     // the sunburst
+      const a = Math.PI*(0.18 + 0.16*i);
+      const sp = new THREE.Mesh(new THREE.ConeGeometry(0.0055, 0.026, 4), m);
+      sp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(Math.cos(a), Math.sin(a), 0).normalize());
+      sp.position.set(Math.cos(a)*0.038, cy + Math.sin(a)*0.038, z); VMT.add(sp);
+    }
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(0.032, 0.0030, 6, 20),
+      glowM(SAINT_IVORY, 0.85));
+    halo.position.set(0, cy, z + 0.002); VMT.add(halo);
+    const win = new THREE.Mesh(new THREE.CircleGeometry(0.024, 16), glowM(rc, 0.15));
+    win.position.set(0, cy, z + 0.001); glassPane(win, 0.15);
+    dot(0.002, SAINT_IVORY, 1, 0, cy, z - 0.004);
+    riser(0.018, 0.022, cy - 0.032);
+    setAim(0, cy, z, 0.24, 26);
+  } else if(n.includes('Red Dot')){
     const cy = mountCy(0.036);   // torus 0.03 + tube 0.006
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.006, 8, 20), m);
     ring.position.set(0, cy, z); VMT.add(ring);
-    const c = n.includes('Eye') ? 0xFFE9A0 : 0xFF3B30;
+    const c = 0xFF3B30;
     const win = new THREE.Mesh(new THREE.CircleGeometry(0.028, 16), glowM(rc, 0.15));
     win.position.set(0, cy, z + 0.001); glassPane(win, 0.15);
     dot(0.002, c, 1, 0, cy, z - 0.003);   // was a 5mm square; now a 4mm circle

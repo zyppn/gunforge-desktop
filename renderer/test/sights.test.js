@@ -43,8 +43,13 @@ const FNS = ['vmCyl','vmBox','vmTag','mat','shade','partMat','vmFrame','vmBarrel
 const ctx = vm.createContext({ THREE, Math, console,
   WEAPONS: LoadoutCore.WEAPONS, SLOTS: LoadoutCore.SLOTS, SETS: LoadoutCore.SETS,
   LoadoutCore, equippedParts: () => ({}) });
+/* Every top-level `const NAME = 0x...;` in the renderer, lifted automatically.
+   Listing them by hand meant this file broke every time a set was given an accent
+   colour - GHOST_CYAN once, SAINT_IVORY again - which trains you to add the name and
+   move on rather than read the failure. */
+const COLOR_CONSTS = [...html.matchAll(/^const ([A-Z][A-Z0-9_]*) = 0x[0-9A-Fa-f]+;/gm)].map(m => m[1]);
 vm.runInContext('let VMT=null, VMT_AIM=null, VMT_ADS=null;\n'
-  + ['RCOL','GHOST_CYAN','FIT_SPAN'].map(liftConst).join('\n') + '\n'
+  + ['RCOL','FIT_SPAN'].concat(COLOR_CONSTS).map(liftConst).join('\n') + '\n'
   + FNS.map(lift).join('\n'), ctx);
 
 /* A standing player is 1.8m. At 32m that is 1.61 degrees tall and 0.98 wide. */
