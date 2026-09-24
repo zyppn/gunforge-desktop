@@ -66,7 +66,21 @@
   const SETS = [
     {id:'saint',   weapon:'m17',      need:2, effect:'critheal',      rarity:'epic',
      pieces:{barrel:"Saint's Whisper", optic:"Saint's Eye"}},
-    {id:'hornet',  weapon:'havoc9',   need:3, effect:'homing',        rarity:'epic',
+    /* need 3 -> 2. Three pieces was the wrong price on this weapon specifically: half
+       your slots gone and half your parts dropped from legendary to epic, on the gun
+       whose entire argument is firing fast enough to proc things. Measured at -8.6pt
+       against its own freebuild - the worst set in the game, and a trap for anyone who
+       liked the perk. At two pieces it is -1.2pt, level with the Havoc's own ceiling.
+
+       Doubling the seeker cadence instead bought the same 7 points, which is how we
+       know homing was never the weak part. Doing both put it top of the game at +8.4pt,
+       i.e. mandatory, which is the opposite of a choice.
+
+       All three pieces stay in the pool and ANY TWO activate it - activeSets tests
+       >= need - so no inventory changes and nobody loses a part. It also brings the
+       set in line with Dragonfire, Ghost and Saint, and cuts the grind to finish it
+       from ~244 matches to ~200. */
+    {id:'hornet',  weapon:'havoc9',   need:2, effect:'homing',        rarity:'epic',
      pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'}},
     {id:'dragon',  weapon:'vkraptor', need:2, effect:'fire_nova',     rarity:'epic',
      pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'}},

@@ -296,6 +296,35 @@ console.log('\nDRIFT  renderer/index.html mirrors the weapon table');
       .filter(k => num(k) !== w[k]).map(k => k + ' ' + num(k) + '!=' + w[k]);
     check(w.id + ' matches loadout-core', bad.length === 0, bad.join(', '));
   }
+  /* SETS is duplicated the same way WEAPONS is - loadout-core owns the rules, the
+     renderer owns the display name and bonus text - and only WEAPONS had a drift
+     check. `need` lives in both, and a set that activates at 2 in the engine while
+     the card promises 3 is a bug no one would think to look for. */
+  for(const st of C.SETS){
+    const m = html.match(new RegExp("\\{id:'" + st.id + "'[^}]*\\}[^}]*\\}"));
+    if(!m){ check(st.id + ' present in renderer SETS', false, 'row not found'); continue; }
+    const num = k => { const mm = m[0].match(new RegExp(k + ':\\s*([0-9]+)')); return mm ? Number(mm[1]) : null; };
+    const str = k => { const mm = m[0].match(new RegExp(k + ":\\s*'([a-z0-9]+)'")); return mm ? mm[1] : null; };
+    const bad = [];
+    if(num('need') !== st.need) bad.push('need ' + num('need') + '!=' + st.need);
+    if(str('weapon') !== st.weapon) bad.push('weapon ' + str('weapon') + '!=' + st.weapon);
+    if(str('rarity') !== st.rarity) bad.push('rarity ' + str('rarity') + '!=' + st.rarity);
+    for(const sl in st.pieces) if(!m[0].includes(st.pieces[sl]))
+      bad.push('missing piece ' + st.pieces[sl]);
+    check('set ' + st.id + ' matches loadout-core', bad.length === 0, bad.join(', '));
+  }
+  /* And the rule the whole thing rests on: MORE pieces than need must still activate,
+     or dropping a set's need would strand anyone holding the full set. */
+  {
+    const hor = C.SETS.find(s2 => s2.id === 'hornet');
+    const eq = {}; let i = 0;
+    for(const sl in hor.pieces) eq[sl] = { slot: sl, weapon: hor.weapon, set: 'hornet',
+                                           rarity: 'epic', mods: {}, name: hor.pieces[sl] };
+    check('holding MORE pieces than need still activates the set',
+          C.activeSets(hor.weapon, eq).some(s2 => s2.id === 'hornet'),
+          Object.keys(eq).length + ' pieces, need ' + hor.need);
+  }
+
   check('renderer/vendor/loadout-core.js is byte-identical',
         fs.readFileSync(path.join(__dirname, '../../renderer/vendor/loadout-core.js'), 'utf8')
         === fs.readFileSync(path.join(__dirname, '../loadout-core.js'), 'utf8'), 'run npm run sync:core');
