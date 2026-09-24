@@ -2982,7 +2982,34 @@ function vmStockBody(p, w, rearZ, bodyH){
   } else if(n.includes('CQB')){
     vmBox(m, 0.065, 0.075, 0.06, 0, -0.005, rearZ + 0.03);
     vmCyl(dark(), 0.016, 0.045, rearZ + 0.008, -0.002); // buffer tube
-  } else if(n.includes('Skeleton') || n.includes('Shell')){
+  } else if(n.includes('Shell')){
+    /* The skeleton stock the Hornet set was already borrowing, given the set's identity
+       and nothing else: same two rails, same silhouette, now banded like the Sting with
+       a lit comb cell punched through the butt plate. Four ground-up shapes were tried
+       first - a carapace, a hex truss, a comb frame, a caged one - and the one that won
+       was the shape that was already there.
+       The bands RIDE the rails as children. Positioned in mount space they ignored the
+       lower rail's 0.35 rad tilt and walked off the end of it, which is the same mistake
+       the magazine's base plates made before they became riders. */
+    const rails = [[vmBox(m, 0.050, 0.016, 0.160, 0, 0.030, rearZ + 0.080), 0.160],
+                   [vmBox(m, 0.050, 0.016, 0.150, 0, -0.050, rearZ + 0.075), 0.150]];
+    rails[1][0].rotation.x = 0.35;
+    for(const [rail, len] of rails)
+      for(const t of [-0.25, 0, 0.25]){
+        const band = new THREE.Mesh(new THREE.BoxGeometry(0.053, 0.019, 0.013), tone(0.40));
+        band.position.set(0, 0, len*t); rail.add(band);
+      }
+    vmBox(m, 0.052, 0.090, 0.020, 0, -0.010, rearZ + 0.155);          // butt plate
+    for(const sx of [-1, 1]){
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.0195, 0.0045, 4, 6), tone(0.68));
+      rim.rotation.y = Math.PI/2;                                     // hex collar, both faces
+      rim.position.set(sx*0.028, -0.010, rearZ + 0.155); VMT.add(rim);
+    }
+    const cg = new THREE.CylinderGeometry(0.0165, 0.0165, 0.060, 6); cg.rotateZ(Math.PI/2);
+    const cell = new THREE.Mesh(cg, mat(0xFFC246, 0xE07A12, 1.15));
+    cell.position.set(0, -0.010, rearZ + 0.155); VMT.add(cell);       // a lit cell through the plate
+    vmBox(steel(), 0.012, 0.012, 0.012, 0, 0.030, rearZ + 0.008);     // joint bolt
+  } else if(n.includes('Skeleton')){
     vmBox(m, 0.05, 0.016, 0.16, 0, 0.03, rearZ + 0.08);
     vmBox(m, 0.05, 0.016, 0.15, 0, -0.05, rearZ + 0.075).rotation.x = 0.35;
     vmBox(m, 0.052, 0.09, 0.02, 0, -0.01, rearZ + 0.155);   // 0.052, not the rails' 0.05: equal widths put the side faces on one plane
