@@ -80,7 +80,25 @@
        >= need - so no inventory changes and nobody loses a part. It also brings the
        set in line with Dragonfire, Ghost and Saint, and cuts the grind to finish it
        from ~244 matches to ~200. */
-    {id:'hornet',  weapon:'havoc9',   need:2, effect:'homing',        rarity:'epic',
+    /* epic -> legendary. Two pieces at epic left Hornet at -0.9pt against a plain
+       Havoc freebuild: no longer a trap after the piece-count cut, but still never
+       the best thing to do with the gun. Legendary pieces scale their mods 4.0
+       instead of 3.0 and put it at +1.7pt, 4th of 378 builds, without displacing the
+       top - Juggernaut Goliath stays there at 70.6%.
+
+       Paying in part quality rather than in a stronger effect is deliberate. Doubling
+       the seeker cadence instead reached +8.4pt and made Hornet the single best build
+       in the game, which is a set nobody chooses, they just take.
+
+       It also lines up with the other legendary set: Ghost Protocol is 2pc legendary
+       too. The distinction that earns it is effect strength - Dragonfire's molten
+       bonus is a bigger effect than homing, so Dragonfire stays epic and Hornet gets
+       the better parts to compensate.
+
+       Drop RATE is unchanged: rollServerDrop picks a set, then stamps the piece with
+       set.rarity, so this is a straight upgrade to the pieces and not a longer grind.
+       Scrap value per piece goes 75 -> 200 as a side effect. */
+    {id:'hornet',  weapon:'havoc9',   need:2, effect:'homing',        rarity:'legendary',
      pieces:{barrel:'Hornet Sting', magazine:'Hornet Hive', stock:'Hornet Shell'}},
     {id:'dragon',  weapon:'vkraptor', need:2, effect:'fire_nova',     rarity:'epic',
      pieces:{barrel:'Dragon Maw', magazine:'Dragon Heart'}},
