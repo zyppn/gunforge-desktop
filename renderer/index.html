@@ -2370,6 +2370,52 @@ function shade(hex, k){
   const c = new THREE.Color(hex).multiplyScalar(k);
   return mat(new THREE.Color(Math.min(1,c.r), Math.min(1,c.g), Math.min(1,c.b)).getHex());
 }
+/* ---- Juggernaut's hazard striping ----
+   A stripe is the CHORD a diagonal band cuts across the face it is painted on, and it
+   has to be computed as one. The first attempt made each stripe a box the size of the
+   whole part and rotated it 45 degrees - but a rotated rectangle is always larger than
+   the rectangle it came from, so every corner hung off the edges and the stripes were
+   bigger than the thing they were painted on.
+   Clip the band's centre line to the face rectangle, use the clipped length, and inset
+   by the stripe width so the square ends stay inside the corners too. */
+function hazardFace(face, cx, cy, cz, a, b, ang, w, gap, mtl){
+  const dir = [Math.cos(ang), Math.sin(ang)], nrm = [-Math.sin(ang), Math.cos(ang)];
+  const half = [a/2, b/2];
+  const reach = Math.abs(nrm[0])*half[0] + Math.abs(nrm[1])*half[1];
+  const EPS = 0.0012;                       // stand off the surface or it z-fights
+  for(let o = -reach; o <= reach + 1e-9; o += gap){
+    let t0 = -1e3, t1 = 1e3, live = true;
+    for(let k = 0; k < 2; k++){
+      const p0 = o*nrm[k], d = dir[k], lim = half[k];
+      if(Math.abs(d) < 1e-6){ if(Math.abs(p0) > lim){ live = false; break; } continue; }
+      const ta = (-lim - p0)/d, tb = (lim - p0)/d;
+      t0 = Math.max(t0, Math.min(ta, tb)); t1 = Math.min(t1, Math.max(ta, tb));
+    }
+    if(!live) continue;
+    const L = (t1 - t0) - w*1.1;
+    if(L <= w*0.5) continue;                // a stub in the corner reads as dirt
+    const tc = (t0 + t1)/2;
+    const u = o*nrm[0] + tc*dir[0], v = o*nrm[1] + tc*dir[1];
+    const g = new THREE.PlaneGeometry(L, w); g.rotateZ(ang);
+    const st = new THREE.Mesh(g, mtl); st.material.side = THREE.DoubleSide;
+    if(face === '+x'){ st.rotation.y =  Math.PI/2; st.position.set(cx + EPS, cy + v, cz - u); }
+    if(face === '-x'){ st.rotation.y = -Math.PI/2; st.position.set(cx - EPS, cy + v, cz + u); }
+    if(face === '+y'){ st.rotation.x = -Math.PI/2; st.position.set(cx + u, cy + EPS, cz - v); }
+    VMT.add(st);
+  }
+}
+function hazardBand(cx, cy, cz, wx, hy, dz, ang, w, gap, top, mtl){
+  hazardFace('+x', cx + wx/2, cy, cz, dz, hy, ang, w, gap, mtl);
+  hazardFace('-x', cx - wx/2, cy, cz, dz, hy, ang, w, gap, mtl);
+  if(top) hazardFace('+y', cx, cy + hy/2, cz, wx, dz, ang, w, gap, mtl);
+}
+function boltRow(xs, ys, zs, r){
+  for(const x of xs) for(const y of ys) for(const z of zs){
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.006, 6), mat(0x27303A));
+    b.rotation.z = Math.PI/2; b.position.set(x, y, z); VMT.add(b);
+  }
+}
+const HAZ = { ang: Math.PI/4, w: 0.013, gap: 0.028 };
 let VMT = null; // current build target group
 let VMT_AIM = null, VMT_ADS = null; // set by vmOptic: aperture point + zoom/eye-distance
 function vmCyl(m, r, l, z, y){ const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 10), m); c.rotation.x = Math.PI/2; c.position.set(0, y===undefined?0.02:y, z); VMT.add(c); return c; }
@@ -2524,26 +2570,29 @@ function vmBarrel(p, w, frontZ){
     vmCyl(dark(), 0.025, 0.012, frontZ - len + 0.007); // muzzle ring
   }
   else if(n.includes('Jugg')){
-    /* Split off Heavy. Sharing it gave the four-piece LEGENDARY set a
-       0.034-radius tube, and at the LMG's 0.4 base that is a 7:1 pencil -
-       the weediest-looking thing on the part sheet. This one is thick,
-       ribbed for cooling, and ends in a real brake. */
+    /* JUGG CANNON. Thick, ribbed and braked already - what it lacked was the set's
+       identity. Juggernaut is the armour set, so it is the one set with no glow at all:
+       plate, bolts and hazard banding, while Hornet is amber, Dragonfire orange and
+       Ghost cyan. The striping is confined to a raised collar rather than covering the
+       jacket, so the Cannon does not become the loudest thing on the gun. */
     len = base*1.15;
-    vmCyl(m, 0.048, len, frontZ - len/2);
-    for(let i = 1; i <= 4; i++){                                    // cooling ribs
-      // 0.006 on a 0.048 barrel, not 0.008 on six: six fat ones read as a
-      // drill bit rather than a barrel.
-      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.051, 0.006, 6, 14), dark());
-      rib.position.set(0, 0.02, frontZ - len*(0.14 + i*0.17)); VMT.add(rib);
-    }
-    collar(0.056);
-    vmBox(m, 0.110, 0.110, 0.10, 0, 0.02, frontZ - len - 0.040);    // brake block
-    for(const sx of [-0.0552, 0.0552])                              // side ports
-      vmBox(voidM(), 0.004, 0.070, 0.070, sx, 0.02, frontZ - len - 0.040);
-    for(const sy of [-0.0552, 0.0552])                              // top and bottom ports
-      vmBox(voidM(), 0.070, 0.004, 0.070, 0, 0.02 + sy, frontZ - len - 0.040);
-    vmCyl(voidM(), 0.030, 0.022, frontZ - len - 0.090);             // bore
-    tipPad = 0.098;
+    vmCyl(m, 0.040, len, frontZ - len/2);
+    const JW = 0.094, JH = 0.094, JD = len*0.62, JZ = frontZ - len*0.42;
+    vmBox(tone(0.92), JW, JH, JD, 0, 0.02, JZ);                       // bolted jacket
+    const BW = JW + 0.008, BD = JD*0.42;
+    vmBox(tone(0.80), BW, JH + 0.008, BD, 0, 0.02, JZ);               // the banded collar
+    hazardBand(0, 0.02, JZ, BW, JH + 0.008, BD, HAZ.ang, HAZ.w, HAZ.gap, true, tone(0.30));
+    for(const d of [JD*0.42, -JD*0.42])
+      vmBox(dark(), JW + 0.010, JH + 0.010, 0.014, 0, 0.02, JZ + d);  // end straps
+    boltRow([-(JW/2 + 0.004), JW/2 + 0.004], [0.02], [JZ - JD*0.3, JZ + JD*0.3], 0.007);
+    collar(0.052);
+    vmBox(m, 0.110, 0.110, 0.094, 0, 0.02, frontZ - len - 0.040);     // brake block
+    for(const sy of [-0.055, 0.055])
+      vmBox(voidM(), 0.070, 0.004, 0.066, 0, 0.02 + sy, frontZ - len - 0.040);
+    for(const sx of [-0.055, 0.055])
+      vmBox(voidM(), 0.004, 0.070, 0.066, sx, 0.02, frontZ - len - 0.040);
+    vmCyl(voidM(), 0.030, 0.022, frontZ - len - 0.090);               // bore
+    tipPad = 0.096;
   }
   else if(n.includes('Heavy')){
     len = base*1.25;
@@ -2935,7 +2984,20 @@ function vmForegripBody(p, w){
   } else if(n.includes('Angled')){
     rail(0.046, 0.07);
     hang(new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.05), m), 0.1, 0.5);
-  } else if(n.includes('Skeleton') || n.includes('Claw')){
+  } else if(n.includes('Claw')){
+    /* JUGG CLAW was the Skeleton Grip in gold. A bolted armour block now, with the set's
+       hazard collar round its waist. */
+    rail(0.068, 0.13);
+    const GW = 0.058, GH = 0.100, GD = 0.092, GY = mountY - 0.012 - GH/2;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(GW, GH, GD), m);
+    body.position.set(0, GY, z); VMT.add(body);
+    const BH = GH*0.44;
+    vmBox(tone(0.80), GW + 0.008, BH, GD + 0.006, 0, GY, z);
+    hazardBand(0, GY, z, GW + 0.008, BH, GD + 0.006, HAZ.ang, 0.012, 0.026, false, tone(0.30));
+    vmBox(dark(), GW + 0.012, 0.014, GD + 0.006, 0, mountY - 0.020, z);
+    vmBox(dark(), GW + 0.008, 0.012, GD - 0.002, 0, mountY - 0.106, z);
+    boltRow([-(GW/2 + 0.004), GW/2 + 0.004], [GY], [z - 0.028, z + 0.028], 0.007);
+  } else if(n.includes('Skeleton')){
     rail(0.04, 0.06);
     for(const dz of [-0.018, 0.018]){
       const pl = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.09, 0.012), m);
@@ -3016,7 +3078,20 @@ function vmStockBody(p, w, rearZ, bodyH){
       vmBox(tone(0.5), 0.078, 0.006, 0.026, 0, dy, rearZ + 0.128);
     vmBox(steel(), 0.010, 0.018, 0.012, 0, -0.056, rearZ + 0.100);      // sling loop under the toe
     vmCyl(steel(), 0.006, 0.012, rearZ + 0.100, -0.066);
-  } else if(n.includes('Marksman') || n.includes('Spine')){
+  } else if(n.includes('Spine')){
+    /* JUGG SPINE was the Marksman Stock in gold. Matches the Claw: armour block, dorsal
+       strap, hazard collar, recoil pad. */
+    const SW = 0.088, SH = 0.108, SD = 0.122, SZ = rearZ + 0.072, SY = -0.006;
+    vmBox(m, SW, SH, SD, 0, SY, SZ);
+    const BD = SD*0.40;
+    vmBox(tone(0.80), SW + 0.008, SH + 0.006, BD, 0, SY, SZ);
+    hazardBand(0, SY, SZ, SW + 0.008, SH + 0.006, BD, HAZ.ang, HAZ.w, HAZ.gap, true, tone(0.30));
+    vmBox(dark(), SW + 0.008, 0.016, SD + 0.006, 0, SY + SH/2, SZ);   // dorsal strap
+    vmBox(m, 0.084, 0.124, 0.024, 0, SY, rearZ + 0.146);              // recoil pad
+    vmBox(voidM(), 0.060, 0.090, 0.006, 0, SY, rearZ + 0.159);
+    boltRow([-(SW/2 + 0.004), SW/2 + 0.004], [SY + 0.030, SY - 0.038],
+            [rearZ + 0.034, rearZ + 0.110], 0.007);
+  } else if(n.includes('Marksman')){
     vmBox(m, 0.06, 0.08, 0.18, 0, -0.015, rearZ + 0.09);
     vmBox(m, 0.05, 0.03, 0.09, 0, 0.0392, rearZ + 0.1); // riser sinks INTO the body; sitting exactly ON it made the faces coplanar
     const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.012, 10), steel());
