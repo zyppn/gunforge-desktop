@@ -59,7 +59,14 @@ function liftConst(n){
 }
 
 const banners = [];
-const ctx = vm.createContext({ Math, console, banner: t => banners.push(t) });
+/* Seeded, like the simulation block further down. kothPost() jitters its own drift with
+   Math.random, and the "a post drifts over time" check was reading the real one: it failed
+   roughly one run in six, which is the worst kind of test - it cries wolf often enough that
+   a real regression gets waved through as "that flaky one". */
+let _kseed = 20260923;
+const _krnd = () => { _kseed = (_kseed * 1664525 + 1013904223) >>> 0; return _kseed / 4294967296; };
+const ctxMath = Object.create(Math); ctxMath.random = _krnd;
+const ctx = vm.createContext({ Math: ctxMath, console, banner: t => banners.push(t) });
 vm.runInContext(
   'let hillDisc = null, hillRing = null, hillCol = null;\nlet G = null;\n'
   // one const declares AW, AD and WALL_H together, so lifting AW brings all three
