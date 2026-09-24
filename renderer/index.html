@@ -2629,60 +2629,48 @@ function vmBarrel(p, w, frontZ){
     tipPad = 0.045;
   }
   else if(n.includes('Dragon')){
-    /* A drake, built from the bits this renderer already has. It was a smooth
-       cone flaring 0.02 -> 0.055, which on a long thin barrel reads as a
-       trumpet bell; rendering it offscreen confirmed the complaint.
-
-       Three things carry it: a segmented rib line for a serpentine body, a
-       raked dorsal spine, and an open jaw around a real bore so the ember
-       glows out of a throat instead of sitting on a flat cap.
-
-       Two traps, both only visible once rendered. A fin's base has to sit ON
-       the surface it grows from - parked at a fixed y they were swallowed
-       whole by the 0.031 rib radius and the spine simply did not exist. And
-       the teeth are aimed with a quaternion off the cone's own +Y axis; the
-       obvious rotation.x points them down the bore but leaves them splayed
-       sideways, which looks like damage rather than a jaw.
-
-       Vents take RCOL[p.rarity], not a warm hue: legendary is amber
-       (0xE8A33D), so an orange accent on an epic part reads as the wrong
-       tier. Only the ember stays hot - it is fire, and it is small. */
-    len = base*1.20;
-    vmCyl(m, 0.023, len, frontZ - len/2);
-    for(let i = 1; i <= 4; i++){                                  // ribs
-      const rib = new THREE.Mesh(new THREE.TorusGeometry(0.031, 0.0068, 6, 12), i%2 ? m : dark());
-      rib.position.set(0, 0.02, frontZ - len*(0.14 + i*0.135)); VMT.add(rib);
+    /* CAGED CORE. The Maw used to be a drake head - a ribbed tube with five small dorsal
+       fins, a jaw and eight teeth - and at the size the game actually shows a barrel all
+       of that collapses into one bumpy purple shape. Five small features are a texture,
+       not a face.
+       So the barrel stops imitating a head and borrows the set's other half instead: four
+       rails and three hoops around an exposed molten tube, exactly the cage the Dragon
+       Heart hangs its core in. One big idea, and the thing you notice first is the heat,
+       which is the only element that reads instantly against epic purple. */
+    len = base*1.02;
+    const z0 = frontZ - 0.020, z1 = frontZ - len, zc = (z0 + z1)/2;
+    const hexSeg = (r0, r1, L, mtl, z) => {
+      const g = new THREE.CylinderGeometry(r0, r1, L, 6); g.rotateY(Math.PI/6);
+      const c = new THREE.Mesh(g, mtl); c.rotation.x = Math.PI/2;
+      c.position.set(0, 0.02, z); VMT.add(c);
+    };
+    const hoop = z => {
+      const t = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.0075, 5, 8), dark());
+      t.position.set(0, 0.02, z); VMT.add(t);
+    };
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.015, len - 0.030, 8),
+                                mat(0xFF5A2A, 0xFF5A2A, 1.7));
+    core.rotation.x = Math.PI/2; core.position.set(0, 0.02, zc); VMT.add(core);
+    for(let i = 0; i < 4; i++){                                   // the cage
+      const a = i*Math.PI/2 + Math.PI/4;
+      const rail = vmBox(m, 0.013, 0.013, len - 0.026,
+                         Math.cos(a)*0.031, 0.02 + Math.sin(a)*0.031, zc);
+      rail.rotation.z = -a;
     }
-    for(const a of [1.05, 4.19]){                                 // vent slots, flanks only
-      vmBox(glowB(RCOL[p.rarity]), 0.005, 0.005, len*0.50,
-            Math.cos(a)*0.031, 0.02 + Math.sin(a)*0.031, frontZ - len*0.47);
+    hoop(frontZ - 0.048); hoop(frontZ - len*0.56); hoop(frontZ - len + 0.026);
+    hexSeg(0.046, 0.040, 0.034, m, frontZ - len - 0.017);         // crown
+    vmCyl(voidM(), 0.028, 0.024, frontZ - len - 0.040);           // an open bore
+    const ember = new THREE.Mesh(new THREE.CircleGeometry(0.024, 12), glowB(0xFF5A2A));
+    ember.position.set(0, 0.02, frontZ - len - 0.054); VMT.add(ember);
+    for(const sx of [-1, 1]){                                     // two swept horns
+      const h = new THREE.Mesh(new THREE.ConeGeometry(0.015, 0.070, 4), tone(0.60));
+      h.scale.set(1, 1, 0.5);
+      h.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(sx*0.30, 0.40, 0.86).normalize());
+      h.position.set(sx*0.036, 0.054, frontZ - len + 0.010); VMT.add(h);
     }
-    for(let i = 0; i < 5; i++){                                   // dorsal spine
-      const t = i/4, h = 0.036 + (0.018 - 0.036)*t;
-      const fin = new THREE.Mesh(new THREE.ConeGeometry(0.015, h, 4), dark());
-      fin.scale.set(0.28, 1, 1.7); fin.rotation.x = -0.6;
-      fin.position.set(0, 0.02 + 0.031 + h*0.34, frontZ - (0.22 + 0.70*t)*len);
-      VMT.add(fin);
-    }
-    vmCyl(m, 0.038, 0.024, frontZ - len - 0.009);                 // muzzle crown
-    vmCyl(voidM(), 0.027, 0.028, frontZ - len - 0.022);           // an open bore
-    const ember = new THREE.Mesh(new THREE.CircleGeometry(0.023, 12), glowB(0xFF5A2A));
-    ember.position.set(0, 0.02, frontZ - len - 0.034); VMT.add(ember);   // fire down the throat
-    for(const sy of [1, -1]){                                     // upper and lower jaw
-      const j = new THREE.Mesh(new THREE.ConeGeometry(0.019, 0.052, 4), m);
-      j.scale.set(1.45, 1, 0.52);
-      j.position.set(0, 0.02 + sy*0.026, frontZ - len - 0.050);
-      const d = new THREE.Vector3(0, -sy*0.36, -1).normalize();
-      j.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d); VMT.add(j);
-    }
-    for(const sy of [1, -1]) for(const sx of [-1, 1]){            // side teeth
-      const f = new THREE.Mesh(new THREE.ConeGeometry(0.0075, 0.026, 4), dark());
-      f.position.set(sx*0.026, 0.02 + sy*0.013, frontZ - len - 0.044);
-      const d = new THREE.Vector3(-sx*0.26, -sy*0.16, -1).normalize();
-      f.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d); VMT.add(f);
-    }
-    collar(0.03);
-    tipPad = 0.078;
+    collar(0.040);
+    tipPad = 0.062;
   }
   else if(n.includes('Whisper')){
     len = base*1.15;
