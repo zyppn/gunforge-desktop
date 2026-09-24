@@ -2735,33 +2735,31 @@ function vmMagazineBody(p, w){
   if(n.includes('Heart')){
     /* Was the Drum Feed with a lamp inside it: same wheel, same rim, one extra
        cylinder. The Maw at the other end of this set is a full drake head, so this
-       half was not carrying its weight. Now a talon cage cradling a molten core.
-       Two failed silhouettes on the way here, both worth naming. Side armour hid the
-       core, which is the only thing the part is about. Then posts splayed WIDE AT THE
-       FLOOR under a flat lid, which is a stool. The claw has to converge downward. */
+       half was not carrying its weight. Now a caged furnace - a molten core behind
+       corner posts, with the melt pooling on the floor.
+       Corner posts, not side plates: armouring the flanks hid the core, which is the
+       only thing the part is about. And the posts stand STRAIGHT. A later pass raked
+       them inward into a talon and hung horns off the yoke; the plain cage read
+       better, so it is the one that ships. */
     const h = 0.150, cy = topIn - h/2 + 0.002;
-    vmBox(m, 0.062, 0.022, 0.074, 0, topIn - 0.011, z);                // mounting yoke
-    for(const sx of [-1, 1])                                           // exhaust horns off the yoke
-      vmBox(tone(0.66), 0.010, 0.028, 0.014, sx*0.030, topIn - 0.004, z - 0.022).rotation.z = sx*0.5;
+    vmBox(m, 0.058, 0.026, 0.070, 0, topIn - 0.013, z);                // mounting yoke
     for(const dz of [-0.020, 0.000, 0.020])                            // heat fins under the yoke
-      vmBox(tone(1.12), 0.060, 0.006, 0.009, 0, topIn - 0.028, z + dz);
-    for(const sx of [-1, 1]) for(const sz of [-1, 1]){                 // talons: wide at the yoke,
-      const post = vmBox(m, 0.014, 0.104, 0.014, sx*0.030, cy - 0.004, z + sz*0.034);
-      post.rotation.set(sz*0.30, 0, -sx*0.30);                         // converging under the core
-    }
-    for(const [dy, k] of [[0.040, 1.16], [-0.046, 0.70]])              // hoops, tracking the taper
-      for(const [ux, uz] of [[0, 1], [0, -1], [1, 0], [-1, 0]])
-        vmBox(dark(), ux ? 0.010 : 0.072*k, 0.010, uz ? 0.010 : 0.078*k,
-              ux*0.031*k, cy + dy, z + uz*0.035*k);
-    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.031, 0), mat(0xFF5A2A, 0xFF5A2A, 1.8));
-    core.rotation.set(0.5, 0.4, 0); core.position.set(0, cy + 0.002, z); VMT.add(core);
-    const halo = new THREE.Mesh(new THREE.IcosahedronGeometry(0.043, 0),
-      new THREE.MeshBasicMaterial({color:0xFF7A2A, transparent:true, opacity:0.20, depthWrite:false}));
+      vmBox(tone(1.12), 0.062, 0.006, 0.010, 0, topIn - 0.032, z + dz);
+    for(const sx of [-1, 1]) for(const sz of [-1, 1])                  // corner posts
+      vmBox(m, 0.012, 0.096, 0.012, sx*0.027, cy - 0.004, z + sz*0.031);
+    for(const dy of [0.036, -0.044])                                   // cage hoops
+      for(const [bx, bz, bw, bd] of [[0, 0.031, 0.066, 0.010], [0, -0.031, 0.066, 0.010],
+                                     [0.027, 0, 0.010, 0.062], [-0.027, 0, 0.010, 0.062]])
+        vmBox(dark(), bw, 0.010, bd, bx, cy + dy, z + bz);
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.030, 0), mat(0xFF5A2A, 0xFF5A2A, 1.8));
+    core.rotation.set(0.5, 0.4, 0); core.position.set(0, cy - 0.004, z); VMT.add(core);
+    const halo = new THREE.Mesh(new THREE.IcosahedronGeometry(0.040, 0),
+      new THREE.MeshBasicMaterial({color:0xFF7A2A, transparent:true, opacity:0.22, depthWrite:false}));
     halo.position.copy(core.position); VMT.add(halo);
-    const pool = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.022, 0.012, 12), mat(0xFF8A3A, 0xFF8A3A, 1.6));
-    pool.position.set(0, cy - 0.056, z); VMT.add(pool);                // the melt, at the convergence
-    vmBox(dark(), 0.042, 0.009, 0.046, 0, cy - 0.064, z);              // catch plate
-    well(0.086, 0.094);
+    vmBox(dark(), 0.066, 0.011, 0.074, 0, cy - 0.058, z);              // floor
+    const pool = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.026, 0.010, 12), mat(0xFF8A3A, 0xFF8A3A, 1.6));
+    pool.position.set(0, cy - 0.049, z); VMT.add(pool);                // the melt
+    well(0.072, 0.086);
   } else if(n.includes('Drum')){
     const d = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.05, 14), m);
     d.rotation.z = Math.PI/2; d.position.set(0, topIn - 0.072, z); VMT.add(d);
