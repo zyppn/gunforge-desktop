@@ -2984,37 +2984,7 @@ function vmStockBody(p, w, rearZ, bodyH){
   } else if(n.includes('CQB')){
     vmBox(m, 0.065, 0.075, 0.06, 0, -0.005, rearZ + 0.03);
     vmCyl(dark(), 0.016, 0.045, rearZ + 0.008, -0.002); // buffer tube
-  } else if(n.includes('Shell')){
-    /* Was the Skeleton stock in gold. A carapace now - a tapered chitin shell with
-       segment bands and a dorsal ridge, ending in a point instead of a butt pad,
-       which makes it the one stock on the sheet you can name from its silhouette.
-       Stacked plates were the first attempt and they read as a staircase: every step
-       was a visible edge. One tapered body with bands over it does not step.
-       Sized against the gun, not against the icon. The first pass ran 175mm to a long
-       needle, and on the assembled Havoc that reads as a SECOND barrel pointing out the
-       back - the eye cannot tell which end the gun fires from. Short body, blunt tip. */
-    const L = 0.132, R0 = 0.045, R1 = 0.027;
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(R1, R0, L, 8), m);
-    body.rotation.x = Math.PI/2;                       // +Y -> +Z: radiusTop is the TAIL end
-    body.position.set(0, -0.008, rearZ + 0.012 + L/2); VMT.add(body);
-    const rAt = t => R0 + (R1 - R0)*t;                 // t = 0 at the receiver, 1 at the tail
-    for(const t of [0.26, 0.56, 0.86]){                // segment bands
-      const b = new THREE.Mesh(new THREE.TorusGeometry(rAt(t)*0.96, 0.0075, 5, 8), tone(0.58));
-      b.position.set(0, -0.008, rearZ + 0.012 + L*t); VMT.add(b);
-    }
-    for(const t of [0.14, 0.44, 0.74]){                // dorsal ridge, riding the taper
-      const hh = 0.024 - 0.010*t;
-      const fin = new THREE.Mesh(new THREE.ConeGeometry(0.011, hh, 4), tone(1.1));
-      fin.scale.set(0.42, 1, 1.7); fin.rotation.x = -0.5;
-      fin.position.set(0, -0.008 + rAt(t)*0.88 + hh*0.30, rearZ + 0.012 + L*t); VMT.add(fin);
-    }
-    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.030, 8), m);
-    tail.rotation.x = Math.PI/2;                       // apex rearward, stubby
-    tail.position.set(0, -0.008, rearZ + 0.012 + L + 0.012); VMT.add(tail);
-    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), tone(1.35));
-    bead.position.set(0, -0.008, rearZ + 0.012 + L + 0.028); VMT.add(bead);
-    vmBox(steel(), 0.013, 0.013, 0.013, 0, 0.030, rearZ + 0.010);      // joint bolt
-  } else if(n.includes('Skeleton')){
+  } else if(n.includes('Skeleton') || n.includes('Shell')){
     vmBox(m, 0.05, 0.016, 0.16, 0, 0.03, rearZ + 0.08);
     vmBox(m, 0.05, 0.016, 0.15, 0, -0.05, rearZ + 0.075).rotation.x = 0.35;
     vmBox(m, 0.052, 0.09, 0.02, 0, -0.01, rearZ + 0.155);   // 0.052, not the rails' 0.05: equal widths put the side faces on one plane
