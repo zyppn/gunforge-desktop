@@ -2549,37 +2549,56 @@ function vmBarrel(p, w, frontZ){
     tipPad = 0.06;
   }
   else if(n.includes('Sting')){
-    /* The Hornet Sting was folded in with the CQB barrel, so the signature piece of
-       the game's only seeker set shipped as the epic stubby in gold.
-       Hard bands, not beads. The first pass built it from spheres and it read as a
-       chess pawn: nothing else this renderer draws is smooth, so an organic bulge
-       looks like it wandered in from another game. A hexagonal shroud in alternating
-       stripes is a wasp AND is cut the same way as the receiver it bolts to. */
-    len = base*0.82;
-    const seg = len/4, rAt = i => 0.037 - 0.0042*i;
-    for(let i = 0; i < 4; i++){
-      const g = new THREE.CylinderGeometry(rAt(i), rAt(i+1), seg, 6);
-      g.rotateY(Math.PI/6);                                       // flat-top, like the frame
-      const c = new THREE.Mesh(g, i%2 ? tone(0.40) : m);          // banding
-      c.rotation.x = Math.PI/2;
-      c.position.set(0, 0.02, frontZ - seg*(i + 0.5));
-      VMT.add(c);
+    /* The Hornet Sting was folded in with the CQB barrel, so the signature piece of the
+       game's only seeker set shipped as the epic stubby in gold.
+       It is a stinger now: a banded tapering sheath with a fin row, a banded hex shaft,
+       thorns on the shaft's band joints, and a spear point.
+       Two things this went through that are worth not repeating. It was beads first -
+       three spheres and a needle - and nothing else this renderer draws is smooth, so it
+       read as a chess pawn. Then the shaft was a bare smooth rod between two pieces of
+       hard faceted geometry, and the thorns looked stuck INTO it rather than grown out of
+       it; banding the shaft and putting the thorns on its joints fixed that.
+       The dorsal thorns are not decoration. Barbs swept back along the flanks are nearly
+       invisible at the 1.25 rad the locker renders barrels at - you are looking straight
+       down their length - so the upright ones are the only barbs the player reliably
+       sees. */
+    len = base*1.16;
+    const sh = len*0.34, sg = sh/3, SL = len - sh, SR = 0.0135, bl = SL/4;
+    const hexSeg = (r0, r1, L, mtl, z) => {
+      const g = new THREE.CylinderGeometry(r0, r1, L, 6); g.rotateY(Math.PI/6);
+      const c = new THREE.Mesh(g, mtl); c.rotation.x = Math.PI/2;
+      c.position.set(0, 0.02, z); VMT.add(c);
+    };
+    const thorn = (L, rad, px, py, pz, dir, mtl) => {
+      const b = new THREE.Mesh(new THREE.ConeGeometry(rad, L, 4), mtl);
+      b.scale.set(1, 1, 0.5);                       // flattened, so it lies along the shaft
+      b.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      b.position.set(px, py, pz); VMT.add(b);
+    };
+    for(let i = 0; i < 3; i++)                                    // sheath, banded and tapered
+      hexSeg(0.037 - 0.004*i, 0.037 - 0.004*(i+1), sg, i%2 ? tone(0.40) : m, frontZ - sg*(i + 0.5));
+    for(let i = 0; i < 3; i++){                                   // fin row along the sheath
+      const f = new THREE.Mesh(new THREE.ConeGeometry(0.010, 0.022, 4), tone(0.62));
+      f.scale.set(0.34, 1, 1.8); f.rotation.x = -0.55;
+      f.position.set(0, 0.02 + (0.035 - 0.004*i) + 0.007, frontZ - sg*(i + 0.5)); VMT.add(f);
     }
-    for(let i = 0; i < 3; i++) for(const sx of [-1, 1])           // seeker ports, cut in the flanks
-      vmBox(glowB(0xFFD777), 0.004, 0.011, 0.018, sx*rAt(i + 0.5)*0.88, 0.02, frontZ - seg*(i + 1));
-    collar(0.040);
-    for(const a of [0.785, 2.356, 3.927, 5.498]){                 // swept barbs off the last band
-      const barb = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.044, 4), tone(0.62));
-      barb.scale.set(1, 1, 0.55);
-      barb.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
-        new THREE.Vector3(Math.cos(a)*0.55, Math.sin(a)*0.55, -1).normalize());
-      barb.position.set(Math.cos(a)*0.024, 0.02 + Math.sin(a)*0.024, frontZ - len + 0.004);
-      VMT.add(barb);
+    for(let i = 0; i < 4; i++)                                    // the shaft
+      hexSeg(SR, SR, bl, i%2 ? tone(0.38) : m, frontZ - sh - bl*(i + 0.5));
+    for(let k = 1; k <= 3; k++){                                  // thorns, on the band joints
+      const jz = frontZ - sh - bl*k;
+      for(const sx of [-1, 1])
+        thorn(0.034, 0.0080, sx*0.015, 0.02, jz, new THREE.Vector3(sx*0.66, 0, 0.75), tone(0.52));
+      thorn(0.030 + 0.006*k, 0.0075, 0, 0.02 + SR, jz, new THREE.Vector3(0, 0.80, 0.60), tone(0.58));
     }
-    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.019, 0.060, 6), m);
-    spike.rotation.x = -Math.PI/2;                                // apex forward
-    spike.position.set(0, 0.02, frontZ - len - 0.028); VMT.add(spike);
-    tipPad = 0.062;
+    for(const a of [1.05, 4.19]){                                 // seeker ports
+      const s = new THREE.Mesh(new THREE.SphereGeometry(0.0072, 7, 5), glowB(0xFFD777));
+      s.position.set(Math.cos(a)*0.033, 0.02 + Math.sin(a)*0.033, frontZ - sg*0.55); VMT.add(s);
+    }
+    const spear = new THREE.Mesh(new THREE.ConeGeometry(SR, 0.056, 6), tone(1.05));
+    spear.rotation.x = -Math.PI/2;                                // apex forward
+    spear.position.set(0, 0.02, frontZ - len - 0.026); VMT.add(spear);
+    collar(0.041);
+    tipPad = 0.056;
   }
   else if(n.includes('CQB')){
     len = base*0.62;
