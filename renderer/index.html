@@ -47,6 +47,20 @@
   .gate .gbtns{display:flex;flex-direction:column;gap:10px;margin:40px auto 0;max-width:320px}
   .gate .gbtns .btn{width:100%;padding:13px 16px}
   .gate .note{margin-top:22px}
+  /* two conveyor belts of random builds, top and bottom, running opposite ways */
+  #signin{position:relative}
+  #signin .gate{position:relative;z-index:1}
+  .belt{position:fixed;left:0;right:0;height:120px;overflow:hidden;pointer-events:none;opacity:.5;
+    -webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);
+            mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+  .belt.top{top:32px} .belt.bot{bottom:32px}
+  .belt .track{display:flex;width:max-content;animation:beltL 90s linear infinite}
+  .belt.bot .track{animation-name:beltR}
+  .belt img{width:300px;height:120px;margin-right:40px;flex:none}
+  .belt.top img{transform:scaleX(-1)}          /* muzzles lead the way they travel */
+  @keyframes beltL{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @keyframes beltR{from{transform:translateX(-50%)}to{transform:translateX(0)}}
+  @media (prefers-reduced-motion: reduce){.belt .track{animation:none}}
 
   h2{font-family:var(--disp);font-size:18px;letter-spacing:2px;text-transform:uppercase;color:#EDF1F5;margin-bottom:4px}
   .eyebrow{font-size:11px;letter-spacing:2px;color:var(--brass);text-transform:uppercase;margin-bottom:2px}
@@ -1526,8 +1540,58 @@ function renderSignin(){
     + '<button class="btn" onclick="playAsGuest()">PLAY AS GUEST</button>'
     + '</div>'
     + '<div class="note">New here? Either works. A guest can connect Discord later and keep everything.</div>'
-    + '</div>';
+    + '</div>'
+    + '<div class="belt top"><div class="track" id="beltTop"></div></div>'
+    + '<div class="belt bot"><div class="track" id="beltBot"></div></div>';
   show('signin');
+  fillBelts();
+}
+/* ---- sign-in belts: random builds on parade ------------------------------------------
+   Every gun is a real build from the real part pool, drawn by the same renderer as the
+   death card, so the belts show exactly what the game can make. One launch, one set of
+   pictures: rendered a gun per frame (nothing stalls the screen), then reused every
+   time the sign-in screen comes back. */
+const BELT_N = 8;                       // guns per belt; each belt shows them twice to loop
+let BELT_IMGS = null;
+function randomBuild(){
+  const w = WEAPONS[Math.floor(Math.random() * WEAPONS.length)];
+  const eq = {};
+  const sets = SETS.filter(st => st.weapon === w.id);
+  // one in four is a full set, so the belts show off set pieces, not only rarity colours
+  const set = sets.length && Math.random() < 0.25 ? sets[Math.floor(Math.random() * sets.length)] : null;
+  for(const sl of SLOTS){
+    if(set && set.pieces[sl]){
+      const mods = PART_POOL[sl][0].mods;
+      eq[sl] = makePart(w.id, sl, set.rarity, { name: set.pieces[sl], mods }, null, set.id);
+      continue;
+    }
+    if(Math.random() < 0.15) continue;  // the odd empty slot: bare builds are real too
+    const tpl = PART_POOL[sl][Math.floor(Math.random() * PART_POOL[sl].length)];
+    eq[sl] = makePart(w.id, sl, RKEYS[Math.floor(Math.random() * RKEYS.length)], tpl);
+  }
+  return { wid: w.id, eq };
+}
+function beltHtml(urls){
+  const one = urls.map(u => '<img alt="" src="' + u + '">').join('');
+  return one + one;                     // twice: the loop point is invisible
+}
+function fillBelts(){
+  const top = $('#beltTop'), bot = $('#beltBot');
+  if(!top || !bot) return;
+  if(BELT_IMGS){ top.innerHTML = beltHtml(BELT_IMGS.top); bot.innerHTML = beltHtml(BELT_IMGS.bot); return; }
+  if(typeof THREE === 'undefined') return;
+  const urls = [];
+  const step = () => {
+    if(!authSignedOut()) return;        // signed in meanwhile: stop drawing
+    const b = randomBuild();
+    const d = killWeaponDiagram(b.wid, b.eq, 300, 120, 0.94);
+    if(d && d.url) urls.push(d.url);
+    else if(dcGLDead) return;           // no WebGL: the screen is fine without belts
+    if(urls.length < BELT_N * 2) return requestAnimationFrame(step);
+    BELT_IMGS = { top: urls.slice(0, BELT_N), bot: urls.slice(BELT_N) };
+    fillBelts();
+  };
+  requestAnimationFrame(step);
 }
 function renderMenu(){
   if(authSignedOut()){ renderSignin(); return; }
