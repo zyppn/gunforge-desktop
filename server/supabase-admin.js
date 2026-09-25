@@ -25,8 +25,27 @@ function adminHeaders(extra) {
 // Verify a player's JWT and return their auth uid (or null if invalid).
 // This is how the server trusts "you are account X" instead of taking
 // the client's word for it.
+/* Token -> uid cache. Every authenticated request used to cost a round trip to
+   Supabase Auth, all from this one server IP; the session claim adds more of them.
+   A token is valid until its own exp, so cache it until then (capped at 10 minutes, so
+   a revoked session stops working within that). */
+const TOKEN_CACHE = new Map();
+function tokenExpMs(jwt){
+  try{ const p = JSON.parse(Buffer.from(String(jwt).split('.')[1], 'base64url').toString('utf8'));
+       return typeof p.exp === 'number' ? p.exp * 1000 : 0; }catch(e){ return 0; }
+}
 async function verifyUser(jwt) {
   if (!ENABLED || !jwt) return null;
+  const hit = TOKEN_CACHE.get(jwt);
+  if (hit && hit.until > Date.now()) return hit.uid;
+  const uid = await verifyUserUncached(jwt);
+  if (uid) {
+    if (TOKEN_CACHE.size > 5000) TOKEN_CACHE.clear();
+    TOKEN_CACHE.set(jwt, { uid, until: Math.min(tokenExpMs(jwt) || 0, Date.now() + 10 * 60 * 1000) });
+  }
+  return uid;
+}
+async function verifyUserUncached(jwt) {
   try {
     const r = await fetch(SUPABASE_URL + '/auth/v1/user', {
       headers: { 'apikey': SERVICE_KEY, 'Authorization': 'Bearer ' + jwt },
@@ -38,8 +57,15 @@ async function verifyUser(jwt) {
 }
 
 // Look up the players.id (primary key) for an auth uid.
+const PID_CACHE = new Map();   // uid -> players.id never changes once the row exists
 async function playerIdForUid(uid) {
   if (!ENABLED || !uid) return null;
+  if (PID_CACHE.has(uid)) return PID_CACHE.get(uid);
+  const pid = await playerIdForUidUncached(uid);
+  if (pid) PID_CACHE.set(uid, pid);
+  return pid;
+}
+async function playerIdForUidUncached(uid) {
   try {
     const r = await fetch(SUPABASE_URL + '/rest/v1/players?select=id&auth_uid=eq.' + uid, { headers: adminHeaders() });
     if (!r.ok) return null;
@@ -200,5 +226,26 @@ async function buyStorePart(playerId, dayKey, idx, price, part) {
   }
 }
 
-module.exports = { ENABLED, PART_CAP, verifyUser, playerIdForUid, claimMatch, partsHeld, grantReward,
+/* Persistence for server/sessions.js (migration 019). Throws on failure so the
+   sessions module can fall back to memory and log it once. */
+const sessionStore = {
+  async get(pid){
+    if(!ENABLED) return null;
+    const r = await fetch(SUPABASE_URL + '/rest/v1/player_sessions?select=session,claimed_at&player_id=eq.' + pid,
+                          { headers: adminHeaders() });
+    if(!r.ok) throw new Error('player_sessions read ' + r.status);
+    const rows = await r.json();
+    return rows.length ? { session: rows[0].session, at: Date.parse(rows[0].claimed_at) || 0 } : null;
+  },
+  async set(pid, rec){
+    if(!ENABLED) return;
+    const r = await fetch(SUPABASE_URL + '/rest/v1/player_sessions?on_conflict=player_id', {
+      method: 'POST', headers: adminHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+      body: JSON.stringify({ player_id: pid, session: rec.session, claimed_at: new Date(rec.at).toISOString() }),
+    });
+    if(!r.ok) throw new Error('player_sessions write ' + r.status + ' ' + await r.text().catch(() => ''));
+  },
+};
+
+module.exports = { ENABLED, PART_CAP, verifyUser, playerIdForUid, claimMatch, partsHeld, grantReward, sessionStore,
                    storePurchases, buyStorePart };

@@ -105,7 +105,26 @@ SMTP (Supabase's built-in mailer only delivers to your own Supabase team), put
 `{{ .Token }}` in the **Change Email Address** and **Magic Link** templates, and give
 them a screen.
 
-## 5. Moving to Steam later
+## 5. One active session per account
+
+An account can only be played in one place at a time; the newest sign-in wins, and
+every other copy of the game signs itself out, even on the menu (`server/sessions.js`).
+The arena server refuses rewards, store purchases and live seats to any device that is
+not the account's current session, so a modified client or a bot gains nothing by
+ignoring the sign-out.
+
+1. **Run `migrations/019_player_sessions.sql`** in the SQL editor. It is where the claim
+   survives a server restart. Without it the server still enforces one session from
+   memory and logs `[sessions] ... running from memory only` once - but a restart then
+   lets whichever device checks in first take the account.
+2. Deploy the server (`./ship.sh` does it).
+3. **Test:** sign in on two machines with the same Discord. The first one should show
+   "Signed out" within about 15 seconds, or at once if it was in a live match.
+
+Testing two copies on one Mac with `npm start -- --multi` now needs two different
+accounts: the same account in both windows signs one of them out, by design.
+
+## 6. Moving to Steam later
 
 Yes, this carries over. Accounts are keyed by the Supabase user id
 (`players.auth_uid`), not by how someone signs in. Discord is one identity on that user,

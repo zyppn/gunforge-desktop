@@ -719,17 +719,29 @@ async function outboxDrain(){
   if(!uid_) return 0;                     // still no session — leave the queue intact
   const left = [];
   const got = [];                          // what the server actually granted on replay
+  let claimedOnce = false, lost = false;
   for(const e of q){
+    if(lost){ left.push(e); continue; }
     try{
-      const ctrl = new AbortController();
-      const to = setTimeout(()=>ctrl.abort(), 8000);
-      const r = await fetch(liveHttpUrl()+'/reward/offline', {
-        method:'POST', signal: ctrl.signal,
-        headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
-        body: JSON.stringify(e)
-      });
-      clearTimeout(to);
-      const sv = await r.json().catch(()=>null);
+      /* the session is the one this launch holds NOW, not whatever was current when the
+         match was queued - an offline match played last week is replayed by this launch */
+      const send = async () => {
+        const ctrl = new AbortController();
+        const to = setTimeout(()=>ctrl.abort(), 8000);
+        const r = await fetch(liveHttpUrl()+'/reward/offline', {
+          method:'POST', signal: ctrl.signal,
+          headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
+          body: JSON.stringify(Object.assign({}, e, { session: SESSION_ID }))
+        });
+        clearTimeout(to);
+        return { r, sv: await r.json().catch(()=>null) };
+      };
+      let { r, sv } = await send();
+      if(sv && sv.reason === 'no-session' && !claimedOnce){
+        claimedOnce = true;
+        if(await sessionClaim() === 'ok') ({ r, sv } = await send());
+      }
+      if(sv && sv.reason === 'superseded'){ lost = true; left.push(e); sessionSuperseded(); continue; }
       if(sv && sv.ok){ got.push(sv); continue; }      // delivered (or already known) -> drop it
       console.error('[outbox] replay declined', r.status, sv && sv.reason);
       left.push(e);                                    // keep for the next attempt
@@ -1430,9 +1442,10 @@ async function storeBuy(idx){
     const r = await fetch(liveHttpUrl()+'/store/buy', {
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+AUTH.token},
-      body: JSON.stringify({ idx })
+      body: JSON.stringify({ idx, session: SESSION_ID })
     });
     const j = await r.json();
+    if(j && j.reason === 'superseded'){ sessionSuperseded(); return; }
     if(j && j.ok){
       // the server is authoritative for both sides of the trade; take its numbers
       if(typeof j.credits === 'number') P.credits = j.credits;
@@ -1645,6 +1658,62 @@ async function authSignOut(){
   try{ localStorage.removeItem('gf_auth'); }catch(e){}
 }
 
+/* ---- one active session per account (server/sessions.js) ----------------------------
+   Every launch of the game is its own session: a random id made at startup and never
+   saved, so two copies of the app - on two PCs, or two windows - are always told apart.
+   The launch CLAIMS its account with it; the newest claim is the only one the arena
+   server honours for rewards, the store and live seats. Every other copy learns it has
+   lost on its next heartbeat (or at once, if it is in a live match) and signs out.
+
+   The client only makes this polite. The server is what makes it true: a modified
+   client that ignores being signed out is still refused every reward and every seat. */
+const newSessionId = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '')
+  : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''));
+let SESSION_ID = newSessionId();
+let SESSION_TIMER = null;
+let SESSION_LOST = false;
+const SESSION_BEAT_MS = 15000;
+
+/* 'ok' | 'too-fast' | 'offline' | 'refused'. A claim inside the server's cooldown is
+   retried once: two devices booting at the same moment is the realistic way to hit it. */
+async function sessionClaim(retried){
+  if(!HAS_SUPABASE() || !AUTH.token) return 'offline';
+  let j = null;
+  try{
+    const r = await fetch(liveHttpUrl() + '/session/claim', { method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + AUTH.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: SESSION_ID }) });
+    j = await r.json().catch(() => null);
+  }catch(e){ return 'offline'; }
+  if(j && j.ok){ SESSION_LOST = false; return 'ok'; }
+  if(j && j.reason === 'too-fast' && !retried){
+    await new Promise(r => setTimeout(r, 3200));
+    return sessionClaim(true);
+  }
+  return j && j.reason === 'too-fast' ? 'too-fast' : 'refused';
+}
+/* The heartbeat. Only an explicit "you are not current" signs anyone out - a failed
+   request (offline, server restarting) never does, or every dropped packet would
+   throw players out of their own account. */
+async function sessionCheck(){
+  if(SESSION_LOST || !HAS_SUPABASE() || !ACCOUNT.playerId) return 'skip';
+  let j = null;
+  try{
+    const r = await fetch(liveHttpUrl() + '/session/check', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pid: ACCOUNT.playerId, session: SESSION_ID }) });
+    j = await r.json().catch(() => null);
+  }catch(e){ return 'offline'; }
+  if(!j || !j.ok) return 'offline';
+  if(j.current === false){ sessionSuperseded(); return 'lost'; }
+  if(j.current === null){ await sessionClaim(); return 'reclaimed'; }   // server forgot: take it back quietly
+  return 'current';
+}
+function sessionWatch(){
+  if(SESSION_TIMER) clearInterval(SESSION_TIMER);
+  SESSION_TIMER = setInterval(sessionCheck, SESSION_BEAT_MS);
+}
+
 /* ---- account: Discord, in Settings ---------------------------------------------------
    Discord is the only way to secure an account for now. Username + password is built
    and tested (authCreateLogin / authPasswordSignIn) but has no button: it can only be
@@ -1695,7 +1764,11 @@ async function discordStart(mode){
     return;
   }
   toast(mode === 'link' ? 'DISCORD CONNECTED — ACCOUNT SECURED' : 'SIGNED IN' + (r.name ? ' AS ' + String(r.name).toUpperCase() : ''));
-  if(mode === 'login'){ try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); } }
+  if(mode === 'login'){
+    SESSION_ID = newSessionId();
+    await sessionClaim();                 // signing in here signs any other device out
+    try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
+  }
   renderMenu();
   menuSettings();                       // back where they started, now showing CONNECTED
 }
@@ -1741,17 +1814,41 @@ async function signOutAsk(){
 }
 async function doSignOut(){
   const b = document.getElementById('sogo'); if(b){ b.disabled = true; b.textContent = 'SIGNING OUT…'; }
+  await becomeGuest();
+  renderMenu(); menuSettings();
+  toast('SIGNED OUT — THIS PC IS NOW A NEW GUEST');
+}
+/* Forget this PC's account and start it over as a new guest - shared by SIGN OUT and
+   by being signed out from another device. Nothing of the old account may be left for
+   the guest to inherit (queued rewards would drain into it) or to display. */
+async function becomeGuest(){
   await authSignOut();
-  // nothing of the old account may be left for the new guest to inherit or display
   try{ await sSet(OUTBOX_KEY, []); }catch(e){}
   try{ await sSet(LOADOUT_PENDING, null); }catch(e){}
   try{ await sSet('profile', null); }catch(e){}
   ACCOUNT = { online: false, uid: null };
+  SESSION_ID = newSessionId();                 // a new account is a new session
   let fresh = null;
   try{ fresh = await loadCloudProfile(); }catch(e){ console.error(e); }
   if(fresh) P = fresh; else await loadProfile();
-  refreshChips(); renderMenu(); menuSettings();
-  toast('SIGNED OUT — THIS PC IS NOW A NEW GUEST');
+  await sessionClaim();
+  refreshChips();
+}
+/* Another device signed in to this account. Newest wins, even on the menu: end any
+   match, sign this PC out, and say why - with the button that takes it back. */
+async function sessionSuperseded(){
+  if(SESSION_LOST) return;
+  SESSION_LOST = true;
+  const wasName = hasDiscord() ? (AUTH.name || 'your Discord account') : 'this account';
+  if(G && G.running){ try{ abandonMatch(); }catch(e){} }
+  await becomeGuest();
+  renderMenu();
+  modal('<div class="eyebrow">Account</div><h2>Signed out</h2>'
+    + '<p class="note"><b>' + esc(wasName) + '</b> was signed in on another device, so this one was signed out. '
+    + 'An account can only be played in one place at a time. Your parts are safe on the account.</p>'
+    + '<p class="note" style="margin-top:8px">Signing back in here will sign the other device out.</p>'
+    + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SIGN BACK IN WITH DISCORD</button>'
+    + '<button class="btn" onclick="closeModal()">PLAY AS GUEST</button></div>');
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'
@@ -6587,7 +6684,7 @@ function startLiveMatch(){
   const eqForServer = {};
   { const _eq = equippedParts(P.equippedWeapon);
     for(const s of SLOTS){ const pp = _eq[s]; eqForServer[s] = pp ? {slot:s, weapon:pp.weapon, name:pp.name, rarity:pp.rarity, set:pp.set||undefined, ability:pp.ability||undefined, mods:pp.mods||{}} : null; } }
-  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map, equipped:eqForServer, token: (AUTH && AUTH.token) || null }).then(room => {
+  client.joinOrCreate('arena', { name:P.name, wid:P.equippedWeapon, map:setupSel.map, equipped:eqForServer, token: (AUTH && AUTH.token) || null, session: SESSION_ID }).then(room => {
     if(!G || G.mode!=='live'){ try{ room.leave(); }catch(e){} return; }
     live.room = room; live.myId = room.sessionId;
     room.state.players.onAdd((p, id) => {
@@ -6685,7 +6782,10 @@ function startLiveMatch(){
       const range = 26;
       if(d < range) gunSound(w.type, 0.8 * (1 - d/range));
     });
+    // this account signed in somewhere else: the server has already taken the seat
+    room.onMessage('superseded', () => { sessionSuperseded(); });
     room.onLeave(() => {
+      if(SESSION_LOST) return;               // sessionSuperseded is handling it
       if(G && G.running && G.mode==='live'){ toast('DISCONNECTED FROM ARENA'); abandonMatch(); }
     });
     toast('CONNECTED — OPERATORS IN ROOM WILL APPEAR');
@@ -6702,6 +6802,7 @@ function startLiveMatch(){
     sizeRenderer();
     if(!locked && !settingsOpen) tryLock(); // just (re)grab pointer lock; already fullscreen
   }).catch(e => {
+    if(/ANOTHER DEVICE/.test(String(e && e.message))) sessionCheck();   // confirm, then sign out properly
     toast('CONNECTION FAILED — ' + (e.message||'server unreachable').slice(0,80));
     G.running = false; G = null;
     releasePointer(); leaveFullscreen();
@@ -7200,6 +7301,8 @@ function liveExitToLobby(){
       $('#boot').innerHTML = '<div class="panel">ESTABLISHING UPLINK... AUTHENTICATING OPERATOR...</div>';
       // Replay any match whose reward never reached the server, BEFORE pulling the
       // profile, so freshly granted parts are in the inventory we load.
+      // this launch becomes the account's active device before anything is earned or read
+      try{ if(await ensureAuth()) await sessionClaim(); }catch(e){ console.error('session claim failed', e); }
       try{ replayed = await outboxDrain(); }
       catch(e){ console.error('outbox drain failed', e); }
       // A loadout saved while offline must reach the server BEFORE we read the
@@ -7231,6 +7334,9 @@ function liveExitToLobby(){
     // lvlBefore is meaningless at boot: the profile we just loaded already contains
     // the replayed XP, so there is no "before" to compare against.
     if(replayed.length) setTimeout(()=>rewardModal(replayed), 700);
+    // always, not only when the profile loaded: a launch that starts offline and reconnects
+    // later must still be told if the account moved (sessionCheck skips until it has one)
+    if(HAS_SUPABASE()) sessionWatch();
   }catch(e){
     console.error(e);
     $('#boot').innerHTML = '<div class="panel">UPLINK ERROR — profile storage unavailable. Reload to retry.</div>';

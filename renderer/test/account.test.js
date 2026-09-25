@@ -36,7 +36,8 @@ const SRC = [
   ...['authStore','authApply','authSave','authAnonymousSignIn','authRefresh','ensureAuth','_ensureAuth',
       'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode',
       'b64url','pkcePair','discordErrText','discordAuth',
-      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut'].map(lift),
+      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut','sessionClaim','sessionCheck'].map(lift),
+  line(/const newSessionId = [\s\S]*?join\(''\)\);/), line(/let SESSION_ID = [^\n]*;/), line(/let SESSION_LOST = [^\n]*;/),
   line(/const DISCORD_SCOPES = [^\n]*;/), line(/const LOGIN_DOMAIN = [^\n]*;/), line(/const USERNAME_RE = [^\n]*;/),
   line(/const MIN_PASSWORD = [^\n]*;/), line(/const usernameEmail = [^\n]*;/),
 ].join('\n');
@@ -168,7 +169,8 @@ function client(S, store){
     toast: m => { ctx.__toasts.push(m); }, __toasts: [],
     BACKEND: { supabaseUrl: 'https://proj.supabase.co', supabaseAnonKey: 'anon' },
     HAS_SUPABASE: () => true,
-    crypto: globalThis.crypto, TextEncoder, URLSearchParams, btoa, Uint8Array,
+    crypto: globalThis.crypto, TextEncoder, URLSearchParams, btoa, Uint8Array, Array,
+    setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 20)),   // the 3.2s claim retry, compressed
     gunforgeNative: {
       oauthListen: async () => ({ redirect: 'http://127.0.0.1:53682/auth/callback' }),
       oauthOpen: async url => S.browser(url),
@@ -376,6 +378,39 @@ const expire = c => { const a = JSON.parse(c.store.get('gf_auth')); a.expires = 
     await off.authSignOut();
     S.mode = 'up';
     ok('signing out works offline too (the revoke is best-effort)', !off.store.has('gf_auth'));
+  }
+
+  /* ---- 8. one active session: the client side ---- */
+  {
+    const S = fakeAuth();
+    const c = client(S);
+    await c.ensureAuth();
+    let server = { current: true, claim: 'ok', down: false, claims: 0, lostCalls: 0 };
+    const realFetch = c.fetch;
+    c.fetch = async (url, opt) => {
+      if(!String(url).startsWith('http://arena')) return realFetch(url, opt);
+      if(server.down) throw new TypeError('fetch failed');
+      const b = JSON.parse(opt.body || '{}');
+      if(url.endsWith('/session/claim')){ server.claims++;
+        const r = server.claim; if(server.claim === 'too-fast-once'){ server.claim = 'ok'; return { ok:false, json: async () => ({ ok:false, reason:'too-fast' }) }; }
+        return { ok: r === 'ok', json: async () => (r === 'ok' ? { ok:true } : { ok:false, reason:r }) }; }
+      if(url.endsWith('/session/check')) return { ok:true, json: async () => ({ ok:true, current: server.current }) };
+      return { ok:false, json: async () => ({}) };
+    };
+    vm.runInContext('liveHttpUrl = () => "http://arena"; ACCOUNT = { playerId: "pidA" }; ' +
+      'sessionSuperseded = () => { __lost++; };', Object.assign(c, { __lost: 0 }));
+    ok('each launch makes a random session id the server accepts', /^[A-Za-z0-9_-]{16,64}$/.test(c.SESSION_ID || vm.runInContext('SESSION_ID', c)));
+    ok('claiming works', await c.sessionClaim() === 'ok');
+    server.claim = 'too-fast-once'; const n0 = server.claims;
+    ok('a claim inside the cooldown is retried once and then lands', await c.sessionClaim() === 'ok' && server.claims === n0 + 2);
+    server.down = true;
+    ok('the heartbeat NEVER signs out when the server cannot be reached', await c.sessionCheck() === 'offline' && c.__lost === 0);
+    server.down = false; server.current = true;
+    ok('still current: nothing happens', await c.sessionCheck() === 'current' && c.__lost === 0);
+    server.current = null; const n1 = server.claims;
+    ok('the server forgot the claim: take it back quietly', await c.sessionCheck() === 'reclaimed' && server.claims === n1 + 1 && c.__lost === 0);
+    server.current = false;
+    ok('another device took the account: sign out', await c.sessionCheck() === 'lost' && c.__lost === 1);
   }
 
   console.log(fails ? '\naccount: ' + fails + ' failure(s)' : '\naccount: all clear');

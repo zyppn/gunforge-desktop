@@ -11,6 +11,8 @@ const { WebSocketTransport } = require('@colyseus/ws-transport');
 const { Schema, MapSchema, defineTypes } = require('@colyseus/schema');
 const LoadoutCore = require('./loadout-core.js');
 const Admin = require('./supabase-admin.js');
+const { createSessions } = require('./sessions.js');
+const Sessions = createSessions(Admin.ENABLED ? Admin.sessionStore : null);
 
 const TICK = 1000 / 30;           // 30 Hz simulation
 const AW = 60, AD = 40;           // arena size — mirrors the client maps
@@ -42,6 +44,25 @@ const PVP = {
 /* one live session per callsign on this server — no parallel-room reward farming
    (interim identity until Supabase auth binds sessions to real accounts) */
 const activeCallsigns = new Map(); // NAME -> sessionId
+/* One live seat per ACCOUNT, across every room on this server. activeCallsigns keys on
+   the name the client sends, which is unverified - one account could hold two seats
+   under two names and farm itself, and anyone could take your callsign first to lock
+   you out. Seats are keyed on the players.id proven by the JWT in onAuth. */
+const activeSeats = new Map();     // players.id -> { room, client, session }
+function vacateSeat(pid, why){
+  const seat = activeSeats.get(pid);
+  if(!seat) return;
+  activeSeats.delete(pid);
+  const gone = seat.room.state && seat.room.state.players && seat.room.state.players.get(seat.client.sessionId);
+  if(gone){ const k = gone.name.toUpperCase(); if(activeCallsigns.get(k) === seat.client.sessionId) activeCallsigns.delete(k); }
+  try{ seat.client.send('superseded', { reason: why }); }catch(e){}
+  try{ if(typeof seat.client.leave === 'function') seat.client.leave(4001, why); }catch(e){}
+}
+// a newer claim on the account ends any seat an older device is holding, at once
+Sessions.onSupersede((pid, session) => {
+  const seat = activeSeats.get(pid);
+  if(seat && seat.session !== session) vacateSeat(pid, 'signed-in-elsewhere');
+});
 
 /* Maps: wall rects only — must match the client's MAPS geometry.
    (Phase 2: generate both from one shared JSON.) */
@@ -149,7 +170,23 @@ class ArenaRoom extends Room {
     this.setSimulationInterval(() => this.tick(), TICK);
   }
 
-  onJoin(client, options){
+  /* Identity is settled BEFORE the join, not after it. The old path verified the token
+     in a fire-and-forget promise once the player was already in the room, which is
+     why nothing could check it for duplicates. A player whose device is no longer the
+     account's active session is refused here outright. */
+  async onAuth(client, options){
+    if(!Admin.ENABLED || !options || !options.token) return { pid: null };
+    const uid = await Admin.verifyUser(options.token);
+    const pid = uid ? await Admin.playerIdForUid(uid) : null;
+    if(pid && !(await Sessions.isCurrent(pid, options.session)))
+      throw new Error('THIS ACCOUNT IS SIGNED IN ON ANOTHER DEVICE');
+    return { pid, session: options.session || null };
+  }
+
+  onJoin(client, options, auth){
+    const pid = auth && auth.pid;
+    // newest wins: the same account in another match (or this one) loses that seat
+    if(pid && activeSeats.has(pid)) vacateSeat(pid, 'joined-elsewhere');
     const p = new PlayerState();
     p.name = String(options.name || 'OPERATOR').slice(0, 18);
     const key = p.name.toUpperCase();
@@ -173,11 +210,10 @@ class ArenaRoom extends Room {
       ps.mods = LoadoutCore.encodeMods(cp.mods);
       p.eq.set(slot, ps);
     }
-    // verify identity from the JWT the client sent — server trusts the token, not the name
-    if(Admin.ENABLED && options.token){
-      Admin.verifyUser(options.token).then(uid => uid && Admin.playerIdForUid(uid))
-        .then(pid => { if(pid) this.playerIds.set(client.sessionId, pid); })
-        .catch(()=>{});
+    // identity was verified in onAuth - the server trusts the token, not the name
+    if(pid){
+      this.playerIds.set(client.sessionId, pid);
+      activeSeats.set(pid, { room: this, client, session: auth.session });
     }
     const s = this.spawns[this.clients.length % this.spawns.length];
     p.x = s[0]; p.z = s[1]; p.yaw = 0;
@@ -190,6 +226,8 @@ class ArenaRoom extends Room {
   }
 
   onLeave(client){
+    const spid = this.playerIds.get(client.sessionId);
+    if(spid && activeSeats.has(spid) && activeSeats.get(spid).client === client) activeSeats.delete(spid);
     const gone = this.state.players.get(client.sessionId);
     if(gone){
       this.broadcast('presence', { name: gone.name, on: false });
@@ -749,6 +787,45 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /* ---- one active session per account (server/sessions.js) ----
+     claim: this launch of the game becomes the account's only honoured device.
+     check: the heartbeat. Deliberately unauthenticated and free of Supabase calls -
+     every running client asks every 15s - and it answers only yes/no for a session
+     id the caller already holds, which tells nobody anything. */
+  if(req.url === '/session/claim' && req.method === 'POST'){
+    let body = '';
+    req.on('data', c => { body += c; if(body.length > 1024) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        if(!Admin.ENABLED){ sendJson(res, 200, { ok:false, reason:'no-economy' }); return; }
+        const jwt = (req.headers.authorization || '').replace(/^Bearer /,'');
+        const uid = await Admin.verifyUser(jwt);
+        if(!uid){ sendJson(res, 401, { ok:false, reason:'bad-token' }); return; }
+        const pid = await Admin.playerIdForUid(uid);
+        if(!pid){ sendJson(res, 404, { ok:false, reason:'no-player' }); return; }
+        const data = JSON.parse(body || '{}');
+        const r = await Sessions.claim(pid, data.session);
+        sendJson(res, r.ok ? 200 : 409, Object.assign({ pid }, r));
+      } catch(e){ sendJson(res, 400, { ok:false, reason:String(e && e.message || e) }); }
+    });
+    return;
+  }
+  if(req.url === '/session/check' && req.method === 'POST'){
+    let body = '';
+    req.on('data', c => { body += c; if(body.length > 1024) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        if(!Admin.ENABLED){ sendJson(res, 200, { ok:false, reason:'no-economy' }); return; }
+        const data = JSON.parse(body || '{}');
+        if(!data.pid || !data.session){ sendJson(res, 400, { ok:false, reason:'bad-request' }); return; }
+        const cur = await Sessions.current(String(data.pid));
+        // no claim on record yet: not a reason to sign anyone out
+        sendJson(res, 200, { ok:true, current: cur === null ? null : cur === data.session });
+      } catch(e){ sendJson(res, 400, { ok:false, reason:String(e && e.message || e) }); }
+    });
+    return;
+  }
+
   // Offline-match reward grant. The client reports an offline (bot) match result;
   // the server writes the reward to the verified account. Rewards are stamped
   // source:'offline' + bound:true so this loot can be walled off from the shared
@@ -766,6 +843,13 @@ const server = http.createServer((req, res) => {
         if(!pid){ sendJson(res, 404, { ok:false, reason:'no-player' }); return; }
 
         const data = JSON.parse(body || '{}');
+        /* Only the account's active device earns. Checked before claimMatch so a refused
+           replay does not burn its match id - the device that owns it can still claim it
+           once it is the active one again. */
+        if(!(await Sessions.isCurrent(pid, data.session))){
+          const cur = await Sessions.current(pid);
+          sendJson(res, 409, { ok:false, reason: cur ? 'superseded' : 'no-session' }); return;
+        }
         // Idempotency: the client may be replaying a queued match whose original
         // response was lost. Claim the id first — a duplicate grants nothing.
         const firstTime = await Admin.claimMatch(data.mid, pid);
@@ -840,6 +924,10 @@ const server = http.createServer((req, res) => {
         if(!pid){ sendJson(res, 404, { ok:false, reason:'no-player' }); return; }
 
         const data = JSON.parse(body || '{}');
+        if(!(await Sessions.isCurrent(pid, data.session))){
+          const cur = await Sessions.current(pid);
+          sendJson(res, 409, { ok:false, reason: cur ? 'superseded' : 'no-session' }); return;
+        }
         const idx = Number(data.idx);
         if(!Number.isInteger(idx) || idx < 0 || idx > 7){
           sendJson(res, 400, { ok:false, reason:'bad-slot' }); return;
