@@ -66,10 +66,27 @@ const clientCalls = new Set();
 const allSql = sqls.map(read).join('\n');
 for(const name of [...called.keys()].filter(n => !clientCalls.has(n)).sort()){
   if(OPEN_OK[name]){ ok(name + ' is server-only and may stay open', true, OPEN_OK[name]); continue; }
-  const revoked = new RegExp("revoke\\s+execute\\s+on\\s+function\\s+[^;]*" + name + "[^;]*from[^;]*authenticated", 'i').test(allSql)
+  const revoked = new RegExp("revoke\\s+execute\\s+on\\s+function\\s+[^;]*" + name + "[^;]*from[^;]*\\bpublic\\b[^;]*authenticated", 'i').test(allSql)
     || new RegExp("proname\\s+in\\s*\\([^)]*'" + name + "'", 'i').test(allSql)
        && /revoke execute on function %s from public, anon, authenticated/i.test(allSql);
   ok(name + ' is server-only and closed to players', revoked, revoked ? '' : 'no REVOKE ... FROM authenticated in server/*.sql');
+}
+/* ---- a revoke that leaves PUBLIC in place is not a revoke ----
+   Every role inherits PUBLIC, and Postgres grants EXECUTE on new functions to it. 011
+   revoked backpay_sellers() from anon and authenticated only, and the live privilege
+   check still read true/true for both - a revoke that looked finished and did nothing.
+   Whatever the LAST revoke of each function says (migrations apply in file order) must
+   name public. */
+{
+  const last = new Map();
+  for(const p of sqls){
+    const txt = read(p).replace(/--[^\n]*/g, '');
+    for(const m of txt.matchAll(/revoke\s+execute\s+on\s+function\s+([a-z_][a-z0-9_]*)\s*(?:\([^)]*\))?\s+from\s+([^;]+);/gi))
+      last.set(m[1].toLowerCase(), { from: m[2].toLowerCase(), file: path.basename(p) });
+  }
+  ok('found the revokes this check reads', last.size >= 1, [...last.keys()].join(', '));
+  for(const [fn, r] of [...last.entries()].sort())
+    ok('the last revoke of ' + fn + ' includes PUBLIC', /\bpublic\b/.test(r.from), r.file + ': from ' + r.from.trim());
 }
 for(const name of KNOWN_MISSING)
   ok('KNOWN_MISSING entry ' + name + ' is still called somewhere', called.has(name));
