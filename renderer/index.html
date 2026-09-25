@@ -1634,6 +1634,17 @@ function maskEmail(e){
   return esc(u.slice(0, 2) + '•••@' + d);
 }
 function guestHasProgress(){ return AUTH.anon !== false && P && (((P.inventory||[]).length > 0) || (P.level||1) > 1); }
+/* Sign out: this PC forgets the account; the account itself is untouched and signs back
+   in with Discord. The server revoke is best-effort - on a shared PC the refresh token is
+   the thing worth killing, but being offline must not stop anyone signing out. */
+async function authSignOut(){
+  if(AUTH.token) await authCall('POST', '/auth/v1/logout?scope=local', {}, true);
+  Object.assign(AUTH, { token:null, refresh:null, uid:null, expires:0, anon:undefined,
+                        email:null, name:null, providers:[] });
+  AUTH_NEEDS_SIGNIN = false;
+  try{ localStorage.removeItem('gf_auth'); }catch(e){}
+}
+
 /* ---- account: Discord, in Settings ---------------------------------------------------
    Discord is the only way to secure an account for now. Username + password is built
    and tested (authCreateLogin / authPasswordSignIn) but has no button: it can only be
@@ -1643,26 +1654,28 @@ function accountSectionHtml(){
   if(!HAS_SUPABASE()) return '';
   const btn = (label, mode, primary) =>
     '<button class="btn sm' + (primary ? ' primary' : '') + '" onclick="discordStart(\'' + mode + '\')">' + label + '</button>';
+  const out = '<button class="btn sm" onclick="signOutAsk()">SIGN OUT</button>';
   let warn = true, status, action;
   if(AUTH_NEEDS_SIGNIN){
     status = '<b>SESSION EXPIRED</b><span>Sign in with Discord to restore your locker.</span>';
-    action = btn('SIGN IN WITH DISCORD', 'login', true);
+    action = btn('SIGN IN WITH DISCORD', 'login', true) + out;
   } else if(hasDiscord()){
     warn = false;
     status = '<b>DISCORD CONNECTED</b><span>' + esc(AUTH.name || 'Connected') + ' — your locker follows you to any PC.</span>';
-    action = btn('SWITCH ACCOUNT', 'login', false);
+    action = btn('SWITCH ACCOUNT', 'login', false) + out;
   } else if(AUTH.anon === false){
     // secured some other way (a login made while that option existed): offer Discord too
     status = '<b>ACCOUNT SECURED</b><span>' + (loginUsername() ? 'Login: ' + esc(loginUsername()) : maskEmail(AUTH.email))
       + '. Connect Discord to sign in on other PCs.</span>';
-    action = btn('CONNECT DISCORD', 'link', true);
+    action = btn('CONNECT DISCORD', 'link', true) + out;
   } else {
     status = '<b>GUEST ACCOUNT</b><span>Your parts live on this PC only — reinstalling or switching computers loses them. '
       + 'Connect Discord to keep them, or to sign in to an account you already connected.</span>';
     action = btn('CONNECT DISCORD', 'auto', true);
   }
   return '<div class="eyebrow" style="margin-top:10px">Account</div>'
-    + '<div class="acctrow' + (warn ? ' warn' : '') + '" style="margin-top:6px"><div>' + status + '</div>' + action + '</div>';
+    + '<div class="acctrow' + (warn ? ' warn' : '') + '" style="margin-top:6px"><div>' + status + '</div>'
+    + '<div class="btnrow" style="margin:0;flex-wrap:nowrap">' + action + '</div></div>';
 }
 /* 'auto' is the guest's one button. A guest with nothing to keep just signs in: that
    finds their account if this Discord already has one, or starts one - one trip to the
@@ -1695,6 +1708,50 @@ function discordConflict(){
              : 'you will be signed out of this one. Nothing on either account is merged or lost.')
     + '</p><div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SWITCH TO THAT ACCOUNT</button>'
     + '<button class="btn" onclick="menuSettings()">' + (guest ? 'KEEP PLAYING AS GUEST' : 'STAY ON THIS ACCOUNT') + '</button></div>');
+}
+/* ---- sign out ---------------------------------------------------------------------
+   Always confirmed. And the confirmation does work, not just asks: anything this PC
+   still owes the account - match rewards queued while offline, a loadout saved offline -
+   is sent BEFORE signing out, because afterwards the queue would drain into the new
+   guest. Only if it cannot be delivered does the player get a warning, with a number. */
+async function signOutAsk(){
+  modal('<div class="eyebrow">Account</div><h2>Sign out?</h2><p class="note">Checking for anything not yet saved…</p>');
+  let owed = 0, loadoutOwed = false;
+  try{ await outboxDrain(); }catch(e){}
+  try{ await flushPendingLoadout(); }catch(e){}
+  try{ owed = await outboxCount(); }catch(e){}
+  try{ loadoutOwed = !!(await sGet(LOADOUT_PENDING)); }catch(e){}
+  const who = hasDiscord() ? 'Discord: ' + esc(AUTH.name || 'connected')
+            : loginUsername() ? 'Login: ' + esc(loginUsername()) : 'this account';
+  const items = [];
+  if(owed) items.push(owed + ' match reward' + (owed === 1 ? '' : 's'));
+  if(loadoutOwed) items.push('your latest loadout');
+  const n = owed + (loadoutOwed ? 1 : 0);
+  const risk = n
+    ? '<p class="note" style="margin-top:8px;color:var(--bad,#E8734A)">' + items.join(' and ')
+      + (n === 1 ? ' has' : ' have') + ' not reached the server yet — you may be offline. Signing out now discards '
+      + (n === 1 ? 'it' : 'them') + '.</p>'
+    : '';
+  modal('<div class="eyebrow">Account</div><h2>Sign out?</h2>'
+    + '<p class="note">You are signed in as <b>' + who + '</b>. Your parts, credits and level stay on that account '
+    + 'and come back the moment you sign in again with CONNECT DISCORD. This PC will start over as a new guest.</p>'
+    + risk
+    + '<div class="btnrow"><button class="btn primary" id="sogo" onclick="doSignOut()">' + (risk ? 'SIGN OUT ANYWAY' : 'SIGN OUT') + '</button>'
+    + '<button class="btn" onclick="menuSettings()">CANCEL</button></div>');
+}
+async function doSignOut(){
+  const b = document.getElementById('sogo'); if(b){ b.disabled = true; b.textContent = 'SIGNING OUT…'; }
+  await authSignOut();
+  // nothing of the old account may be left for the new guest to inherit or display
+  try{ await sSet(OUTBOX_KEY, []); }catch(e){}
+  try{ await sSet(LOADOUT_PENDING, null); }catch(e){}
+  try{ await sSet('profile', null); }catch(e){}
+  ACCOUNT = { online: false, uid: null };
+  let fresh = null;
+  try{ fresh = await loadCloudProfile(); }catch(e){ console.error(e); }
+  if(fresh) P = fresh; else await loadProfile();
+  refreshChips(); renderMenu(); menuSettings();
+  toast('SIGNED OUT — THIS PC IS NOW A NEW GUEST');
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'

@@ -36,7 +36,7 @@ const SRC = [
   ...['authStore','authApply','authSave','authAnonymousSignIn','authRefresh','ensureAuth','_ensureAuth',
       'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode',
       'b64url','pkcePair','discordErrText','discordAuth',
-      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn'].map(lift),
+      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut'].map(lift),
   line(/const DISCORD_SCOPES = [^\n]*;/), line(/const LOGIN_DOMAIN = [^\n]*;/), line(/const USERNAME_RE = [^\n]*;/),
   line(/const MIN_PASSWORD = [^\n]*;/), line(/const usernameEmail = [^\n]*;/),
 ].join('\n');
@@ -104,6 +104,12 @@ function fakeAuth(){
                         redirect: u.searchParams.get('redirect_to') });
       return resp(200, { url: 'https://discord.com/oauth2/authorize?client_id=1&state=' + st });
     }
+    if(p === '/auth/v1/logout?scope=local'){
+      const id = who(); if(!id) return resp(401, { msg: 'no session' });
+      for(const [r, uid] of [...S.refresh]) if(uid === id) S.refresh.delete(r);   // revoke this user's refresh tokens
+      S.loggedOut = (S.loggedOut || 0) + 1;
+      return resp(204, null);
+    }
     if(p === '/auth/v1/token?grant_type=password'){
       const x = [...S.users.values()].find(x => x.email === b.email && x.password && x.password === b.password);
       if(!x) return resp(400, { error_code: 'invalid_credentials', msg: 'Invalid login credentials' });
@@ -157,7 +163,8 @@ function client(S, store){
   const ctx = vm.createContext({
     console: { error(){}, log(){} }, JSON, Date, Math, URL, Promise, String, Object, Error, TypeError,
     fetch: (...a) => S.fetch(...a),
-    localStorage: { getItem: k => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, String(v)) },
+    localStorage: { getItem: k => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, String(v)),
+                  removeItem: k => store.delete(k) },
     toast: m => { ctx.__toasts.push(m); }, __toasts: [],
     BACKEND: { supabaseUrl: 'https://proj.supabase.co', supabaseAnonKey: 'anon' },
     HAS_SUPABASE: () => true,
@@ -346,6 +353,29 @@ const expire = c => { const a = JSON.parse(c.store.get('gf_auth')); a.expires = 
     const r = await c.authCreateLogin('jacob', 'hunter2hunter2');
     ok('with Confirm email on, creating a login reports a setup problem instead of pretending',
        !r.ok && r.setup === true && /Confirm email/.test(r.err), r.err);
+  }
+
+  /* ---- 7. sign out ---- */
+  {
+    const S = fakeAuth(); S.discord = 'd700';
+    const c = client(S);
+    const uid = await c.ensureAuth();
+    await c.discordAuth('link');
+    const refreshBefore = JSON.parse(c.store.get('gf_auth')).refresh;
+    await c.authSignOut();
+    ok('sign out tells the server to revoke the session', S.loggedOut === 1);
+    ok('  and this PC forgets the account', !c.store.has('gf_auth') && c.__get().AUTH.uid === null);
+    ok('  and the old refresh token is dead server-side', !S.refresh.has(refreshBefore));
+    const g = await c.ensureAuth();
+    ok('the next launch on that PC is a brand-new guest', g && g !== uid && c.__get().AUTH.anon === true);
+    const back = await c.discordAuth('login');
+    ok('signing back in with Discord returns the SAME account', back.ok && back.uid === uid);
+
+    const off = client(S); await off.ensureAuth(); await off.discordAuth('login');
+    S.mode = 'down';
+    await off.authSignOut();
+    S.mode = 'up';
+    ok('signing out works offline too (the revoke is best-effort)', !off.store.has('gf_auth'));
   }
 
   console.log(fails ? '\naccount: ' + fails + ' failure(s)' : '\naccount: all clear');
