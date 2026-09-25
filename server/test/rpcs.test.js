@@ -22,7 +22,7 @@ const ok = (name, cond, d) => { console.log((cond ? '  PASS  ' : '  FAIL  ') + n
 
 /* Defined only in the live database. Paste the definition into a migration, then
    delete the name from here. See server/AUTH_SETUP.md for the query that dumps it. */
-const KNOWN_MISSING = new Set(['add_progress']);
+const KNOWN_MISSING = new Set([]);   // add_progress: saved in 016
 
 const read = p => fs.readFileSync(p, 'utf8');
 const called = new Map();          // name -> first file that calls it
@@ -81,7 +81,7 @@ for(const name of [...called.keys()].filter(n => !clientCalls.has(n)).sort()){
   const last = new Map();
   for(const p of sqls){
     const txt = read(p).replace(/--[^\n]*/g, '');
-    for(const m of txt.matchAll(/revoke\s+execute\s+on\s+function\s+([a-z_][a-z0-9_]*)\s*(?:\([^)]*\))?\s+from\s+([^;]+);/gi))
+    for(const m of txt.matchAll(/revoke\s+execute\s+on\s+function\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*(?:\([^)]*\))?\s+from\s+([^;]+);/gi))
       last.set(m[1].toLowerCase(), { from: m[2].toLowerCase(), file: path.basename(p) });
   }
   ok('found the revokes this check reads', last.size >= 1, [...last.keys()].join(', '));

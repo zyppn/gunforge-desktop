@@ -22,19 +22,12 @@ any copy of the game can call it directly with its own parameters (free parts, f
 credits, for any player). Run `migrations/015_server_only_rpcs.sql`, then re-run the
 query. The arena server uses the service key and is unaffected.
 
-## 2. Save `add_progress` into the repo
+## 2. Functions that only existed in the live database
 
-It exists only in the live database. Dump it:
-
-```sql
-select pg_get_functiondef(p.oid)
-from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname = 'add_progress';
-```
-
-Paste the output into `migrations/016_add_progress.sql` (as `create or replace function`),
-then remove `add_progress` from `KNOWN_MISSING` in `server/test/rpcs.test.js`. That test
-fails until both are done, in either order.
+Done: `add_progress`, the two `guard_player_self*` triggers and `rls_auto_enable` were
+dumped from production into `migrations/016_live_only_functions.sql`.
+`server/test/rpcs.test.js` now fails if the code calls an RPC that no file in `server/`
+defines, or leaves a server-only one callable by players.
 
 ## 3. Backups
 
