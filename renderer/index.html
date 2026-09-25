@@ -535,7 +535,11 @@ async function _ensureAuth(){
     if(st === 'ok') return AUTH.uid;
     if(st === 'offline') return null;           // keep the account; try again later
     // 'dead': nothing can refresh this session any more
-    if(AUTH.anon === false){ AUTH_NEEDS_SIGNIN = true; return null; }
+    if(AUTH.anon === false){
+      AUTH_NEEDS_SIGNIN = true;
+      try{ toast('SESSION EXPIRED — SIGN IN WITH DISCORD IN SETTINGS'); }catch(e){}
+      return null;
+    }
     // A guest with a dead token is unrecoverable by anyone - there is no identity to
     // prove. Starting a fresh guest is the only option left, but it is no longer silent.
     try{ toast('GUEST SESSION EXPIRED — STARTED A NEW GUEST ACCOUNT'); }catch(e){}
@@ -1482,7 +1486,6 @@ function renderMenu(){
    +'<div class="note" style="margin-top:8px;opacity:.6">K / D counts '
    + LoadoutCore.KD_MODES.map(m => (MODES.find(x=>x.id===m)||{name:m}).name).join(' and ').toLowerCase()
    + ' only. Matches and wins count everywhere.</div>'
-   +accountRowHtml()
    +'<div class="note" style="margin-top:10px;opacity:.55">CLIENT BUILD '+CLIENT_BUILD+'</div>'
    +'<div class="btnrow"><button class="btn sm" onclick="renameOp()">CHANGE CALLSIGN</button>'
    +'<button class="btn sm" onclick="menuSettings()">SETTINGS</button></div>'
@@ -1631,6 +1634,36 @@ function maskEmail(e){
   return esc(u.slice(0, 2) + '•••@' + d);
 }
 function guestHasProgress(){ return AUTH.anon !== false && P && (((P.inventory||[]).length > 0) || (P.level||1) > 1); }
+/* ---- account: Discord, in Settings ---------------------------------------------------
+   Discord is the only way to secure an account for now. Username + password is built
+   and tested (authCreateLogin / authPasswordSignIn) but has no button: it can only be
+   recovered by messaging the developer, and one method is simpler to support while the
+   player base is small. Every screen in this flow returns to Settings, where it started. */
+function accountSectionHtml(){
+  if(!HAS_SUPABASE()) return '';
+  const btn = (label, mode, primary) =>
+    '<button class="btn sm' + (primary ? ' primary' : '') + '" onclick="discordStart(\'' + mode + '\')">' + label + '</button>';
+  let warn = true, status, action;
+  if(AUTH_NEEDS_SIGNIN){
+    status = '<b>SESSION EXPIRED</b><span>Sign in with Discord to restore your locker.</span>';
+    action = btn('SIGN IN WITH DISCORD', 'login', true);
+  } else if(hasDiscord()){
+    warn = false;
+    status = '<b>DISCORD CONNECTED</b><span>' + esc(AUTH.name || 'Connected') + ' — your locker follows you to any PC.</span>';
+    action = btn('SWITCH ACCOUNT', 'login', false);
+  } else if(AUTH.anon === false){
+    // secured some other way (a login made while that option existed): offer Discord too
+    status = '<b>ACCOUNT SECURED</b><span>' + (loginUsername() ? 'Login: ' + esc(loginUsername()) : maskEmail(AUTH.email))
+      + '. Connect Discord to sign in on other PCs.</span>';
+    action = btn('CONNECT DISCORD', 'link', true);
+  } else {
+    status = '<b>GUEST ACCOUNT</b><span>Your parts live on this PC only — reinstalling or switching computers loses them. '
+      + 'Connect Discord to keep them, or to sign in to an account you already connected.</span>';
+    action = btn('CONNECT DISCORD', 'auto', true);
+  }
+  return '<div class="eyebrow" style="margin-top:10px">Account</div>'
+    + '<div class="acctrow' + (warn ? ' warn' : '') + '" style="margin-top:6px"><div>' + status + '</div>' + action + '</div>';
+}
 /* 'auto' is the guest's one button. A guest with nothing to keep just signs in: that
    finds their account if this Discord already has one, or starts one - one trip to the
    browser either way. A guest with progress LINKS, which keeps it. Only if that Discord
@@ -1645,15 +1678,15 @@ async function discordStart(mode){
     if(r.code === 'identity_already_exists') return discordConflict();
     modal('<div class="eyebrow">Account</div><h2>Discord</h2><p class="note" style="color:var(--bad,#E8734A)">' + esc(r.err) + '</p>'
       + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'' + mode + '\')">TRY AGAIN</button>'
-      + '<button class="btn" onclick="closeModal()">CLOSE</button></div>');
+      + '<button class="btn" onclick="menuSettings()">BACK</button></div>');
     return;
   }
-  closeModal();
   toast(mode === 'link' ? 'DISCORD CONNECTED — ACCOUNT SECURED' : 'SIGNED IN' + (r.name ? ' AS ' + String(r.name).toUpperCase() : ''));
   if(mode === 'login'){ try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); } }
   renderMenu();
+  menuSettings();                       // back where they started, now showing CONNECTED
 }
-function discordCancel(){ const n = window.gunforgeNative; if(n && n.oauthCancel) n.oauthCancel(); closeModal(); }
+function discordCancel(){ const n = window.gunforgeNative; if(n && n.oauthCancel) n.oauthCancel(); menuSettings(); }
 function discordConflict(){
   const guest = AUTH.anon !== false;
   modal('<div class="eyebrow">Account</div><h2>That Discord already has an account</h2>'
@@ -1661,86 +1694,7 @@ function discordConflict(){
     + (guest ? 'this PC\'s guest progress (LVL ' + P.level + ', ' + (P.inventory||[]).length + ' parts) stays behind on the guest and will not come with you.'
              : 'you will be signed out of this one. Nothing on either account is merged or lost.')
     + '</p><div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SWITCH TO THAT ACCOUNT</button>'
-    + '<button class="btn" onclick="closeModal()">' + (guest ? 'KEEP PLAYING AS GUEST' : 'STAY ON THIS ACCOUNT') + '</button></div>');
-}
-function accountRowHtml(){
-  if(!HAS_SUPABASE()) return '';
-  if(AUTH_NEEDS_SIGNIN)
-    return '<div class="acctrow warn"><div><b>SESSION EXPIRED</b><span>Sign in to restore your locker.</span></div>'
-      + '<button class="btn sm primary" onclick="openSignInModal()">SIGN IN</button></div>';
-  if(AUTH.anon === false){
-    const ways = [];
-    if(hasDiscord()) ways.push('Discord: ' + esc(AUTH.name || 'connected'));
-    if(loginUsername()) ways.push('Login: ' + esc(loginUsername()));
-    if(!ways.length && AUTH.email) ways.push(maskEmail(AUTH.email));
-    /* One way in is one lost password or one deleted Discord from a lost locker. Offer
-       whichever is missing, so securing twice is a click away. */
-    const add = (!hasDiscord() ? '<button class="btn sm" onclick="discordStart(\'link\')">ADD DISCORD</button>' : '')
-              + (!loginUsername() ? '<button class="btn sm" onclick="openLoginModal()">ADD LOGIN</button>' : '');
-    return '<div class="acctrow"><div><b>ACCOUNT SECURED</b><span>' + ways.join(' · ')
-      + ' — your locker follows you to any PC.</span></div>'
-      + '<div class="btnrow" style="margin:0">' + add
-      + '<button class="btn sm" onclick="openSignInModal()">SWITCH ACCOUNT</button></div></div>';
-  }
-  return '<div class="acctrow warn"><div><b>GUEST ACCOUNT</b><span>Your parts live on this PC only. '
-    + 'Reinstalling or switching computers loses them.</span></div>'
-    + '<div class="btnrow" style="margin:0">'
-    + '<button class="btn sm primary" onclick="discordStart(\'auto\')">CONNECT DISCORD</button>'
-    + '<button class="btn sm primary" onclick="openLoginModal()">CREATE LOGIN</button>'
-    + '<button class="btn sm" onclick="openSignInModal()">SIGN IN</button></div></div>';
-}
-function guestProgressNote(){
-  if(!guestHasProgress()) return '';
-  return '<p class="note" style="margin-top:8px;color:var(--warn,#E8A33D)">This PC\'s guest progress (LVL ' + P.level
-    + ', ' + (P.inventory||[]).length + ' parts) stays on the guest account and will not come with you. '
-    + 'To keep it, use CONNECT DISCORD or CREATE LOGIN instead.</p>';
-}
-const acctErr = msg => '<p class="note" id="accterr" style="margin-top:8px;color:var(--bad,#E8734A);min-height:1em">' + (msg ? esc(msg) : '') + '</p>';
-function acctBusy(id){ const b = document.getElementById(id); if(b){ b.disabled = true; b.textContent = 'WORKING…'; } }
-/* Create a login on THIS account. The no-recovery warning is the honest price of a login
-   with no email behind it, and it is shown before they commit, not after they forget. */
-function openLoginModal(msg, user){
-  modal('<div class="eyebrow">Account</div><h2>Create a login</h2>'
-    + '<p class="note">Pick a username and password for this account. Your parts, credits and level stay exactly where they are, '
-    + 'and you can sign in with this login on any PC.</p>'
-    + '<input id="lgu" maxlength="16" autocomplete="username" placeholder="username" value="' + esc(user || '') + '">'
-    + '<input id="lgp" type="password" autocomplete="new-password" placeholder="password (8+ characters)">'
-    + '<input id="lgp2" type="password" autocomplete="new-password" placeholder="password again" onkeydown="if(event.key===\'Enter\')doCreateLogin()">'
-    + '<p class="note" style="margin-top:8px;color:var(--warn,#E8A33D)">There is no way to recover this if you forget the password. '
-    + (hasDiscord() ? '' : 'Connecting Discord as well gives you a second way in.') + '</p>'
-    + '<div class="btnrow"><button class="btn primary" id="lggo" onclick="doCreateLogin()">CREATE LOGIN</button>'
-    + '<button class="btn" onclick="closeModal()">CANCEL</button></div>' + acctErr(msg));
-  setTimeout(() => { const el = document.getElementById('lgu'); if(el) el.focus(); }, 30);
-}
-async function doCreateLogin(){
-  const u = ($('#lgu').value || '').trim(), p1 = $('#lgp').value, p2 = $('#lgp2').value;
-  if(p1 !== p2) return openLoginModal('The two passwords do not match.', u);
-  acctBusy('lggo');
-  const r = await authCreateLogin(u, p1);
-  if(!r.ok) return openLoginModal(r.err, u);
-  closeModal(); toast('LOGIN CREATED — ACCOUNT SECURED'); renderMenu();
-}
-/* Every way back in, on one screen. */
-function openSignInModal(msg, user){
-  modal('<div class="eyebrow">Account</div><h2>Sign in</h2>'
-    + '<p class="note">Sign in to an account you already secured.</p>'
-    + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SIGN IN WITH DISCORD</button></div>'
-    + '<div class="eyebrow" style="margin-top:14px">or with your login</div>'
-    + '<input id="siu" maxlength="16" autocomplete="username" placeholder="username" value="' + esc(user || '') + '">'
-    + '<input id="sip" type="password" autocomplete="current-password" placeholder="password" onkeydown="if(event.key===\'Enter\')doPasswordSignIn()">'
-    + guestProgressNote()
-    + '<div class="btnrow"><button class="btn primary" id="sigo" onclick="doPasswordSignIn()">SIGN IN</button>'
-    + '<button class="btn" onclick="closeModal()">CANCEL</button></div>' + acctErr(msg));
-  setTimeout(() => { const el = document.getElementById(user ? 'sip' : 'siu'); if(el) el.focus(); }, 30);
-}
-async function doPasswordSignIn(){
-  const u = ($('#siu').value || '').trim(), p = $('#sip').value;
-  acctBusy('sigo');
-  const r = await authPasswordSignIn(u, p);
-  if(!r.ok) return openSignInModal(r.err, u);
-  closeModal(); toast('SIGNED IN AS ' + r.username.toUpperCase());
-  try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
-  renderMenu();
+    + '<button class="btn" onclick="menuSettings()">' + (guest ? 'KEEP PLAYING AS GUEST' : 'STAY ON THIS ACCOUNT') + '</button></div>');
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'
@@ -1755,7 +1709,8 @@ async function doRename(){
 }
 function menuSettings(){
   modal('<div class="eyebrow">Settings</div><h2>Settings</h2>'
-   +'<div class="eyebrow" style="margin-top:10px">Controls</div>'
+   +accountSectionHtml()
+   +'<div class="eyebrow" style="margin-top:14px">Controls</div>'
    +'<div id="ctlhost">'+controlsHtml()+'</div>'
    +'<div class="sldrow" style="margin-top:12px"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
    +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.volume*100)+'" oninput="setVolPct(this.value, \'mvolval\')"></div>'

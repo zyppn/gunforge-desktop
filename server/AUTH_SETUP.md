@@ -44,7 +44,7 @@ Test a restore once, into a scratch project. A backup nobody has restored is a h
 
 ### Discord
 
-Guests click CONNECT DISCORD on the main menu. That attaches Discord to the account
+Guests click CONNECT DISCORD in Settings → Account. That attaches Discord to the account
 they already have (the uid does not change, so the locker stays), and on any other PC
 signing in with Discord lands on the same account. Discord's page opens in the
 player's own browser; the result comes back to the game through a one-shot listener on
@@ -75,10 +75,12 @@ player's own browser; the result comes back to the game through a one-shot liste
 `renderer/test/account.test.js` checks the flow against these endpoints and
 `renderer/test/oauth.test.js` checks the listener on a real socket.
 
-### Username + password
+### Username + password (built, not on the menu)
 
-The other button on the guest row. A player can have this, Discord, or both on one
-account; the menu offers whichever is missing.
+Switched off in the UI for now - Discord is the only way to secure an account. The
+client functions (`authCreateLogin`, `authPasswordSignIn`) and their tests are kept, so
+turning it back on is a button in `accountSectionHtml()`. The settings below are
+already in place and harmless while it is off.
 
 1. **Confirm email OFF.** Authentication → Sign In / Providers → Email → turn off
    "Confirm email". Usernames are stored as hidden addresses (`name@players.voxabase.com`,
