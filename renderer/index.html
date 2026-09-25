@@ -480,6 +480,7 @@ function authApply(session){
     AUTH.name  = md.full_name || md.name || md.user_name || (md.custom_claims && md.custom_claims.global_name) || null;
   }
   AUTH.expires = Date.now() + ((session.expires_in||3600) * 1000) - 60000; // refresh 1min early
+  authSetSignedOut(false);            // holding a session means signed in, whichever way it came
   authSave();
 }
 function authSave(){ try{ localStorage.setItem('gf_auth', JSON.stringify({token:AUTH.token, refresh:AUTH.refresh,
@@ -517,6 +518,14 @@ async function authRefresh(){
 /* Set when a SECURED account's session can no longer be refreshed. The menu turns this
    into a sign-in prompt instead of quietly handing the player an empty guest locker. */
 let AUTH_NEEDS_SIGNIN = false;
+/* Signed out on purpose (SIGN OUT, or another device took the account). While set, this
+   PC has no account at all and ensureAuth will NOT mint a guest - one is created only
+   when the player chooses PLAY AS GUEST, or signs in. Every sign-out used to create a
+   guest on the spot, and most were never played: rows that only accumulate. Stored, so
+   quitting while signed out does not quietly make one at the next launch either. */
+const SIGNED_OUT_KEY = 'gf_signed_out';
+function authSignedOut(){ try{ return localStorage.getItem(SIGNED_OUT_KEY) === '1'; }catch(e){ return false; } }
+function authSetSignedOut(on){ try{ on ? localStorage.setItem(SIGNED_OUT_KEY, '1') : localStorage.removeItem(SIGNED_OUT_KEY); }catch(e){} }
 let _authInflight = null;
 // ensure a valid session before any authed call; returns uid or null.
 // Single-flight: the outbox drain and the profile load both call this at boot, and two
@@ -527,6 +536,7 @@ function ensureAuth(){
 }
 async function _ensureAuth(){
   if(!HAS_SUPABASE()) return null;
+  if(authSignedOut()) return null;
   const saved = authStore();
   if(saved && saved.token){ Object.assign(AUTH, saved); }
   if(AUTH.token && Date.now() < AUTH.expires) return AUTH.uid;
@@ -1646,7 +1656,7 @@ function maskEmail(e){
   if(!d) return esc(e || '');
   return esc(u.slice(0, 2) + '•••@' + d);
 }
-function guestHasProgress(){ return AUTH.anon !== false && P && (((P.inventory||[]).length > 0) || (P.level||1) > 1); }
+function guestHasProgress(){ return !authSignedOut() && AUTH.anon !== false && P && (((P.inventory||[]).length > 0) || (P.level||1) > 1); }
 /* Sign out: this PC forgets the account; the account itself is untouched and signs back
    in with Discord. The server revoke is best-effort - on a shared PC the refresh token is
    the thing worth killing, but being offline must not stop anyone signing out. */
@@ -1725,7 +1735,11 @@ function accountSectionHtml(){
     '<button class="btn sm' + (primary ? ' primary' : '') + '" onclick="discordStart(\'' + mode + '\')">' + label + '</button>';
   const out = '<button class="btn sm" onclick="signOutAsk()">SIGN OUT</button>';
   let warn = true, status, action;
-  if(AUTH_NEEDS_SIGNIN){
+  if(authSignedOut()){
+    status = '<b>SIGNED OUT</b><span>Sign in with Discord, or play as a guest. Nothing you do while signed out is saved to an account.</span>';
+    action = btn('SIGN IN WITH DISCORD', 'login', true)
+           + '<button class="btn sm" onclick="playAsGuest()">PLAY AS GUEST</button>';
+  } else if(AUTH_NEEDS_SIGNIN){
     status = '<b>SESSION EXPIRED</b><span>Sign in with Discord to restore your locker.</span>';
     action = btn('SIGN IN WITH DISCORD', 'login', true) + out;
   } else if(hasDiscord()){
@@ -1767,6 +1781,7 @@ async function discordStart(mode){
   if(mode === 'login'){
     SESSION_ID = newSessionId();
     await sessionClaim();                 // signing in here signs any other device out
+    try{ await outboxDrain(); }catch(e){}
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
   }
   renderMenu();
@@ -1807,32 +1822,43 @@ async function signOutAsk(){
     : '';
   modal('<div class="eyebrow">Account</div><h2>Sign out?</h2>'
     + '<p class="note">You are signed in as <b>' + who + '</b>. Your parts, credits and level stay on that account '
-    + 'and come back the moment you sign in again with CONNECT DISCORD. This PC will start over as a new guest.</p>'
+    + 'and come back the moment you sign in again. This PC will be signed out - from Settings you can sign back in, or play as a guest.</p>'
     + risk
     + '<div class="btnrow"><button class="btn primary" id="sogo" onclick="doSignOut()">' + (risk ? 'SIGN OUT ANYWAY' : 'SIGN OUT') + '</button>'
     + '<button class="btn" onclick="menuSettings()">CANCEL</button></div>');
 }
 async function doSignOut(){
   const b = document.getElementById('sogo'); if(b){ b.disabled = true; b.textContent = 'SIGNING OUT…'; }
-  await becomeGuest();
+  await forgetAccount();
   renderMenu(); menuSettings();
-  toast('SIGNED OUT — THIS PC IS NOW A NEW GUEST');
+  toast('SIGNED OUT');
 }
-/* Forget this PC's account and start it over as a new guest - shared by SIGN OUT and
-   by being signed out from another device. Nothing of the old account may be left for
-   the guest to inherit (queued rewards would drain into it) or to display. */
-async function becomeGuest(){
+/* Forget this PC's account - shared by SIGN OUT and by being signed out from another
+   device. It does NOT create a guest: the PC is signed out, on a local-only profile,
+   until the player picks PLAY AS GUEST or signs in. Nothing of the old account may be
+   left behind to inherit (queued rewards would drain into the next account) or display. */
+async function forgetAccount(){
   await authSignOut();
+  authSetSignedOut(true);
   try{ await sSet(OUTBOX_KEY, []); }catch(e){}
   try{ await sSet(LOADOUT_PENDING, null); }catch(e){}
   try{ await sSet('profile', null); }catch(e){}
   ACCOUNT = { online: false, uid: null };
-  SESSION_ID = newSessionId();                 // a new account is a new session
-  let fresh = null;
-  try{ fresh = await loadCloudProfile(); }catch(e){ console.error(e); }
-  if(fresh) P = fresh; else await loadProfile();
-  await sessionClaim();
+  SESSION_ID = newSessionId();
+  await loadProfile();                          // a fresh local profile, nothing on the server
   refreshChips();
+}
+/* The only way a signed-out PC gets a guest account: the player asked for one. */
+async function playAsGuest(){
+  authSetSignedOut(false);
+  modal('<div class="eyebrow">Account</div><h2>Starting a guest account…</h2>');
+  if(await ensureAuth()){
+    await sessionClaim();
+    try{ await outboxDrain(); }catch(e){}          // matches played while signed out
+    try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; }catch(e){ console.error(e); }
+  }
+  refreshChips(); renderMenu(); closeModal();
+  toast(ACCOUNT.online ? 'PLAYING AS GUEST — CONNECT DISCORD IN SETTINGS TO KEEP YOUR PARTS' : 'COULD NOT REACH THE ACCOUNT SERVER');
 }
 /* Another device signed in to this account. Newest wins, even on the menu: end any
    match, sign this PC out, and say why - with the button that takes it back. */
@@ -1841,14 +1867,15 @@ async function sessionSuperseded(){
   SESSION_LOST = true;
   const wasName = hasDiscord() ? (AUTH.name || 'your Discord account') : 'this account';
   if(G && G.running){ try{ abandonMatch(); }catch(e){} }
-  await becomeGuest();
+  await forgetAccount();
   renderMenu();
   modal('<div class="eyebrow">Account</div><h2>Signed out</h2>'
     + '<p class="note"><b>' + esc(wasName) + '</b> was signed in on another device, so this one was signed out. '
     + 'An account can only be played in one place at a time. Your parts are safe on the account.</p>'
     + '<p class="note" style="margin-top:8px">Signing back in here will sign the other device out.</p>'
     + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SIGN BACK IN WITH DISCORD</button>'
-    + '<button class="btn" onclick="closeModal()">PLAY AS GUEST</button></div>');
+    + '<button class="btn" onclick="playAsGuest()">PLAY AS GUEST</button>'
+    + '<button class="btn" onclick="closeModal()">NOT NOW</button></div>');
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'

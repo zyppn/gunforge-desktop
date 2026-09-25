@@ -124,7 +124,28 @@ ignoring the sign-out.
 Testing two copies on one Mac with `npm start -- --multi` now needs two different
 accounts: the same account in both windows signs one of them out, by design.
 
-## 6. Moving to Steam later
+## 6. Guest accounts that were never played
+
+Signing out (or being signed out by another device) no longer creates a guest; the PC
+stays signed out until the player picks PLAY AS GUEST or signs in. Fresh installs still
+start as a guest, and most of those are opened once and never again, so a nightly job
+deletes guests with nothing in them.
+
+1. **Run `migrations/020_cleanup_empty_guests.sql`.** If it stops at `create extension
+   pg_cron`, enable **pg_cron** under Database → Extensions and run the file again.
+2. **Check what it would delete first** - the function defaults to a dry run:
+   ```sql
+   select cleanup_empty_guests(30);          -- a count, nothing deleted
+   ```
+   The schedule itself runs `cleanup_empty_guests(30, false)` nightly at 09:23 UTC.
+
+It only deletes a guest that is still anonymous, has not signed in for 30 days, and has
+**nothing**: level 1, 0 XP, no more than the 500 starting credits, every stat zero, and
+no parts, listings, store purchases or claimed matches. One XP point keeps it.
+`server/test/cleanup-guests.test.js` runs it on real Postgres (PGlite) against seventeen
+accounts; it skips when PGlite is not installed (`cd server && npm i -D @electric-sql/pglite`).
+
+## 7. Moving to Steam later
 
 Yes, this carries over. Accounts are keyed by the Supabase user id
 (`players.auth_uid`), not by how someone signs in. Discord is one identity on that user,

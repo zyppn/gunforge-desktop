@@ -36,7 +36,8 @@ const SRC = [
   ...['authStore','authApply','authSave','authAnonymousSignIn','authRefresh','ensureAuth','_ensureAuth',
       'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode',
       'b64url','pkcePair','discordErrText','discordAuth',
-      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut','sessionClaim','sessionCheck'].map(lift),
+      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut','sessionClaim','sessionCheck','authSignedOut','authSetSignedOut'].map(lift),
+  line(/const SIGNED_OUT_KEY = [^\n]*;/),
   line(/const newSessionId = [\s\S]*?join\(''\)\);/), line(/let SESSION_ID = [^\n]*;/), line(/let SESSION_LOST = [^\n]*;/),
   line(/const DISCORD_SCOPES = [^\n]*;/), line(/const LOGIN_DOMAIN = [^\n]*;/), line(/const USERNAME_RE = [^\n]*;/),
   line(/const MIN_PASSWORD = [^\n]*;/), line(/const usernameEmail = [^\n]*;/),
@@ -378,6 +379,24 @@ const expire = c => { const a = JSON.parse(c.store.get('gf_auth')); a.expires = 
     await off.authSignOut();
     S.mode = 'up';
     ok('signing out works offline too (the revoke is best-effort)', !off.store.has('gf_auth'));
+  }
+
+  /* ---- 7b. a signed-out PC mints no guest until asked ---- */
+  {
+    const S = fakeAuth(); S.discord = 'd750';
+    const c = client(S);
+    const uid = await c.ensureAuth(); await c.discordAuth('link');
+    await c.authSignOut(); c.authSetSignedOut(true);            // what forgetAccount does
+    const signups = () => S.calls.filter(x => x === 'POST /auth/v1/signup').length;
+    const before = signups();
+    ok('signed out: ensureAuth creates NO guest', await c.ensureAuth() === null && signups() === before);
+    const c2 = client(S, c.store);                              // quit and relaunch while signed out
+    ok('  not even after a relaunch', await c2.ensureAuth() === null && signups() === before);
+    const back = await c2.discordAuth('login');
+    ok('signing in clears the signed-out state and lands on the same account', back.ok && back.uid === uid && !c2.authSignedOut());
+    c2.authSetSignedOut(true); await c2.authSignOut(); c2.authSetSignedOut(false);   // PLAY AS GUEST
+    const g = await c2.ensureAuth();
+    ok('choosing PLAY AS GUEST creates exactly one guest', g && g !== uid && signups() === before + 1);
   }
 
   /* ---- 8. one active session: the client side ---- */
