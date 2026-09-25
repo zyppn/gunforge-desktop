@@ -36,6 +36,17 @@
   .screen{display:none}
   .screen.on{display:block}
 
+  /* ---------- signed-out gate: no account, so nothing but the way in ---------- */
+  body.signedout .topbar{display:none}
+  #signin.on{display:flex;min-height:calc(100vh - 80px);align-items:center;justify-content:center}
+  .gate{text-align:center;max-width:460px;padding:0 16px}
+  .gate .logo{font-size:64px;letter-spacing:6px;line-height:1}
+  .gate .logo span{font-size:22px;color:var(--dim);letter-spacing:3px;vertical-align:top;margin-left:6px}
+  .gate .tag{color:var(--dim);font-size:12px;letter-spacing:3px;margin-top:10px}
+  .gate .gbtns{display:flex;flex-direction:column;gap:10px;margin:40px auto 0;max-width:320px}
+  .gate .gbtns .btn{width:100%;padding:13px 16px}
+  .gate .note{margin-top:22px}
+
   h2{font-family:var(--disp);font-size:18px;letter-spacing:2px;text-transform:uppercase;color:#EDF1F5;margin-bottom:4px}
   .eyebrow{font-size:11px;letter-spacing:2px;color:var(--brass);text-transform:uppercase;margin-bottom:2px}
   .note{color:var(--dim);font-size:12px;line-height:1.5}
@@ -359,6 +370,7 @@
 
   <div id="boot" class="screen on"><div class="panel">ESTABLISHING UPLINK... LOADING OPERATOR PROFILE...</div></div>
 
+  <div id="signin" class="screen"></div>
   <div id="menu" class="screen"></div>
   <div id="loadout" class="screen"></div>
   <div id="inventory" class="screen"></div>
@@ -526,6 +538,29 @@ let AUTH_NEEDS_SIGNIN = false;
 const SIGNED_OUT_KEY = 'gf_signed_out';
 function authSignedOut(){ try{ return localStorage.getItem(SIGNED_OUT_KEY) === '1'; }catch(e){ return false; } }
 function authSetSignedOut(on){ try{ on ? localStorage.setItem(SIGNED_OUT_KEY, '1') : localStorage.removeItem(SIGNED_OUT_KEY); }catch(e){} }
+/* This PC's guest, parked. When a guest switches to a Discord account, the guest's
+   session is set aside here instead of being thrown away, and PLAY AS GUEST picks it
+   back up - so this PC keeps ONE guest, however many times someone signs in and out,
+   and whatever that guest earned is still there. The token is single-use: taken out of
+   storage before it is spent, because Supabase rotates refresh tokens and replaying an
+   old one would revoke the guest's whole session family. */
+const GUEST_KEY = 'gf_guest';
+function authParkGuest(){
+  if(AUTH.anon === false || !AUTH.refresh) return;
+  try{ localStorage.setItem(GUEST_KEY, JSON.stringify({ refresh: AUTH.refresh, uid: AUTH.uid })); }catch(e){}
+}
+async function authResumeGuest(){
+  let g = null;
+  try{ g = JSON.parse(localStorage.getItem(GUEST_KEY) || 'null'); localStorage.removeItem(GUEST_KEY); }catch(e){}
+  if(!g || !g.refresh) return null;
+  AUTH.refresh = g.refresh;
+  const st = await authRefresh();
+  if(st === 'ok') return AUTH.uid;
+  AUTH.refresh = null;
+  // unreachable: keep it for next time. 'dead': it can never come back; a new guest it is.
+  if(st === 'offline'){ try{ localStorage.setItem(GUEST_KEY, JSON.stringify(g)); }catch(e){} }
+  return null;
+}
 let _authInflight = null;
 // ensure a valid session before any authed call; returns uid or null.
 // Single-flight: the outbox drain and the profile load both call this at boot, and two
@@ -1478,7 +1513,24 @@ async function storeBuy(idx){
   renderStore();
 }
 
+/* Signed out: no menu, no chips, no operator - just the way in. Every path back to the
+   menu goes through renderMenu, so this one check keeps the whole game behind it. */
+function renderSignin(){
+  document.body.classList.add('signedout');
+  $('#signin').innerHTML = '<div class="gate">'
+    + '<div class="logo">GUN<b>FORGE</b><span>3D</span></div>'
+    + '<div class="tag">ARENA OPERATIONS TERMINAL</div>'
+    + '<div class="gbtns">'
+    + '<button class="btn primary" onclick="discordStart(\'login\')">SIGN IN WITH DISCORD</button>'
+    + '<button class="btn" onclick="playAsGuest()">PLAY AS GUEST</button>'
+    + '</div>'
+    + '<div class="note">New here? Either works. A guest can connect Discord later and keep everything.</div>'
+    + '</div>';
+  show('signin');
+}
 function renderMenu(){
+  if(authSignedOut()){ renderSignin(); return; }
+  document.body.classList.remove('signedout');
   const need = xpNeeded(P.level), pct = Math.min(1, P.xp/need);
   const nextUnlock = WEAPONS.filter(w=>w.unlock>P.level).sort((a,b)=>a.unlock-b.unlock)[0];
   $('#menu').innerHTML =
@@ -1576,6 +1628,7 @@ async function discordAuth(mode){
   if(!cb || !cb.code) return { ok:false, err:discordErrText(cb || {}), code:(cb && cb.error_code) || '' };
   const tok = await authCall('POST', '/auth/v1/token?grant_type=pkce', { auth_code: cb.code, code_verifier: verifier });
   if(!tok.ok || !tok.data || !tok.data.access_token) return { ok:false, err:discordErrText(tok) };
+  if(mode !== 'link') authParkGuest();          // a guest switching away is set aside, not lost
   authApply(tok.data);
   AUTH_NEEDS_SIGNIN = false;
   /* The uid MUST survive a link - that is the whole guarantee. If it ever moved, the
@@ -1643,6 +1696,7 @@ async function authPasswordSignIn(username, password){
   if(!u || !password) return { ok:false, err:'Enter your username and password.' };
   const res = await authCall('POST', '/auth/v1/token?grant_type=password', { email: usernameEmail(u), password });
   if(!res.ok || !res.data || !res.data.access_token) return { ok:false, err:loginErrText(res) };
+  authParkGuest();
   authApply(res.data);
   AUTH_NEEDS_SIGNIN = false;
   return { ok:true, uid:AUTH.uid, username:u };
@@ -1766,6 +1820,8 @@ function accountSectionHtml(){
    already belongs to another account do they get asked which one to keep. */
 async function discordStart(mode){
   if(mode === 'auto') mode = guestHasProgress() ? 'link' : 'login';
+  const fromGate = authSignedOut();
+  const back = fromGate ? 'closeModal()' : 'menuSettings()';
   modal('<div class="eyebrow">Account</div><h2>Continue in your browser</h2>'
     + '<p class="note">A Discord page has opened in your browser. Approve it there and you will be brought back here.</p>'
     + '<div class="btnrow"><button class="btn" onclick="discordCancel()">CANCEL</button></div>');
@@ -1774,7 +1830,7 @@ async function discordStart(mode){
     if(r.code === 'identity_already_exists') return discordConflict();
     modal('<div class="eyebrow">Account</div><h2>Discord</h2><p class="note" style="color:var(--bad,#E8734A)">' + esc(r.err) + '</p>'
       + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'' + mode + '\')">TRY AGAIN</button>'
-      + '<button class="btn" onclick="menuSettings()">BACK</button></div>');
+      + '<button class="btn" onclick="' + back + '">BACK</button></div>');
     return;
   }
   toast(mode === 'link' ? 'DISCORD CONNECTED — ACCOUNT SECURED' : 'SIGNED IN' + (r.name ? ' AS ' + String(r.name).toUpperCase() : ''));
@@ -1785,14 +1841,14 @@ async function discordStart(mode){
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
   }
   renderMenu();
-  menuSettings();                       // back where they started, now showing CONNECTED
+  if(fromGate) closeModal(); else menuSettings();   // back where they started, now signed in
 }
-function discordCancel(){ const n = window.gunforgeNative; if(n && n.oauthCancel) n.oauthCancel(); menuSettings(); }
+function discordCancel(){ const n = window.gunforgeNative; if(n && n.oauthCancel) n.oauthCancel(); authSignedOut() ? closeModal() : menuSettings(); }
 function discordConflict(){
   const guest = AUTH.anon !== false;
   modal('<div class="eyebrow">Account</div><h2>That Discord already has an account</h2>'
     + '<p class="note">It is linked to a different GUNFORGE account. You can switch to that one, but '
-    + (guest ? 'this PC\'s guest progress (LVL ' + P.level + ', ' + (P.inventory||[]).length + ' parts) stays behind on the guest and will not come with you.'
+    + (guest ? 'this PC\'s guest progress (LVL ' + P.level + ', ' + (P.inventory||[]).length + ' parts) will not come with you. It stays on the guest: sign out and choose PLAY AS GUEST on this PC to pick it back up.'
              : 'you will be signed out of this one. Nothing on either account is merged or lost.')
     + '</p><div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SWITCH TO THAT ACCOUNT</button>'
     + '<button class="btn" onclick="menuSettings()">' + (guest ? 'KEEP PLAYING AS GUEST' : 'STAY ON THIS ACCOUNT') + '</button></div>');
@@ -1822,7 +1878,7 @@ async function signOutAsk(){
     : '';
   modal('<div class="eyebrow">Account</div><h2>Sign out?</h2>'
     + '<p class="note">You are signed in as <b>' + who + '</b>. Your parts, credits and level stay on that account '
-    + 'and come back the moment you sign in again. This PC will be signed out - from Settings you can sign back in, or play as a guest.</p>'
+    + 'and come back the moment you sign in again. This PC goes back to the sign-in screen, where you can sign in again or play as a guest.</p>'
     + risk
     + '<div class="btnrow"><button class="btn primary" id="sogo" onclick="doSignOut()">' + (risk ? 'SIGN OUT ANYWAY' : 'SIGN OUT') + '</button>'
     + '<button class="btn" onclick="menuSettings()">CANCEL</button></div>');
@@ -1830,12 +1886,12 @@ async function signOutAsk(){
 async function doSignOut(){
   const b = document.getElementById('sogo'); if(b){ b.disabled = true; b.textContent = 'SIGNING OUT…'; }
   await forgetAccount();
-  renderMenu(); menuSettings();
+  closeModal(); renderMenu();           // the sign-in screen
   toast('SIGNED OUT');
 }
 /* Forget this PC's account - shared by SIGN OUT and by being signed out from another
-   device. It does NOT create a guest: the PC is signed out, on a local-only profile,
-   until the player picks PLAY AS GUEST or signs in. Nothing of the old account may be
+   device. It does NOT create a guest: the PC is signed out - the sign-in screen, and
+   nothing else - until the player picks PLAY AS GUEST or signs in. Nothing of the old account may be
    left behind to inherit (queued rewards would drain into the next account) or display. */
 async function forgetAccount(){
   await authSignOut();
@@ -1852,13 +1908,23 @@ async function forgetAccount(){
 async function playAsGuest(){
   authSetSignedOut(false);
   modal('<div class="eyebrow">Account</div><h2>Starting a guest account…</h2>');
-  if(await ensureAuth()){
+  const resumed = await authResumeGuest();       // this PC's guest, if it has one
+  if(resumed || await ensureAuth()){
     await sessionClaim();
     try{ await outboxDrain(); }catch(e){}          // matches played while signed out
     try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; }catch(e){ console.error(e); }
   }
+  if(!ACCOUNT.online){
+    // no account was made - back to the sign-in screen rather than an offline stand-in
+    authSetSignedOut(true); renderMenu();
+    modal('<div class="eyebrow">Account</div><h2>Could not connect</h2>'
+      + '<p class="note">The account server could not be reached. Check your connection and try again.</p>'
+      + '<div class="btnrow"><button class="btn primary" onclick="playAsGuest()">TRY AGAIN</button>'
+      + '<button class="btn" onclick="closeModal()">BACK</button></div>');
+    return;
+  }
   refreshChips(); renderMenu(); closeModal();
-  toast(ACCOUNT.online ? 'PLAYING AS GUEST — CONNECT DISCORD IN SETTINGS TO KEEP YOUR PARTS' : 'COULD NOT REACH THE ACCOUNT SERVER');
+  toast(resumed ? 'WELCOME BACK — PLAYING AS THIS PC\'S GUEST' : 'PLAYING AS GUEST — CONNECT DISCORD IN SETTINGS TO KEEP YOUR PARTS');
 }
 /* Another device signed in to this account. Newest wins, even on the menu: end any
    match, sign this PC out, and say why - with the button that takes it back. */
@@ -1875,7 +1941,7 @@ async function sessionSuperseded(){
     + '<p class="note" style="margin-top:8px">Signing back in here will sign the other device out.</p>'
     + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SIGN BACK IN WITH DISCORD</button>'
     + '<button class="btn" onclick="playAsGuest()">PLAY AS GUEST</button>'
-    + '<button class="btn" onclick="closeModal()">NOT NOW</button></div>');
+    + '<button class="btn" onclick="closeModal()">OK</button></div>');
 }
 function renameOp(){
   modal('<div class="eyebrow">Callsign</div><h2>Change callsign</h2>'

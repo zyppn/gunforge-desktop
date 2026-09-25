@@ -36,7 +36,8 @@ const SRC = [
   ...['authStore','authApply','authSave','authAnonymousSignIn','authRefresh','ensureAuth','_ensureAuth',
       'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode',
       'b64url','pkcePair','discordErrText','discordAuth',
-      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut','sessionClaim','sessionCheck','authSignedOut','authSetSignedOut'].map(lift),
+      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn','authSignOut','sessionClaim','sessionCheck','authSignedOut','authSetSignedOut','authParkGuest','authResumeGuest'].map(lift),
+  line(/const GUEST_KEY = [^\n]*;/),
   line(/const SIGNED_OUT_KEY = [^\n]*;/),
   line(/const newSessionId = [\s\S]*?join\(''\)\);/), line(/let SESSION_ID = [^\n]*;/), line(/let SESSION_LOST = [^\n]*;/),
   line(/const DISCORD_SCOPES = [^\n]*;/), line(/const LOGIN_DOMAIN = [^\n]*;/), line(/const USERNAME_RE = [^\n]*;/),
@@ -397,6 +398,35 @@ const expire = c => { const a = JSON.parse(c.store.get('gf_auth')); a.expires = 
     c2.authSetSignedOut(true); await c2.authSignOut(); c2.authSetSignedOut(false);   // PLAY AS GUEST
     const g = await c2.ensureAuth();
     ok('choosing PLAY AS GUEST creates exactly one guest', g && g !== uid && signups() === before + 1);
+  }
+
+  /* ---- 7c. one guest per PC, however often people sign in and out ---- */
+  {
+    const S = fakeAuth(); S.discord = 'd760';
+    const c = client(S);
+    const signups = () => S.calls.filter(x => x === 'POST /auth/v1/signup').length;
+    const guest = await c.ensureAuth();                                   // fresh install: a guest
+    ok('switching a guest to Discord parks the guest', (await c.discordAuth('login')).ok && c.store.has('gf_guest'));
+    const n = signups();
+    for(let round = 1; round <= 3; round++){
+      await c.authSignOut(); c.authSetSignedOut(true);                    // SIGN OUT
+      c.authSetSignedOut(false);                                          // PLAY AS GUEST
+      const g = await c.authResumeGuest();
+      ok('  round ' + round + ': PLAY AS GUEST gets the SAME guest back, no new account', g === guest && signups() === n && c.__get().AUTH.anon === true);
+      ok('  round ' + round + ': the parked token is single-use', !c.store.has('gf_guest'));
+      await c.discordAuth('login');                                       // and back to Discord
+    }
+    await c.authSignOut(); c.authSetSignedOut(true);
+    S.refresh.clear();                                                    // the parked token died server-side
+    c.authSetSignedOut(false);
+    ok('a dead parked guest is dropped, not retried', await c.authResumeGuest() === null && !c.store.has('gf_guest'));
+    const fresh = await c.ensureAuth();
+    ok('  and only then is a new guest made', fresh && fresh !== guest && signups() === n + 1);
+    const S2 = fakeAuth(), c3 = client(S2);
+    await c3.ensureAuth(); await c3.discordAuth('login'); await c3.authSignOut();
+    S2.mode = 'down';
+    ok('server unreachable: the parked guest is kept for next time', await c3.authResumeGuest() === null && c3.store.has('gf_guest'));
+    S2.mode = 'up';
   }
 
   /* ---- 8. one active session: the client side ---- */
