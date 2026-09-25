@@ -47,7 +47,9 @@ connection is IPv6-only and the Oracle box may not route IPv6).
 
 Test a restore once, into a scratch project. A backup nobody has restored is a hope.
 
-## 4. Discord sign-in
+## 4. Sign-in: Discord and username + password
+
+### Discord
 
 Guests click CONNECT DISCORD on the main menu. That attaches Discord to the account
 they already have (the uid does not change, so the locker stays), and on any other PC
@@ -80,13 +82,33 @@ player's own browser; the result comes back to the game through a one-shot liste
 `renderer/test/account.test.js` checks the flow against these endpoints and
 `renderer/test/oauth.test.js` checks the listener on a real socket.
 
+### Username + password
+
+The other button on the guest row. A player can have this, Discord, or both on one
+account; the menu offers whichever is missing.
+
+1. **Confirm email OFF.** Authentication → Sign In / Providers → Email → turn off
+   "Confirm email". Usernames are stored as hidden addresses (`name@players.voxabase.com`,
+   see `LOGIN_DOMAIN` in the client) that no mail is ever sent to. With confirmation on,
+   a new login waits for an email nobody will read and never works; the game detects this
+   and says it is a setup problem.
+2. Same page: **Minimum password length** 8, to match what the game asks for.
+3. **Test both directions on one account**, because this is the one behaviour the
+   automated test can only model: create a login on a guest, add Discord, then sign in
+   on another machine with the USERNAME. Then the reverse order with a fresh guest. Both
+   sign-ins must land on the same locker.
+
+There is no password reset: nothing is behind the hidden address to send one to. The
+game says so before a player creates a login, and suggests adding Discord as a second
+way in.
+
 ### Email (optional, later)
 
-The email-code flow is still in the client, just not on the menu. To turn it on for
-players without Discord: set up custom SMTP (Supabase's built-in mailer only delivers
-to your own Supabase team), put `{{ .Token }}` in the **Change Email Address** and
-**Magic Link** templates, and add a button that calls `openSecureAccount()` /
-`openSignIn()`.
+The email-code functions (`authLinkEmail`, `authSendLoginCode`, `authVerifyCode`) are
+still in the client and tested, with no menu button. To offer real email: set up custom
+SMTP (Supabase's built-in mailer only delivers to your own Supabase team), put
+`{{ .Token }}` in the **Change Email Address** and **Magic Link** templates, and give
+them a screen.
 
 ## 5. Moving to Steam later
 
@@ -97,9 +119,9 @@ and Steam becomes another one on the same user:
 - The Steam build gets a session ticket from Steamworks (`GetAuthTicketForWebApi`) and
   sends it to the arena server, which verifies it with Steam's Web API
   (`ISteamUserAuth/AuthenticateUserTicket`) and gets a SteamID.
-- First launch on Steam: the player signs in with Discord once, and the server stores
-  the SteamID against that Supabase user. From then on the SteamID alone signs them in,
-  and Discord keeps working too.
+- First launch on Steam: the player signs in once with Discord or their username, and
+  the server stores the SteamID against that Supabase user. From then on the SteamID
+  alone signs them in.
 - Supabase has no built-in Steam provider (Steam uses OpenID 2.0, not OAuth), so the
   arena server issues the session. It already holds the service key.
 
@@ -107,3 +129,15 @@ What makes this work is that players have a recoverable identity **before** the 
 A guest who never connected Discord can still carry over from the same PC (the guest
 session is on disk), but not from a new one. So the more players connect Discord before
 a Steam launch, the fewer lockers are stranded.
+
+### Retiring Discord and username logins afterwards
+
+Order matters, or players are locked out of their own lockers:
+
+1. Ship the Steam build with the one-time "sign in to link Steam" step above.
+2. Keep both old logins working for a grace period (a season, a couple of months)
+   while the standalone build is still in players' hands.
+3. Then remove the CONNECT DISCORD / CREATE LOGIN / SIGN IN buttons from the menu.
+   Leave the identities valid in Supabase: it costs nothing, and a player who links
+   late can still get in once to attach Steam.
+

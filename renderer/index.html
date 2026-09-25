@@ -457,7 +457,7 @@ const HAS_NATIVE = typeof window!=='undefined' && window.gunforgeNative && typeo
 const HAS_SUPABASE = () => !!(BACKEND.supabaseUrl && BACKEND.supabaseAnonKey);
 
 /* ---- Auth: anonymous sign-in so every request carries a real auth.uid() and RLS applies ---- */
-const AUTH = { token: null, refresh: null, uid: null, expires: 0, anon: undefined, email: null, name: null };
+const AUTH = { token: null, refresh: null, uid: null, expires: 0, anon: undefined, email: null, name: null, providers: [] };
 function authToken(){ return AUTH.token || BACKEND.supabaseAnonKey; }
 // requests use the USER's JWT when signed in (RLS sees auth.uid()); anon key only pre-auth
 function sbHeaders(){ return {'apikey':BACKEND.supabaseAnonKey, 'Authorization':'Bearer '+authToken(), 'Content-Type':'application/json'}; }
@@ -473,6 +473,9 @@ function authApply(session){
   if(session.user){
     AUTH.anon  = session.user.is_anonymous !== false && !session.user.email;
     AUTH.email = session.user.email || null;
+    const am = session.user.app_metadata || {};
+    AUTH.providers = Array.isArray(am.providers) ? am.providers
+      : (session.user.identities || []).map(i => i.provider);
     const md = session.user.user_metadata || {};
     AUTH.name  = md.full_name || md.name || md.user_name || (md.custom_claims && md.custom_claims.global_name) || null;
   }
@@ -480,7 +483,7 @@ function authApply(session){
   authSave();
 }
 function authSave(){ try{ localStorage.setItem('gf_auth', JSON.stringify({token:AUTH.token, refresh:AUTH.refresh,
-  uid:AUTH.uid, expires:AUTH.expires, anon:AUTH.anon, email:AUTH.email, name:AUTH.name})); }catch(e){} }
+  uid:AUTH.uid, expires:AUTH.expires, anon:AUTH.anon, email:AUTH.email, name:AUTH.name, providers:AUTH.providers})); }catch(e){} }
 async function authAnonymousSignIn(){
   const r = await fetch(BACKEND.supabaseUrl+'/auth/v1/signup', {
     method:'POST',
@@ -1556,6 +1559,69 @@ async function discordAuth(mode){
   return { ok:true, uid:AUTH.uid, name:AUTH.name };
 }
 
+/* ---- username + password ------------------------------------------------------------
+   Supabase logins are email-based, so a username is stored as a hidden address under a
+   domain we control: "jacob" signs in as jacob@players.voxabase.com. No mail is ever sent
+   to it - it only has to be unique and pass Supabase's email check, and a domain we own
+   means nobody else can ever receive mail at it. It is never shown to the player.
+
+   Creating a login upgrades the guest's existing Supabase user in place (same uid, same
+   locker), exactly like linking Discord - and the two can both be on one account.
+   This needs "Confirm email" OFF in Supabase, or the address waits for a confirmation
+   that can never arrive; that case is detected and reported as a setup problem.
+
+     create   PUT  /auth/v1/user                    {email, password}   (as the account)
+     sign in  POST /auth/v1/token?grant_type=password {email, password}             */
+const LOGIN_DOMAIN = 'players.voxabase.com';
+const USERNAME_RE = /^[a-z0-9_]{3,16}$/;
+const MIN_PASSWORD = 8;
+const usernameEmail = u => String(u || '').trim().toLowerCase() + '@' + LOGIN_DOMAIN;
+function loginUsername(){
+  const e = AUTH.email || '';
+  return e.endsWith('@' + LOGIN_DOMAIN) ? e.slice(0, -(LOGIN_DOMAIN.length + 1)) : null;
+}
+function hasDiscord(){ return (AUTH.providers || []).includes('discord'); }
+function loginFieldErr(user, pass){
+  if(!USERNAME_RE.test(user)) return 'Usernames are 3-16 characters: letters, numbers and _.';
+  if(String(pass || '').length < MIN_PASSWORD) return 'Passwords need at least ' + MIN_PASSWORD + ' characters.';
+  return null;
+}
+function loginErrText(res){
+  const c = String(res.code || ''), m = String(res.msg || '').toLowerCase();
+  if(res.status === 0) return 'Could not reach the account server. Check your connection.';
+  if(res.status === 429 || c.startsWith('over_')) return 'Too many attempts. Wait a minute and try again.';
+  if(c === 'invalid_credentials' || m.includes('invalid login')) return 'Wrong username or password.';
+  if(c === 'email_exists' || c === 'user_already_exists' || m.includes('already been registered')) return 'That username is taken.';
+  if(c === 'weak_password') return 'That password is too weak. Use a longer one.';
+  if(c === 'email_address_invalid' || c === 'email_provider_disabled') return 'Username logins are not switched on yet (server setup).';
+  return res.msg || 'That did not work. Try again.';
+}
+async function authCreateLogin(username, password){
+  const u = String(username || '').trim().toLowerCase();
+  const bad = loginFieldErr(u, password); if(bad) return { ok:false, err:bad };
+  if(!await ensureAuth()) return { ok:false, err:'Could not reach the account server.' };
+  if(loginUsername()) return { ok:false, err:'This account already has a login (' + loginUsername() + ').' };
+  const before = AUTH.uid;
+  const res = await authCall('PUT', '/auth/v1/user', { email: usernameEmail(u), password }, true);
+  if(!res.ok) return { ok:false, err:loginErrText(res) };
+  /* With "Confirm email" on, the address comes back as new_email, pending a message
+     nobody will ever read - the login would silently never work. Say so now. */
+  if(!res.data || res.data.email !== usernameEmail(u))
+    return { ok:false, err:'Username logins need server setup: turn off "Confirm email" in Supabase.', setup:true };
+  if(await authRefresh() !== 'ok') return { ok:false, err:'Login created, but the session did not refresh. Restart the game.' };
+  if(AUTH.uid !== before) return { ok:false, err:'Account error: creating a login changed the account. Contact support.', uidChanged:true };
+  return { ok:true, uid:AUTH.uid, username:u };
+}
+async function authPasswordSignIn(username, password){
+  const u = String(username || '').trim().toLowerCase();
+  if(!u || !password) return { ok:false, err:'Enter your username and password.' };
+  const res = await authCall('POST', '/auth/v1/token?grant_type=password', { email: usernameEmail(u), password });
+  if(!res.ok || !res.data || !res.data.access_token) return { ok:false, err:loginErrText(res) };
+  authApply(res.data);
+  AUTH_NEEDS_SIGNIN = false;
+  return { ok:true, uid:AUTH.uid, username:u };
+}
+
 /* ---- account: guest / secured ------------------------------------------------------
    The warning is deliberately blunt. "Guest" alone does not tell anyone that a reinstall
    deletes their legendaries, and that is the one fact that makes securing worth a click. */
@@ -1563,20 +1629,6 @@ function maskEmail(e){
   const [u, d] = String(e || '').split('@');
   if(!d) return esc(e || '');
   return esc(u.slice(0, 2) + '•••@' + d);
-}
-function accountRowHtml(){
-  if(!HAS_SUPABASE()) return '';
-  if(AUTH_NEEDS_SIGNIN)
-    return '<div class="acctrow warn"><div><b>SESSION EXPIRED</b><span>Sign in with Discord to restore your locker.</span></div>'
-      + '<button class="btn sm primary" onclick="discordStart(\'login\')">SIGN IN WITH DISCORD</button></div>';
-  if(AUTH.anon === false)
-    return '<div class="acctrow"><div><b>ACCOUNT SECURED</b><span>'
-      + (AUTH.name ? 'Discord: ' + esc(AUTH.name) : maskEmail(AUTH.email))
-      + ' — your locker follows you to any PC.</span></div>'
-      + '<button class="btn sm" onclick="discordStart(\'login\')">SWITCH ACCOUNT</button></div>';
-  return '<div class="acctrow warn"><div><b>GUEST ACCOUNT</b><span>Your parts live on this PC only. '
-    + 'Reinstalling or switching computers loses them.</span></div>'
-    + '<button class="btn sm primary" onclick="discordStart(\'auto\')">CONNECT DISCORD</button></div>';
 }
 function guestHasProgress(){ return AUTH.anon !== false && P && (((P.inventory||[]).length > 0) || (P.level||1) > 1); }
 /* 'auto' is the guest's one button. A guest with nothing to keep just signs in: that
@@ -1603,74 +1655,91 @@ async function discordStart(mode){
 }
 function discordCancel(){ const n = window.gunforgeNative; if(n && n.oauthCancel) n.oauthCancel(); closeModal(); }
 function discordConflict(){
+  const guest = AUTH.anon !== false;
   modal('<div class="eyebrow">Account</div><h2>That Discord already has an account</h2>'
-    + '<p class="note">It is linked to a different GUNFORGE account. You can switch to that one, but this PC\'s guest progress (LVL '
-    + P.level + ', ' + (P.inventory||[]).length + ' parts) stays behind on the guest and will not come with you.</p>'
-    + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SWITCH TO THAT ACCOUNT</button>'
-    + '<button class="btn" onclick="closeModal()">KEEP PLAYING AS GUEST</button></div>');
+    + '<p class="note">It is linked to a different GUNFORGE account. You can switch to that one, but '
+    + (guest ? 'this PC\'s guest progress (LVL ' + P.level + ', ' + (P.inventory||[]).length + ' parts) stays behind on the guest and will not come with you.'
+             : 'you will be signed out of this one. Nothing on either account is merged or lost.')
+    + '</p><div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SWITCH TO THAT ACCOUNT</button>'
+    + '<button class="btn" onclick="closeModal()">' + (guest ? 'KEEP PLAYING AS GUEST' : 'STAY ON THIS ACCOUNT') + '</button></div>');
 }
-/* One two-step modal for both flows: email -> code. `mode` is 'link' or 'login'. */
-let ACCT_FLOW = null;
-function acctModal(mode, step, msg){
-  ACCT_FLOW = Object.assign(ACCT_FLOW || {}, { mode, step });
-  const link = mode === 'link';
-  const title = link ? 'Secure this account' : 'Sign in';
-  const lead = link
-    ? 'Attach an email to this account. Nothing moves: your parts, credits and level stay exactly where they are, and you can sign in with this email on any PC.'
-    : 'Sign in to an account you already secured with an email.';
-  let body;
-  if(step === 'email'){
-    /* Signing in replaces this machine's session. If it is a guest with anything worth
-       keeping, say so before they do it - that progress stays on the guest account. */
-    const guestHas = !link && AUTH.anon !== false && P && ((P.inventory||[]).length || (P.level||1) > 1);
-    body = '<input id="acctemail" type="email" autocomplete="email" placeholder="you@example.com" value="'
-      + esc(ACCT_FLOW.email || '') + '" onkeydown="if(event.key===\'Enter\')acctSend()">'
-      + (guestHas ? '<p class="note" style="margin-top:8px;color:var(--warn,#E8A33D)">This PC\'s guest progress (LVL ' + P.level
-          + ', ' + (P.inventory||[]).length + ' parts) stays on the guest account and will not come with you. '
-          + 'To keep it, use SECURE ACCOUNT instead.</p>' : '')
-      + '<div class="btnrow"><button class="btn primary" id="acctgo" onclick="acctSend()">SEND CODE</button>'
-      + '<button class="btn" onclick="closeModal()">CANCEL</button></div>';
-  } else {
-    body = '<p class="note" style="margin-top:8px">We sent a code to <b>' + esc(ACCT_FLOW.email) + '</b>. It can take a minute.</p>'
-      + '<input id="acctcode" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" '
-      + 'onkeydown="if(event.key===\'Enter\')acctVerify()">'
-      + '<div class="btnrow"><button class="btn primary" id="acctgo" onclick="acctVerify()">VERIFY</button>'
-      + '<button class="btn" onclick="acctModal(\'' + mode + '\',\'email\')">CHANGE EMAIL</button>'
-      + '<button class="btn" onclick="closeModal()">CANCEL</button></div>';
+function accountRowHtml(){
+  if(!HAS_SUPABASE()) return '';
+  if(AUTH_NEEDS_SIGNIN)
+    return '<div class="acctrow warn"><div><b>SESSION EXPIRED</b><span>Sign in to restore your locker.</span></div>'
+      + '<button class="btn sm primary" onclick="openSignInModal()">SIGN IN</button></div>';
+  if(AUTH.anon === false){
+    const ways = [];
+    if(hasDiscord()) ways.push('Discord: ' + esc(AUTH.name || 'connected'));
+    if(loginUsername()) ways.push('Login: ' + esc(loginUsername()));
+    if(!ways.length && AUTH.email) ways.push(maskEmail(AUTH.email));
+    /* One way in is one lost password or one deleted Discord from a lost locker. Offer
+       whichever is missing, so securing twice is a click away. */
+    const add = (!hasDiscord() ? '<button class="btn sm" onclick="discordStart(\'link\')">ADD DISCORD</button>' : '')
+              + (!loginUsername() ? '<button class="btn sm" onclick="openLoginModal()">ADD LOGIN</button>' : '');
+    return '<div class="acctrow"><div><b>ACCOUNT SECURED</b><span>' + ways.join(' · ')
+      + ' — your locker follows you to any PC.</span></div>'
+      + '<div class="btnrow" style="margin:0">' + add
+      + '<button class="btn sm" onclick="openSignInModal()">SWITCH ACCOUNT</button></div></div>';
   }
-  modal('<div class="eyebrow">Account</div><h2>' + title + '</h2><p class="note">' + lead + '</p>' + body
-    + '<p class="note" id="accterr" style="margin-top:8px;color:var(--bad,#E8734A);min-height:1em">' + (msg ? esc(msg) : '') + '</p>');
-  setTimeout(() => { const el = document.getElementById(step === 'email' ? 'acctemail' : 'acctcode'); if(el) el.focus(); }, 30);
+  return '<div class="acctrow warn"><div><b>GUEST ACCOUNT</b><span>Your parts live on this PC only. '
+    + 'Reinstalling or switching computers loses them.</span></div>'
+    + '<div class="btnrow" style="margin:0">'
+    + '<button class="btn sm primary" onclick="discordStart(\'auto\')">CONNECT DISCORD</button>'
+    + '<button class="btn sm primary" onclick="openLoginModal()">CREATE LOGIN</button>'
+    + '<button class="btn sm" onclick="openSignInModal()">SIGN IN</button></div></div>';
 }
-function openSecureAccount(){ ACCT_FLOW = {}; acctModal('link', 'email'); }
-function openSignIn(){ ACCT_FLOW = {}; acctModal('login', 'email'); }
-function acctBusy(on){ const b = document.getElementById('acctgo'); if(b){ b.disabled = on; b.textContent = on ? 'WORKING…' : b.textContent; } }
-async function acctSend(){
-  const email = ($('#acctemail').value || '').trim().toLowerCase();
-  ACCT_FLOW.email = email;
-  acctBusy(true);
-  const r = ACCT_FLOW.mode === 'link' ? await authLinkEmail(email) : await authSendLoginCode(email);
-  if(!r.ok){ acctModal(ACCT_FLOW.mode, 'email', r.err); return; }
-  acctModal(ACCT_FLOW.mode, 'code');
+function guestProgressNote(){
+  if(!guestHasProgress()) return '';
+  return '<p class="note" style="margin-top:8px;color:var(--warn,#E8A33D)">This PC\'s guest progress (LVL ' + P.level
+    + ', ' + (P.inventory||[]).length + ' parts) stays on the guest account and will not come with you. '
+    + 'To keep it, use CONNECT DISCORD or CREATE LOGIN instead.</p>';
 }
-async function acctVerify(){
-  const code = ($('#acctcode').value || '').trim();
-  acctBusy(true);
-  const link = ACCT_FLOW.mode === 'link';
-  const before = AUTH.uid;
-  const r = await authVerifyCode(ACCT_FLOW.email, code, link ? 'email_change' : 'email');
-  if(!r.ok){ acctModal(ACCT_FLOW.mode, 'code', r.err); return; }
-  closeModal();
-  if(link){
-    /* The uid MUST be unchanged - that is the entire guarantee this flow makes. If it
-       ever moved, the locker would silently belong to someone else; refuse loudly. */
-    if(r.uid !== before){ console.error('[account] link changed uid', before, '->', r.uid); toast('ACCOUNT ERROR — CONTACT SUPPORT'); return; }
-    toast('ACCOUNT SECURED');
-  } else {
-    toast('SIGNED IN');
-    try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
-  }
-  ACCT_FLOW = null;
+const acctErr = msg => '<p class="note" id="accterr" style="margin-top:8px;color:var(--bad,#E8734A);min-height:1em">' + (msg ? esc(msg) : '') + '</p>';
+function acctBusy(id){ const b = document.getElementById(id); if(b){ b.disabled = true; b.textContent = 'WORKING…'; } }
+/* Create a login on THIS account. The no-recovery warning is the honest price of a login
+   with no email behind it, and it is shown before they commit, not after they forget. */
+function openLoginModal(msg, user){
+  modal('<div class="eyebrow">Account</div><h2>Create a login</h2>'
+    + '<p class="note">Pick a username and password for this account. Your parts, credits and level stay exactly where they are, '
+    + 'and you can sign in with this login on any PC.</p>'
+    + '<input id="lgu" maxlength="16" autocomplete="username" placeholder="username" value="' + esc(user || '') + '">'
+    + '<input id="lgp" type="password" autocomplete="new-password" placeholder="password (8+ characters)">'
+    + '<input id="lgp2" type="password" autocomplete="new-password" placeholder="password again" onkeydown="if(event.key===\'Enter\')doCreateLogin()">'
+    + '<p class="note" style="margin-top:8px;color:var(--warn,#E8A33D)">There is no way to recover this if you forget the password. '
+    + (hasDiscord() ? '' : 'Connecting Discord as well gives you a second way in.') + '</p>'
+    + '<div class="btnrow"><button class="btn primary" id="lggo" onclick="doCreateLogin()">CREATE LOGIN</button>'
+    + '<button class="btn" onclick="closeModal()">CANCEL</button></div>' + acctErr(msg));
+  setTimeout(() => { const el = document.getElementById('lgu'); if(el) el.focus(); }, 30);
+}
+async function doCreateLogin(){
+  const u = ($('#lgu').value || '').trim(), p1 = $('#lgp').value, p2 = $('#lgp2').value;
+  if(p1 !== p2) return openLoginModal('The two passwords do not match.', u);
+  acctBusy('lggo');
+  const r = await authCreateLogin(u, p1);
+  if(!r.ok) return openLoginModal(r.err, u);
+  closeModal(); toast('LOGIN CREATED — ACCOUNT SECURED'); renderMenu();
+}
+/* Every way back in, on one screen. */
+function openSignInModal(msg, user){
+  modal('<div class="eyebrow">Account</div><h2>Sign in</h2>'
+    + '<p class="note">Sign in to an account you already secured.</p>'
+    + '<div class="btnrow"><button class="btn primary" onclick="discordStart(\'login\')">SIGN IN WITH DISCORD</button></div>'
+    + '<div class="eyebrow" style="margin-top:14px">or with your login</div>'
+    + '<input id="siu" maxlength="16" autocomplete="username" placeholder="username" value="' + esc(user || '') + '">'
+    + '<input id="sip" type="password" autocomplete="current-password" placeholder="password" onkeydown="if(event.key===\'Enter\')doPasswordSignIn()">'
+    + guestProgressNote()
+    + '<div class="btnrow"><button class="btn primary" id="sigo" onclick="doPasswordSignIn()">SIGN IN</button>'
+    + '<button class="btn" onclick="closeModal()">CANCEL</button></div>' + acctErr(msg));
+  setTimeout(() => { const el = document.getElementById(user ? 'sip' : 'siu'); if(el) el.focus(); }, 30);
+}
+async function doPasswordSignIn(){
+  const u = ($('#siu').value || '').trim(), p = $('#sip').value;
+  acctBusy('sigo');
+  const r = await authPasswordSignIn(u, p);
+  if(!r.ok) return openSignInModal(r.err, u);
+  closeModal(); toast('SIGNED IN AS ' + r.username.toUpperCase());
+  try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){ console.error(e); }
   renderMenu();
 }
 function renameOp(){

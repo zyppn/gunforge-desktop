@@ -35,19 +35,23 @@ const SRC = [
   line(/let AUTH_NEEDS_SIGNIN = [^\n]*;/), line(/let _authInflight = [^\n]*;/),
   ...['authStore','authApply','authSave','authAnonymousSignIn','authRefresh','ensureAuth','_ensureAuth',
       'authCall','authErrText','authLinkEmail','authSendLoginCode','authVerifyCode',
-      'b64url','pkcePair','discordErrText','discordAuth'].map(lift),
-  line(/const DISCORD_SCOPES = [^\n]*;/),
+      'b64url','pkcePair','discordErrText','discordAuth',
+      'loginUsername','hasDiscord','loginFieldErr','loginErrText','authCreateLogin','authPasswordSignIn'].map(lift),
+  line(/const DISCORD_SCOPES = [^\n]*;/), line(/const LOGIN_DOMAIN = [^\n]*;/), line(/const USERNAME_RE = [^\n]*;/),
+  line(/const MIN_PASSWORD = [^\n]*;/), line(/const usernameEmail = [^\n]*;/),
 ].join('\n');
 
 /* ---- a fake GoTrue ---------------------------------------------------------------- */
 function fakeAuth(){
   const S = { users: new Map(), refresh: new Map(), access: new Map(), pending: new Map(), seq: 0,
               calls: [], mode: 'up', sent: [], oauth: new Map(), codes: new Map(), redirects: [],
-              manualLinking: true, discord: 'd100', approve: true };
+              manualLinking: true, discord: 'd100', approve: true, confirmEmail: false };
   const newUser = extra => { const id = 'u' + (++S.seq); const u = Object.assign({ id, is_anonymous: true, email: null }, extra); S.users.set(id, u); return u; };
   const session = u => { const a = 'at' + (++S.seq), r = 'rt' + (++S.seq);
     S.access.set(a, u.id); S.refresh.set(r, u.id);
-    return { access_token: a, refresh_token: r, expires_in: 3600, user: Object.assign({}, u) }; };
+    const providers = [].concat(u.is_anonymous ? ['anonymous'] : [], u.discord ? ['discord'] : [], u.password ? ['email'] : []);
+    return { access_token: a, refresh_token: r, expires_in: 3600,
+             user: Object.assign({}, u, { app_metadata: { providers } }) }; };
   const resp = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
   S.fetch = async (url, opt) => {
     const u = new URL(url), b = JSON.parse(opt.body || '{}'), p = u.pathname + u.search;
@@ -67,6 +71,12 @@ function fakeAuth(){
       const id = who(); if(!id) return resp(401, { msg: 'no session' });
       if([...S.users.values()].some(x => x.email === b.email))
         return resp(422, { error_code: 'email_exists', msg: 'A user with this email address has already been registered' });
+      if(b.password && !S.confirmEmail){                     // "Confirm email" off: applied at once
+        const usr = S.users.get(id);
+        if(b.password.length < 6) return resp(422, { error_code: 'weak_password', msg: 'Password should be at least 6 characters' });
+        usr.email = b.email; usr.password = b.password; usr.is_anonymous = false;
+        return resp(200, Object.assign({}, usr));
+      }
       S.pending.set(b.email, { code: '482913', type: 'email_change', id }); S.sent.push(b.email);
       return resp(200, Object.assign({}, S.users.get(id), { new_email: b.email }));
     }
@@ -94,6 +104,11 @@ function fakeAuth(){
                         redirect: u.searchParams.get('redirect_to') });
       return resp(200, { url: 'https://discord.com/oauth2/authorize?client_id=1&state=' + st });
     }
+    if(p === '/auth/v1/token?grant_type=password'){
+      const x = [...S.users.values()].find(x => x.email === b.email && x.password && x.password === b.password);
+      if(!x) return resp(400, { error_code: 'invalid_credentials', msg: 'Invalid login credentials' });
+      return resp(200, session(x));
+    }
     if(p === '/auth/v1/token?grant_type=pkce'){
       const c = S.codes.get(b.auth_code);
       if(!c) return resp(400, { error_code: 'flow_state_not_found', msg: 'invalid flow state' });
@@ -119,7 +134,11 @@ function fakeAuth(){
     if(flow.kind === 'link'){
       if(owner && owner.id !== flow.uid) return { error: 'server_error', error_code: 'identity_already_exists', error_description: 'Identity is already linked to another user' };
       const usr = S.users.get(flow.uid);
-      usr.discord = S.discord; usr.is_anonymous = false; usr.email = S.discord + '@discord.example';
+      /* GoTrue fills the user's email from the new identity only if it has none (a guest).
+         An account that already has one - a username login - keeps it; overwriting it here
+         would model Discord silently breaking the password login, which is not what happens. */
+      usr.discord = S.discord; usr.is_anonymous = false;
+      if(!usr.email) usr.email = S.discord + '@discord.example';
       usr.user_metadata = { full_name: 'Op ' + S.discord };
       uid = usr.id;
     } else {
@@ -274,6 +293,59 @@ const expire = c => { const a = JSON.parse(c.store.get('gf_auth')); a.expires = 
     S.browser = url => { const r = orig(url); const k = S.codes.get(r.code); k.challenge = 'someone-elses-challenge'; return r; };
     const r = await c.discordAuth('login');
     ok('a code that does not match our PKCE verifier is refused', !r.ok);
+  }
+
+  /* ---- 6. username + password, and both on one account ---- */
+  {
+    const S = fakeAuth(), c = client(S);
+    const uid = await c.ensureAuth();
+    for(const [u, pw, why] of [['ab', 'longenough1', 'short username'], ['bad name', 'longenough1', 'space'],
+                               ['jacob', 'short', 'short password']]){
+      const r = await c.authCreateLogin(u, pw);
+      ok('refuses a login with a ' + why + ' before calling the server', !r.ok && !S.calls.includes('PUT /auth/v1/user'), r.err);
+    }
+    const r = await c.authCreateLogin('Jacob', 'hunter2hunter2');
+    ok('a guest can create a login', r.ok, r.err);
+    ok('THE UID IS UNCHANGED after creating a login', r.uid === uid, uid + ' -> ' + r.uid);
+    ok('  usernames are case-insensitive and stored lower case', c.loginUsername() === 'jacob');
+    ok('  the account reads as secured', c.__get().AUTH.anon === false);
+    ok('  the hidden address is under our own domain', S.users.get(uid).email === 'jacob@players.voxabase.com');
+    const twice = await c.authCreateLogin('other', 'hunter2hunter2');
+    ok('an account cannot get a second login', !twice.ok, twice.err);
+
+    const d = await c.discordAuth('link');
+    ok('the same account can ALSO connect Discord', d.ok && d.uid === uid && c.hasDiscord() && c.loginUsername() === 'jacob');
+
+    const pc2 = client(S); await pc2.ensureAuth();
+    const wrong = await pc2.authPasswordSignIn('jacob', 'nope-nope-nope');
+    ok('a wrong password says so plainly', !wrong.ok && wrong.err === 'Wrong username or password.', wrong.err);
+    const s2 = await pc2.authPasswordSignIn('JACOB', 'hunter2hunter2');
+    ok('signing in by username on a new PC lands on the ORIGINAL uid', s2.ok && s2.uid === uid);
+    const pc3 = client(S); await pc3.ensureAuth();
+    const s3 = await pc3.discordAuth('login');
+    ok('  and Discord on a third PC lands on it too', s3.ok && s3.uid === uid);
+
+    const pc4 = client(S); await pc4.ensureAuth();
+    const taken = await pc4.authCreateLogin('jacob', 'another-password');
+    ok('a taken username says so', !taken.ok && taken.err === 'That username is taken.', taken.err);
+  }
+  {
+    // Discord first, login second - the other order
+    const S = fakeAuth(); S.discord = 'd300';
+    const c = client(S); const uid = await c.ensureAuth();
+    await c.discordAuth('link');
+    const r = await c.authCreateLogin('second_way', 'hunter2hunter2');
+    ok('a Discord account can add a login and keep its uid', r.ok && r.uid === uid, r.err);
+    const again = client(S); await again.ensureAuth();
+    ok('  and Discord still signs in to it afterwards', (await again.discordAuth('login')).uid === uid);
+  }
+  {
+    // "Confirm email" left on: the login would silently never work
+    const S = fakeAuth(); S.confirmEmail = true;
+    const c = client(S); await c.ensureAuth();
+    const r = await c.authCreateLogin('jacob', 'hunter2hunter2');
+    ok('with Confirm email on, creating a login reports a setup problem instead of pretending',
+       !r.ok && r.setup === true && /Confirm email/.test(r.err), r.err);
   }
 
   console.log(fails ? '\naccount: ' + fails + ' failure(s)' : '\naccount: all clear');
