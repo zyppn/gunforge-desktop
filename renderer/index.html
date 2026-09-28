@@ -3050,10 +3050,106 @@ $('#gamewrap').addEventListener('contextmenu', e=>e.preventDefault());
 /* --- three.js scaffolding --- */
 function initRenderer(){
   if(renderer) return;
-  renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true});
-  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio||1));
+  // high-performance: a dual-GPU Mac (every 15" MacBook Pro 2016-2019) otherwise runs
+  // the game on its integrated chip and leaves the discrete one idle
+  renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true, powerPreference:'high-performance'});
+  renderer.setPixelRatio(perfRatio());
   window.addEventListener('resize', sizeRenderer);
 }
+/* ---- auto resolution ----------------------------------------------------------------
+   A Retina Mac draws the game at 2x: ~5 million pixels a frame on a 15" 2018 MacBook,
+   anti-aliased, every one of them lit. That is the whole cost of the lag on older
+   Intel graphics - the scene itself is small. So the render resolution is not fixed:
+   when a machine cannot hold its frame rate, the game draws fewer pixels and lets the
+   screen scale them up, one step at a time, until it can. A fast machine never leaves
+   the top step and looks exactly as before. Field of view, fog and everything that
+   decides what you can see are untouched: this changes sharpness, never visibility.
+
+   The step a machine settles on is remembered, so the next match starts there instead
+   of stuttering its way down again. */
+const PERF_LADDER = [2, 1.75, 1.5, 1.25, 1, 0.85, 0.75];
+const PERF_KEY = 'gf_render_step';
+const PERF = { step: 0, frames: [], evalAt: 0, goodSince: 0, fails: {}, warmUntil: 0, fps: 0, ms: 0 };
+try{ PERF.step = Math.max(0, Math.min(PERF_LADDER.length - 1, parseInt(localStorage.getItem(PERF_KEY) || '0', 10) || 0)); }catch(e){}
+function perfTop(){               // the sharpest step this screen can use at all
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  let i = 0; while(i < PERF_LADDER.length - 1 && PERF_LADDER[i] > dpr + 1e-6) i++;
+  return i;
+}
+function perfRatio(){ return PERF_LADDER[Math.max(perfTop(), PERF.step)]; }
+function perfApply(step){
+  step = Math.max(perfTop(), Math.min(PERF_LADDER.length - 1, step));
+  if(step === Math.max(perfTop(), PERF.step) && PERF.step === step) return;
+  PERF.step = step;
+  try{ localStorage.setItem(PERF_KEY, String(step)); }catch(e){}
+  if(renderer){ renderer.setPixelRatio(perfRatio()); sizeRenderer(); }
+}
+function perfMatchStart(now){
+  PERF.frames.length = 0; PERF.warmUntil = now + 2500; PERF.evalAt = now + 2500; PERF.goodSince = 0;
+}
+// Called once per frame with the raw frame interval. Decides on the MEDIAN of the last
+// second, so a single garbage-collection hitch never costs anyone resolution.
+function perfFrame(now, rawMs){
+  if(rawMs > 0 && rawMs < 1000) PERF.frames.push(rawMs);
+  if(PERF.frames.length > 90) PERF.frames.shift();
+  // judged once a second on whatever frames that second held - a machine managing 3 FPS
+  // must be caught in a second too, not after the 30 frames it takes it ten seconds to draw
+  if(now < PERF.evalAt || PERF.frames.length < 5) return;
+  PERF.evalAt = now + 1000;
+  const sorted = PERF.frames.slice().sort((a, b) => a - b);
+  const med = sorted[sorted.length >> 1];
+  PERF.ms = med; PERF.fps = 1000 / med;
+  if(now < PERF.warmUntil || document.hidden || paused) return;
+  const top = perfTop(), cur = Math.max(top, PERF.step);
+  if(PERF.fps < 50 && cur < PERF_LADDER.length - 1){
+    // struggling: one step down, and note that this step could not hold up
+    PERF.fails[cur] = (PERF.fails[cur] || 0) + 1;
+    perfApply(cur + 1); PERF.frames.length = 0; PERF.goodSince = 0;
+    PERF.evalAt = now + 1500;          // give the new resolution a moment before judging it
+  } else if(PERF.fps >= 58){
+    /* Comfortably smooth: try one step sharper. A step that has failed once gets one more
+       chance after a full minute of smooth play (the first failure may have been one heavy
+       firefight); a step that has failed twice is not tried again this session, so the
+       game never see-saws between two resolutions. */
+    if(!PERF.goodSince) PERF.goodSince = now;
+    const up = cur - 1, failed = PERF.fails[up] || 0;
+    const wait = failed === 0 ? 20000 : 60000;
+    if(cur > top && failed < 2 && now - PERF.goodSince > wait){
+      perfApply(up); PERF.frames.length = 0; PERF.goodSince = 0; PERF.evalAt = now + 1500;
+    }
+  } else PERF.goodSince = 0;
+}
+/* ---- performance overlay (F3) ----
+   What a player on a slow machine can screenshot so the lag can be diagnosed instead
+   of guessed at: frame rate, the resolution actually drawn, draw calls, and which GPU
+   the browser is really using. */
+let PERF_HUD = false;
+function perfGpuName(){
+  try{
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  }catch(e){ return '?'; }
+}
+function perfHud(){
+  let el = document.getElementById('perfhud');
+  if(!PERF_HUD){ if(el) el.remove(); return; }
+  if(!el){
+    el = document.createElement('div'); el.id = 'perfhud';
+    el.style.cssText = 'position:fixed;top:72px;left:8px;z-index:90;background:rgba(0,0,0,.72);color:#9BE8FF;'
+      + 'font:11px/1.45 var(--mono,monospace);padding:6px 9px;pointer-events:none;white-space:pre';
+    document.body.appendChild(el);
+  }
+  if(!renderer) return;
+  const i = renderer.info, c = renderer.domElement;
+  el.textContent = Math.round(PERF.fps) + ' FPS  ' + PERF.ms.toFixed(1) + ' ms\n'
+    + 'render ' + c.width + 'x' + c.height + '  (x' + perfRatio() + (PERF.step > perfTop() ? ', auto-lowered' : '') + ')\n'
+    + 'draw calls ' + i.render.calls + '  tris ' + i.render.triangles + '\n'
+    + 'geometries ' + i.memory.geometries + '  programs ' + (i.programs ? i.programs.length : '?') + '\n'
+    + perfGpuName();
+}
+window.addEventListener('keydown', e => {
+  if(e.code === 'F3'){ e.preventDefault(); PERF_HUD = !PERF_HUD; perfHud(); }
+});
 function sizeRenderer(){
   if(!renderer) return;
   let w, h;
@@ -3070,7 +3166,88 @@ document.addEventListener('fullscreenchange', sizeRenderer);
 function mat(color, emissive, ei){
   return new THREE.MeshStandardMaterial({color, roughness:0.85, metalness:0.15, emissive:emissive||0x000000, emissiveIntensity:ei||0});
 }
+/* ---- fewer draw calls, same picture ----
+   Every mesh is its own draw call, and every bot carried ~70 of them: a plated body,
+   and a full modular gun built part by part. Seven bots in view was ~490 calls a frame
+   for figures a few hundred pixels tall - the thing older Intel Macs are worst at.
+   Meshes that never move relative to each other are baked into one mesh per distinct
+   material: same triangles, same colours, same lighting, a handful of calls. Only
+   opaque lit surfaces are merged; anything that fades, flashes or animates on its own
+   (muzzle flash, health bar, shield bubble, legs, arms) is left exactly as it was. */
+function mergeKey(m){
+  const a = m.material;
+  return [a.color.getHex(), a.emissive.getHex(), a.emissiveIntensity, a.roughness, a.metalness,
+          a.side, a.flatShading ? 1 : 0].join('|');
+}
+function mergeStatic(root, meshes){
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const groups = new Map();
+  for(const m of meshes){
+    if(!m.isMesh || !m.visible || !m.geometry || !m.material || m.material.type !== 'MeshStandardMaterial'
+       || m.material.transparent || m.material.map) continue;
+    const k = mergeKey(m);
+    if(!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  }
+  let saved = 0;
+  for(const list of groups.values()){
+    if(list.length < 2) continue;
+    const pos = [], nor = [];
+    for(const m of list){
+      const rel = new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld);
+      let g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+      g.applyMatrix4(rel);
+      const p = g.attributes.position.array, n = g.attributes.normal ? g.attributes.normal.array : null;
+      // a mirrored part (negative scale) is wound backwards once baked: flip each triangle
+      const flip = rel.determinant() < 0;
+      for(let t = 0; t < p.length; t += 9){
+        const order = flip ? [0, 6, 3] : [0, 3, 6];
+        for(const o of order){
+          pos.push(p[t+o], p[t+o+1], p[t+o+2]);
+          if(n) nor.push(n[t+o], n[t+o+1], n[t+o+2]);
+        }
+      }
+      g.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    if(nor.length === pos.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    else geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const merged = new THREE.Mesh(geo, list[0].material);
+    merged.userData = Object.assign({}, list[0].userData, { merged: list.length });
+    root.add(merged);
+    for(const m of list){
+      if(m.parent) m.parent.remove(m);
+      m.geometry.dispose();
+      if(m.material !== list[0].material) m.material.dispose();
+    }
+    saved += list.length - 1;
+  }
+  return saved;
+}
+/* The previous match's scene was simply dropped, and three.js never frees GPU buffers on
+   garbage collection - every match left a whole map and eight weapon models resident on
+   the graphics card for the rest of the session. */
+function disposeScene(sc){
+  if(!sc) return;
+  sc.traverse(o => {
+    if(o.geometry) o.geometry.dispose();
+    const m = o.material;
+    if(Array.isArray(m)) m.forEach(x => x && x.dispose && x.dispose());
+    else if(m && m.dispose) m.dispose();
+  });
+}
+// a spent particle: its sphere and material were made for it alone, so they go with it
+function disposeFx(mesh){
+  if(!mesh) return;
+  if(mesh.parent) mesh.parent.remove(mesh);
+  if(mesh.geometry) mesh.geometry.dispose();
+  if(mesh.material && mesh.material.dispose) mesh.material.dispose();
+}
 function buildScene(map){
+  disposeScene(scene);
   scene = new THREE.Scene();
   scene.background = new THREE.Color(map.fog);
   scene.fog = new THREE.Fog(map.fog, 8, map.fogd);
@@ -3086,17 +3263,23 @@ function buildScene(map){
   grid.position.set(AW/2, 0.01, AD/2);
   grid.material.transparent = true; grid.material.opacity = 0.22; scene.add(grid);
 
-  // perimeter walls
+  // perimeter walls - baked into one mesh, and every outline into one line set
   const per = [ B(-1,-1,AW+2,1), B(-1,AD,AW+2,1), B(-1,0,1,AD), B(AW,0,1,AD) ];
+  const wallMeshes = [], edgePts = [];
   for(const w of per.concat(map.walls)){
     const g = new THREE.BoxGeometry(w.w, w.h, w.d);
     const mesh = new THREE.Mesh(g, mat(map.wall));
     mesh.position.set(w.x + w.w/2, w.h/2, w.z + w.d/2);
-    scene.add(mesh);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g),
-      new THREE.LineBasicMaterial({color:map.accent, transparent:true, opacity:0.35}));
-    edges.position.copy(mesh.position); scene.add(edges);
+    scene.add(mesh); wallMeshes.push(mesh);
+    const eg = new THREE.EdgesGeometry(g), ea = eg.attributes.position.array;
+    for(let i = 0; i < ea.length; i += 3) edgePts.push(ea[i] + mesh.position.x, ea[i+1] + mesh.position.y, ea[i+2] + mesh.position.z);
+    eg.dispose();
   }
+  mergeStatic(scene, wallMeshes);
+  const edgeGeo = new THREE.BufferGeometry();
+  edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePts, 3));
+  scene.add(new THREE.LineSegments(edgeGeo,
+    new THREE.LineBasicMaterial({color:map.accent, transparent:true, opacity:0.35})));
   buildViewmodel();
   sizeRenderer();
 }
@@ -4674,6 +4857,7 @@ function botMesh(color, grunt, gunInfo){
     const built = buildGunModel(gunInfo.wid, gunInfo.eq);
     built.group.rotation.y = Math.PI;      // point down the bot's +Z facing
     built.group.position.z = -0.28;        // recenter receiver on the hands
+    { const all = []; built.group.traverse(o => { if(o.isMesh) all.push(o); }); mergeStatic(built.group, all); }
     gun.add(built.group);
     gunMuzzle = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2),
       new THREE.MeshBasicMaterial({color:0xFFD27A, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide}));
@@ -4716,6 +4900,8 @@ function botMesh(color, grunt, gunInfo){
     new THREE.MeshBasicMaterial({color:0x4C9BE8, transparent:true, opacity:0.18, depthWrite:false}));
   shSphere.position.y = 1.0; shSphere.visible = false;
   g.add(shSphere);
+  // the plates sit directly on the body and move only with it
+  mergeStatic(g, g.children.filter(o => o.isMesh));
   g.userData = {hbFg:fg, hbGroup:hbG, shSphere, legL, legR, gun, gunMuzzle, gunBase, kick:0,
     arms, gunHip, gunAds,
     animT: Math.random()*6,   // stagger the idle sway, or a lobby breathes in unison
@@ -6047,6 +6233,7 @@ function startMatch(){
   show('game');
   sizeRenderer();
   enterGameScreen();
+  perfMatchStart(performance.now());
   requestAnimationFrame(tick);
 }
 function spawnWave(){
@@ -6258,6 +6445,8 @@ const TMPQ = new THREE.Quaternion();
 function tick(now){
   if(!G || !G.running) return;
   requestAnimationFrame(tick);
+  perfFrame(now, now - G.last);
+  if(PERF_HUD && (now | 0) % 4 === 0) perfHud();
   let dt = (now - G.last)/1000; G.last = now;
   if(dt > 0.05) dt = 0.05;
   if(paused){
@@ -6545,7 +6734,7 @@ function tick(now){
   for(let i=G.fx.length-1;i>=0;i--){
     const f = G.fx[i];
     f.t -= dt;
-    if(f.t<=0){ scene.remove(f.mesh); G.fx.splice(i,1); continue; }
+    if(f.t<=0){ disposeFx(f.mesh); G.fx.splice(i,1); continue; }
     f.mesh.scale.multiplyScalar(Math.max(0.05, 1 + f.grow*dt));
     if(f.vy) f.mesh.position.y += f.vy*dt;
     if(f.vx) f.mesh.position.x += f.vx*dt;
@@ -6573,7 +6762,7 @@ function tick(now){
         const sink = Math.min(1, (d.hold - 0.9) / 0.6);
         d.mesh.position.y = -0.3 - sink*2.2;
         if(sink >= 1){
-          if(d.grunt) scene.remove(d.mesh);
+          if(d.grunt){ scene.remove(d.mesh); disposeScene(d.mesh); }
           else { d.mesh.visible = false; d.mesh.rotation.x = 0; d.mesh.position.y = 0; }
           G.dying.splice(i,1);
         }
@@ -6948,6 +7137,7 @@ function startLiveMatch(){
   show('game');
   sizeRenderer();
   G.last = performance.now();
+  perfMatchStart(G.last);
   requestAnimationFrame(tick);
   G.connecting = true;
   enterGameScreen(); // go fullscreen ONCE up front; stays through connect — no windowed flash

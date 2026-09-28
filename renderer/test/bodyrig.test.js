@@ -56,7 +56,7 @@ function liftConst(n){
 }
 const FNS = ['vmCyl','vmBox','vmTag','mat','shade','partMat','vmFrame','vmBarrel','vmMagazine','vmMagazineBody',
   'vmForegrip','vmForegripBody','vmStock','vmStockBody','fitScale','vmOptic','buildGunModel',
-  'aimBone','solveArm','fitGripZ','lerp','lerp3','poseUpper','mkArm','botMesh'];
+  'aimBone','solveArm','fitGripZ','lerp','lerp3','poseUpper','mkArm','mergeKey','mergeStatic','botMesh'];
 /* Every top-level `const NAME = 0x...;` in the renderer, lifted automatically.
    Listing them by hand meant this file broke every time a set was given an accent
    colour - GHOST_CYAN once, SAINT_IVORY again - which trains you to add the name and

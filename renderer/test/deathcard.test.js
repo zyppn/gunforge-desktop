@@ -377,14 +377,16 @@ console.log('\nWIRING, DIAGRAM');
     check('  ' + sl + ' is built inside a vmTag', html.includes("vmTag('" + sl + "'"));
   /* Geometry has to be measured before it is disposed, and disposed at all: an
      undisposed weapon per death leaks for the whole session. */
-  const dispose = html.indexOf('o.geometry.dispose()');
-  const project = html.indexOf('.project(cam)');
+  // inside the diagram function itself - other code (scene cleanup) frees geometry too
+  const dcSrc = html.slice(html.indexOf('function killWeaponDiagram('));
+  const dispose = dcSrc.indexOf('o.geometry.dispose()');
+  const project = dcSrc.indexOf('.project(cam)');
   check('the anchors are projected BEFORE the geometry is freed',
         project > 0 && dispose > project);
   /* "contains the string dispose()" is not the claim - a dispose behind if(false)
      satisfies that and still leaks a weapon per death. */
-  check('and the geometry IS freed', /if\(o\.geometry\) o\.geometry\.dispose\(\);/.test(html)
-        && /m\.forEach\(x => x && x\.dispose && x\.dispose\(\)\)/.test(html));
+  check('and the geometry IS freed', /if\(o\.geometry\) o\.geometry\.dispose\(\);/.test(dcSrc)
+        && /m\.forEach\(x => x && x\.dispose && x\.dispose\(\)\)/.test(dcSrc));
   check('the diagram is cached, so a rematch does not re-render it',
         /dcCache\.set\(ck, out\)/.test(html) && /dcCache\.has\(ck\)/.test(html));
   check('the cache cannot grow without bound', /dcCache\.size > \d+\) dcCache\.clear/.test(html));
