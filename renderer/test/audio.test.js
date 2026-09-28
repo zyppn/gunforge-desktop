@@ -167,14 +167,17 @@ ok('a reload cut short by death or the match ending goes quiet',
 ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends to 0.4)',
    /AC\.sampleRate \* 0\.8\)/.test(lift('roomBus')) && /g\.gain\.value = 4\.5;/.test(lift('roomBus')) && /Math\.min\(0\.4, \(d - 4\) \/ 45\)/.test(lift('earAt')));
 
-/* ---- the kill ding: built not to wear out ---- */
+/* ---- the kill confirm: a punch, not a ding ---- */
 {
   const src = lift('killSound');
-  ok('the kill is a steel-plate ding on B-flat (in the music\'s key), not two rising notes', /932\.33/.test(src) && /\[2\.76, 0\.45, 0\.55\], \[5\.4, 0\.18, 0\.3\], \[8\.93/.test(src) && !/1318|880 \*/.test(src));
-  ok('  short: rings about 0.4s', /len = quick \? 0\.26 : 0\.4/.test(src));
-  ok('  varied a hair every time (pitch and tone)', /rnd\(0\.992, 1\.008\)/.test(src) && /rnd\(0\.85, 1\.15\)/.test(src));
-  ok('  a second kill within ~1s is a smaller, shorter ding', /quick = now - KILLSND\.last < 1\.1/.test(src) && /g = quick \? 0\.6 : 1/.test(src));
+  ok('the kill is a dry punch - click, falling thud, crunch - with nothing that rings', /'bandpass', 1700/.test(src) && /'sine', 150 \* p, 40/.test(src) && !/932|2\.76|1318/.test(src));
+  ok('  short (~0.2s) and varied a hair every time', /quick \? 0\.14 : 0\.22/.test(src) && /p = rnd\(0\.95, 1\.05\)/.test(src));
+  ok('  a second kill within ~1s is a smaller punch', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.65 : 1\)/.test(src));
 }
+ok('the hitmarker is calibrated above the old beep (people could not hear the quiet one)', /L = 0\.5;/.test(lift('sfx')));
+ok('Settings closes back to the pause menu; only the pause menu resumes',
+   /id="setclose"[^>]*>CLOSE</.test(html) && /\$\('#setclose'\)\.addEventListener\('click', settingsBack\)/.test(html) && /closeSettings\(false\);/.test(lift('settingsBack')));
+ok('  Esc in Settings goes back too, but not while it is cancelling a key rebind', /e\.key === 'Escape' && settingsOpen && !bindCapture && !e\.defaultPrevented/.test(html));
 
 ok('reload steps have a low body under the click, so they survive laptop speakers',
    ['clack','slide','pump','latch','shell','boltdown'].every(k => new RegExp("case '" + k + "':[\\s\\S]*?reloadBody\\(").test(lift('reloadPart'))));
