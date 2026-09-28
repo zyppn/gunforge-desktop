@@ -305,6 +305,14 @@
   /* A drain can credit several matches at once, so the box has to be able to run
      past the viewport and scroll rather than clipping the last part card. */
   #modal .mbox{max-height:84vh;overflow:auto}
+  /* Settings: two columns so the whole panel fits without scrolling */
+  #modal .mbox.wide{max-width:780px}
+  .setgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 32px;align-items:start;margin-top:4px}
+  .setgrid .eyebrow{margin-top:14px}
+  .setgrid .sldrow:first-of-type{margin-top:8px}
+  .segrow{display:flex;gap:6px;margin-top:8px}
+  .segrow .btn{flex:1;text-align:center}
+  @media (max-width:720px){ .setgrid{grid-template-columns:1fr} }
   .acctrow{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px}
   .acctrow.warn{border-color:rgba(232,163,61,.45);background:rgba(232,163,61,.06)}
   .acctrow b{display:block;font-family:var(--mono);font-size:12px;letter-spacing:.08em}
@@ -353,7 +361,7 @@
   /* ---------- settings overlay + sliders ---------- */
   #setov{position:absolute;inset:0;background:rgba(6,9,12,.85);display:none;align-items:center;justify-content:center;z-index:6;pointer-events:auto}
   #setov.on{display:flex}
-  .spanel{background:var(--panel);border:1px solid var(--brass);padding:22px 26px;width:min(440px,92%);pointer-events:auto}
+  .spanel{background:var(--panel);border:1px solid var(--brass);padding:22px 26px;width:min(780px,92%);max-height:92%;overflow:auto;pointer-events:auto}
   .ctl{display:flex;justify-content:space-between;align-items:center;border-bottom:1px dotted #22303E;padding:5px 0;font-size:12px}
   .ctl b{color:#EDF1F5}
   .bindbtn{font:inherit;font-size:11px;letter-spacing:.06em;color:#EDF1F5;background:#151D26;
@@ -426,17 +434,20 @@
         </div>
         <div id="setov">
           <div class="spanel">
-            <div class="eyebrow">Settings</div>
             <h2>Settings</h2>
-            <div style="margin-top:8px" id="ctlhost"></div>
-            <div class="sldrow"><label>Master volume <span id="volval">80%</span></label>
-              <input type="range" id="volsl" min="0" max="100" value="80"></div>
-            <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
-              <input type="range" id="senssl" min="20" max="250" value="100"></div>
-            <div class="gfxhost"></div>
-            <div class="btnrow">
+            <div class="setgrid">
+              <div><div class="eyebrow">Controls</div><div id="ctlhost"></div></div>
+              <div><div class="eyebrow">Audio &amp; mouse</div>
+                <div class="sldrow"><label>Master volume <span id="volval">80%</span></label>
+                  <input type="range" id="volsl" min="0" max="100" value="80"></div>
+                <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
+                  <input type="range" id="senssl" min="20" max="250" value="100"></div>
+                <div class="gfxhost"></div>
+              </div>
+            </div>
+            <div class="btnrow" style="margin-top:16px">
               <button class="btn sm" id="setreset">RESET TO DEFAULT</button>
-              <button class="btn sm primary" id="setclose">▸ RESUME</button>
+              <button class="btn sm primary" id="setclose" style="margin-left:auto">▸ RESUME</button>
             </div>
           </div>
         </div>
@@ -1449,7 +1460,7 @@ function refreshChips(){
   $('#chiplvl').innerHTML = 'LVL <b>'+P.level+'</b>';
   $('#chipcred').innerHTML = 'CREDITS: <span class="amt">'+P.credits+'</span>';
 }
-function modal(html){ $('#modalbox').innerHTML = html; $('#modal').classList.add('on'); }
+function modal(html, cls){ const b = $('#modalbox'); b.className = 'mbox' + (cls ? ' ' + cls : ''); b.innerHTML = html; $('#modal').classList.add('on'); }
 function closeModal(){ $('#modal').classList.remove('on'); }
 $('#modal').addEventListener('click', e => { if(e.target.id==='modal') closeModal(); });
 document.addEventListener('click', e => {
@@ -1976,7 +1987,7 @@ function accountSectionHtml(){
   const out = '<button class="btn sm" onclick="signOutAsk()">SIGN OUT</button>';
   let warn = true, status, action;
   if(authSignedOut()){
-    status = '<b>SIGNED OUT</b><span>Sign in with Discord, or play as a guest. Nothing you do while signed out is saved to an account.</span>';
+    status = '<b>SIGNED OUT</b><span>Nothing is saved until you sign in.</span>';
     action = btn('SIGN IN WITH DISCORD', 'login', true)
            + '<button class="btn sm" onclick="playAsGuest()">PLAY AS GUEST</button>';
   } else if(AUTH_NEEDS_SIGNIN){
@@ -1984,16 +1995,15 @@ function accountSectionHtml(){
     action = btn('SIGN IN WITH DISCORD', 'login', true) + out;
   } else if(hasDiscord()){
     warn = false;
-    status = '<b>DISCORD CONNECTED</b><span>' + esc(AUTH.name || 'Connected') + ' — your locker follows you to any PC.</span>';
+    status = '<b>DISCORD CONNECTED</b><span>' + esc(AUTH.name || 'Connected') + '</span>';
     action = btn('SWITCH ACCOUNT', 'login', false) + out;
   } else if(AUTH.anon === false){
     // secured some other way (a login made while that option existed): offer Discord too
     status = '<b>ACCOUNT SECURED</b><span>' + (loginUsername() ? 'Login: ' + esc(loginUsername()) : maskEmail(AUTH.email))
-      + '. Connect Discord to sign in on other PCs.</span>';
+      + '</span>';
     action = btn('CONNECT DISCORD', 'link', true) + out;
   } else {
-    status = '<b>GUEST ACCOUNT</b><span>Your parts live on this PC only — reinstalling or switching computers loses them. '
-      + 'Connect Discord to keep them, or to sign in to an account you already connected.</span>';
+    status = '<b>GUEST ACCOUNT</b><span>Saved on this PC only. Connect Discord to keep your parts.</span>';
     action = btn('CONNECT DISCORD', 'auto', true);
   }
   return '<div class="eyebrow" style="margin-top:10px">Account</div>'
@@ -2142,17 +2152,21 @@ async function doRename(){
   closeModal(); renderMenu();
 }
 function menuSettings(){
-  modal('<div class="eyebrow">Settings</div><h2>Settings</h2>'
+  modal('<h2>Settings</h2>'
    +accountSectionHtml()
-   +'<div class="eyebrow" style="margin-top:14px">Controls</div>'
+   +'<div class="setgrid"><div>'
+   +'<div class="eyebrow">Controls</div>'
    +'<div id="ctlhost">'+controlsHtml()+'</div>'
-   +'<div class="sldrow" style="margin-top:12px"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
+   +'</div><div>'
+   +'<div class="eyebrow">Audio &amp; mouse</div>'
+   +'<div class="sldrow"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
    +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.volume*100)+'" oninput="setVolPct(this.value, \'mvolval\')"></div>'
    +'<div class="sldrow"><label>Mouse sensitivity <span id="msensval">'+SETTINGS.sens.toFixed(2)+'x</span></label>'
    +'<input type="range" min="20" max="250" value="'+Math.round(SETTINGS.sens*100)+'" oninput="setSensPct(this.value, \'msensval\')"></div>'
    +'<div class="gfxhost">'+gfxHtml()+'</div>'
-   +'<div class="btnrow"><button class="btn sm" onclick="resetSettingsAll()">RESET TO DEFAULT</button>'
-   +'<button class="btn sm primary" onclick="cancelBind();closeModal()">DONE</button></div>');
+   +'</div></div>'
+   +'<div class="btnrow" style="margin-top:16px"><button class="btn sm" onclick="resetSettingsAll()">RESET TO DEFAULT</button>'
+   +'<button class="btn sm primary" style="margin-left:auto" onclick="cancelBind();closeModal()">DONE</button></div>', 'wide');
 }
 /* ---- the controls panel ------------------------------------------------
    One renderer, used by the pause overlay and the main-menu modal, so the two
@@ -2164,8 +2178,7 @@ function controlsHtml(){
     ).join('')
   + '<div class="ctl"><span>Scoreboard</span><b>TAB</b></div>'
   + '<div class="ctl"><span>Pause</span><b>ESC</b></div>'
-  + '<p class="note" id="bindnote" style="margin-top:6px">Click a control to rebind it. '
-  + 'Mouse buttons and keys both work \u2014 on a trackpad, put Aim down sights on a key.</p>';
+  + '<p class="note" id="bindnote" style="margin-top:6px">Click a control to rebind it.</p>';
 }
 function repaintBinds(){
   for(const [a] of BIND_ORDER){
@@ -2214,7 +2227,7 @@ function cancelBind(){
   bindCapture = null;
   repaintBinds();
   const n = document.getElementById('bindnote');
-  if(n) n.textContent = 'Click a control to rebind it. Mouse buttons and keys both work.';
+  if(n) n.textContent = 'Click a control to rebind it.';
 }
 function resetBinds(){
   BINDS = Object.assign({}, DEFAULT_BINDS);
@@ -3099,17 +3112,18 @@ function initRenderer(){
 const GFX_MODES = ['auto', 'high', 'low'];
 const gfxMode = () => GFX_MODES.includes(SETTINGS.gfx) ? SETTINGS.gfx : 'auto';
 const GFX_INFO = {
-  auto: 'Full sharpness, lowered automatically if your computer cannot keep up. Recommended.',
+  auto: 'Sharp, and lowers itself only if your computer falls behind.',
   high: 'Always full sharpness, even if the frame rate drops.',
-  low:  'For older computers: lower resolution, simpler lighting, no anti-aliasing. Lighting and anti-aliasing change from your next match.',
+  low:  'For older computers. Lighting changes from your next match.',
 };
 function gfxHtml(){
   const m = gfxMode();
-  return '<div class="eyebrow" style="margin-top:14px">Graphics</div>'
-    + '<div class="btnrow" style="margin-top:6px">'
+  // (no mode changes what you can SEE - field of view, fog and visibility are identical -
+  // so there is nothing a player needs to be warned about here; see the note above)
+  return '<div class="eyebrow">Graphics</div>'
+    + '<div class="segrow">'
     + GFX_MODES.map(k => '<button class="btn sm' + (k === m ? ' primary' : '') + '" onclick="setGfx(\'' + k + '\')">' + k.toUpperCase() + '</button>').join('')
-    + '</div><p class="note" style="margin-top:6px">' + GFX_INFO[m]
-    + ' No setting changes what you can see: field of view, fog and visibility are the same in all three.</p>';
+    + '</div><p class="note" style="margin-top:6px">' + GFX_INFO[m] + '</p>';
 }
 function paintGfx(){ document.querySelectorAll('.gfxhost').forEach(h => { h.innerHTML = gfxHtml(); }); }
 function setGfx(m){
