@@ -167,5 +167,14 @@ ok('a reload cut short by death or the match ending goes quiet',
 ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends to 0.4)',
    /AC\.sampleRate \* 0\.8\)/.test(lift('roomBus')) && /g\.gain\.value = 4\.5;/.test(lift('roomBus')) && /Math\.min\(0\.4, \(d - 4\) \/ 45\)/.test(lift('earAt')));
 
+/* ---- the kill ding: built not to wear out ---- */
+{
+  const src = lift('killSound');
+  ok('the kill is a steel-plate ding on B-flat (in the music\'s key), not two rising notes', /932\.33/.test(src) && /\[2\.76, 0\.45, 0\.55\], \[5\.4, 0\.18, 0\.3\], \[8\.93/.test(src) && !/1318|880 \*/.test(src));
+  ok('  short: rings about 0.4s', /len = quick \? 0\.26 : 0\.4/.test(src));
+  ok('  varied a hair every time (pitch and tone)', /rnd\(0\.992, 1\.008\)/.test(src) && /rnd\(0\.85, 1\.15\)/.test(src));
+  ok('  a second kill within ~1s is a smaller, shorter ding', /quick = now - KILLSND\.last < 1\.1/.test(src) && /g = quick \? 0\.6 : 1/.test(src));
+}
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);
