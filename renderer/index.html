@@ -433,6 +433,7 @@
               <input type="range" id="volsl" min="0" max="100" value="80"></div>
             <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
               <input type="range" id="senssl" min="20" max="250" value="100"></div>
+            <div class="gfxhost"></div>
             <div class="btnrow">
               <button class="btn sm" id="setreset">RESET TO DEFAULT</button>
               <button class="btn sm primary" id="setclose">▸ RESUME</button>
@@ -2149,6 +2150,7 @@ function menuSettings(){
    +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.volume*100)+'" oninput="setVolPct(this.value, \'mvolval\')"></div>'
    +'<div class="sldrow"><label>Mouse sensitivity <span id="msensval">'+SETTINGS.sens.toFixed(2)+'x</span></label>'
    +'<input type="range" min="20" max="250" value="'+Math.round(SETTINGS.sens*100)+'" oninput="setSensPct(this.value, \'msensval\')"></div>'
+   +'<div class="gfxhost">'+gfxHtml()+'</div>'
    +'<div class="btnrow"><button class="btn sm" onclick="resetSettingsAll()">RESET TO DEFAULT</button>'
    +'<button class="btn sm primary" onclick="cancelBind();closeModal()">DONE</button></div>');
 }
@@ -2246,7 +2248,8 @@ function setSensPct(v, labelId){
 function resetSettingsAll(){
   bindCapture = null;
   BINDS = Object.assign({}, DEFAULT_BINDS);
-  SETTINGS = { volume:0.8, sens:1.0, binds: BINDS };   // RESET TO DEFAULT restores the keys too
+  SETTINGS = { volume:0.8, sens:1.0, gfx:'auto', binds: BINDS };   // RESET TO DEFAULT restores the keys too
+  gfxChanged();
   if(masterG) masterG.gain.value = 0.8;
   saveSettings(); sfx('reload');
   if(document.getElementById('mvolval')) menuSettings();
@@ -2742,7 +2745,7 @@ function openSetup(){
 /* =====================================================================
    3D FPS ENGINE (Three.js r128)
    ===================================================================== */
-const cv = $('#cv');
+let cv = $('#cv');   // replaced (not reused) when anti-aliasing is switched - see initRenderer
 let renderer = null, scene = null, camera = null, vm = null, muzzle = null, muzzleLight = null;
 let muzzleBaseY = 0.02;
 let gameFS = false;
@@ -2802,7 +2805,7 @@ function sanitizeBinds(b){
 const EYE = 1.6, PR = 0.5;
 
 /* --- settings (persisted) --- */
-let SETTINGS = { volume: 0.8, sens: 1.0, binds: Object.assign({}, DEFAULT_BINDS) };
+let SETTINGS = { volume: 0.8, sens: 1.0, gfx: 'auto', binds: Object.assign({}, DEFAULT_BINDS) };
 let bindCapture = null;   // set while the settings panel is waiting for a key
 async function loadSettings(){
   const s = await sGet('settings');
@@ -2810,6 +2813,7 @@ async function loadSettings(){
     SETTINGS.volume = (typeof s.volume === 'number' && isFinite(s.volume)) ? Math.min(1, Math.max(0, s.volume)) : 0.8;
     SETTINGS.sens   = (typeof s.sens === 'number' && isFinite(s.sens)) ? Math.min(2.5, Math.max(0.2, s.sens)) : 1.0;
     SETTINGS.binds  = sanitizeBinds(s.binds);
+    SETTINGS.gfx    = GFX_MODES.includes(s.gfx) ? s.gfx : 'auto';
     BINDS = SETTINGS.binds;
     if(typeof s.invSort === 'string' && INV_SORTS.some(function(d){ return d[0] === s.invSort; })){
       SETTINGS.invSort = s.invSort; invSort = s.invSort;
@@ -2956,7 +2960,7 @@ window.addEventListener('blur', ()=>{
   try{ document.exitPointerLock(); }catch(e){} // owning the pointer while unfocused yanks macOS Spaces back
 });
 window.addEventListener('keyup',   e=>{ keys[e.code] = false; });
-cv.addEventListener('mousedown', e=>{
+function onCanvasDown(e){
   keys['Mouse' + e.button] = true;
   au();
   // Left click still grabs the pointer whatever it is bound to, or someone who
@@ -2964,7 +2968,8 @@ cv.addEventListener('mousedown', e=>{
   if(e.button === 0 && G && G.running && !locked){
     if(!settingsOpen && !G.connecting) enterGameScreen();
   }
-});
+}
+cv.addEventListener('mousedown', onCanvasDown);
 window.addEventListener('mouseup', e=>{ keys['Mouse' + e.button] = false; });
 // Binding capture has to see buttons pressed anywhere, not just on the canvas —
 // the settings panel is a DOM overlay, so clicks there never reach cv.
@@ -3007,6 +3012,7 @@ function syncSettingsUI(){
   $('#sensval').textContent = SETTINGS.sens.toFixed(2)+'x';
   const host = document.getElementById('ctlhost');
   if(host) host.innerHTML = controlsHtml();
+  paintGfx();
   syncHintLine();
 }
 function openSettings(){
@@ -3040,7 +3046,8 @@ $('#setreset').addEventListener('click', ()=>{
   // "default" means — and it restores the key bindings, not just the sliders
   bindCapture = null;
   BINDS = Object.assign({}, DEFAULT_BINDS);
-  SETTINGS = { volume:0.8, sens:1.0, binds: BINDS };
+  SETTINGS = { volume:0.8, sens:1.0, gfx:'auto', binds: BINDS };
+  gfxChanged();
   if(masterG) masterG.gain.value = SETTINGS.volume;
   syncSettingsUI(); saveSettings(); sfx('reload');
 });
@@ -3048,13 +3055,25 @@ $('#quitbtn').addEventListener('click', abandonMatch);
 $('#gamewrap').addEventListener('contextmenu', e=>e.preventDefault());
 
 /* --- three.js scaffolding --- */
+let RENDERER_AA = null, resizeHooked = false;
 function initRenderer(){
-  if(renderer) return;
+  const aa = gfxMode() !== 'low';
+  if(renderer && RENDERER_AA === aa) return;
+  if(renderer){
+    // anti-aliasing is fixed when a canvas's WebGL context is made, so a change needs
+    // a new canvas: same element, same listeners, fresh context
+    try{ renderer.dispose(); renderer.forceContextLoss(); }catch(e){}
+    const fresh = cv.cloneNode(false);
+    cv.replaceWith(fresh); cv = fresh;
+    cv.addEventListener('mousedown', onCanvasDown);
+    renderer = null;
+  }
   // high-performance: a dual-GPU Mac (every 15" MacBook Pro 2016-2019) otherwise runs
   // the game on its integrated chip and leaves the discrete one idle
-  renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true, powerPreference:'high-performance'});
+  renderer = new THREE.WebGLRenderer({canvas:cv, antialias:aa, powerPreference:'high-performance'});
+  RENDERER_AA = aa;
   renderer.setPixelRatio(perfRatio());
-  window.addEventListener('resize', sizeRenderer);
+  if(!resizeHooked){ window.addEventListener('resize', sizeRenderer); resizeHooked = true; }
 }
 /* ---- auto resolution ----------------------------------------------------------------
    A Retina Mac draws the game at 2x: ~5 million pixels a frame on a 15" 2018 MacBook,
@@ -3067,16 +3086,52 @@ function initRenderer(){
 
    The step a machine settles on is remembered, so the next match starts there instead
    of stuttering its way down again. */
+/* ---- Graphics: AUTO (default) / HIGH / LOW ----
+   AUTO   full sharpness, lowered step by step only if the machine cannot keep up
+   HIGH   always full sharpness, never lowered - a crisp picture over a smooth one
+   LOW    for older machines: at most 1x resolution (auto may still go lower), no
+          anti-aliasing, cheaper per-vertex lighting, no muzzle light, no cosmetic
+          muzzle fire. Hit sparks stay: they are how you know you connected.
+   No mode changes what can be SEEN. Field of view, fog, draw distance, player models
+   and hitboxes are identical in all three, so LOW is never an advantage. Resolution
+   changes at once; lighting and anti-aliasing are fixed when a match is built, so
+   they take effect from the next match. */
+const GFX_MODES = ['auto', 'high', 'low'];
+const gfxMode = () => GFX_MODES.includes(SETTINGS.gfx) ? SETTINGS.gfx : 'auto';
+const GFX_INFO = {
+  auto: 'Full sharpness, lowered automatically if your computer cannot keep up. Recommended.',
+  high: 'Always full sharpness, even if the frame rate drops.',
+  low:  'For older computers: lower resolution, simpler lighting, no anti-aliasing. Lighting and anti-aliasing change from your next match.',
+};
+function gfxHtml(){
+  const m = gfxMode();
+  return '<div class="eyebrow" style="margin-top:14px">Graphics</div>'
+    + '<div class="btnrow" style="margin-top:6px">'
+    + GFX_MODES.map(k => '<button class="btn sm' + (k === m ? ' primary' : '') + '" onclick="setGfx(\'' + k + '\')">' + k.toUpperCase() + '</button>').join('')
+    + '</div><p class="note" style="margin-top:6px">' + GFX_INFO[m]
+    + ' No setting changes what you can see: field of view, fog and visibility are the same in all three.</p>';
+}
+function paintGfx(){ document.querySelectorAll('.gfxhost').forEach(h => { h.innerHTML = gfxHtml(); }); }
+function setGfx(m){
+  if(!GFX_MODES.includes(m) || m === gfxMode()) return;
+  SETTINGS.gfx = m; saveSettings(); gfxChanged(); paintGfx();
+}
+// a new mode starts with a clean slate: whatever AUTO learned does not carry into LOW
+function gfxChanged(){
+  PERF.fails = {}; PERF.goodSince = 0; PERF.frames.length = 0;
+  PERF.step = 0; try{ localStorage.setItem(PERF_KEY, '0'); }catch(e){}
+  if(renderer){ renderer.setPixelRatio(perfRatio()); sizeRenderer(); }
+}
 const PERF_LADDER = [2, 1.75, 1.5, 1.25, 1, 0.85, 0.75];
 const PERF_KEY = 'gf_render_step';
 const PERF = { step: 0, frames: [], evalAt: 0, goodSince: 0, fails: {}, warmUntil: 0, fps: 0, ms: 0 };
 try{ PERF.step = Math.max(0, Math.min(PERF_LADDER.length - 1, parseInt(localStorage.getItem(PERF_KEY) || '0', 10) || 0)); }catch(e){}
-function perfTop(){               // the sharpest step this screen can use at all
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  let i = 0; while(i < PERF_LADDER.length - 1 && PERF_LADDER[i] > dpr + 1e-6) i++;
+function perfTop(){               // the sharpest step this screen - and this mode - may use
+  const cap = Math.min(2, window.devicePixelRatio || 1, gfxMode() === 'low' ? 1 : 2);
+  let i = 0; while(i < PERF_LADDER.length - 1 && PERF_LADDER[i] > cap + 1e-6) i++;
   return i;
 }
-function perfRatio(){ return PERF_LADDER[Math.max(perfTop(), PERF.step)]; }
+function perfRatio(){ return PERF_LADDER[gfxMode() === 'high' ? perfTop() : Math.max(perfTop(), PERF.step)]; }
 function perfApply(step){
   step = Math.max(perfTop(), Math.min(PERF_LADDER.length - 1, step));
   if(step === Math.max(perfTop(), PERF.step) && PERF.step === step) return;
@@ -3099,7 +3154,7 @@ function perfFrame(now, rawMs){
   const sorted = PERF.frames.slice().sort((a, b) => a - b);
   const med = sorted[sorted.length >> 1];
   PERF.ms = med; PERF.fps = 1000 / med;
-  if(now < PERF.warmUntil || document.hidden || paused) return;
+  if(now < PERF.warmUntil || document.hidden || paused || gfxMode() === 'high') return;
   const top = perfTop(), cur = Math.max(top, PERF.step);
   if(PERF.fps < 50 && cur < PERF_LADDER.length - 1){
     // struggling: one step down, and note that this step could not hold up
@@ -3164,6 +3219,8 @@ function sizeRenderer(){
 }
 document.addEventListener('fullscreenchange', sizeRenderer);
 function mat(color, emissive, ei){
+  // LOW lights per vertex instead of per pixel; at roughness 0.85 the picture is nearly the same
+  if(gfxMode() === 'low') return new THREE.MeshLambertMaterial({color, emissive:emissive||0x000000, emissiveIntensity:ei||0});
   return new THREE.MeshStandardMaterial({color, roughness:0.85, metalness:0.15, emissive:emissive||0x000000, emissiveIntensity:ei||0});
 }
 /* ---- fewer draw calls, same picture ----
@@ -3184,7 +3241,8 @@ function mergeStatic(root, meshes){
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const groups = new Map();
   for(const m of meshes){
-    if(!m.isMesh || !m.visible || !m.geometry || !m.material || m.material.type !== 'MeshStandardMaterial'
+    if(!m.isMesh || !m.visible || !m.geometry || !m.material
+       || (m.material.type !== 'MeshStandardMaterial' && m.material.type !== 'MeshLambertMaterial')
        || m.material.transparent || m.material.map) continue;
     const k = mergeKey(m);
     if(!groups.has(k)) groups.set(k, []);
@@ -3459,7 +3517,9 @@ function buildViewmodel(){
   muzzleBaseY = muzzle.position.y;   // updateViewmodelPose drops it from here when aimed
   muzzleLight = new THREE.PointLight(0xFFC46A, 0, 6);
   muzzleLight.position.set(0, 0, -0.7);
-  vm.add(muzzle, muzzleLight);
+  // LOW: the light still exists (the code that flashes it needs no special case) but is
+  // never added to the scene, so no surface pays to be lit by it
+  vm.add(muzzle); if(gfxMode() !== 'low') vm.add(muzzleLight);
   vm.position.set(0.22, -0.2, -0.32);
   camera.add(vm);
   scene.add(camera);
@@ -5781,6 +5841,7 @@ function spawnBurst(x, z, color){
    sight picture is the one place a cosmetic must not go. */
 function spawnMuzzleFire(x, y, z, local){
   if(local && adsT > 0.15) return;                 // never in the sight picture
+  if(gfxMode() === 'low') return;                  // purely cosmetic: the first thing LOW drops
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.018 + Math.random()*0.014, 5, 4),
     new THREE.MeshBasicMaterial({color: Math.random() < 0.5 ? 0xFF6A2A : 0xFFB13D,
       transparent:true, opacity:0.85, depthWrite:false}));

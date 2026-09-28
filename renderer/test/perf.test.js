@@ -24,13 +24,14 @@ function lift(n){
 const line = re => { const m = html.match(re); if(!m) throw new Error('missing ' + re); return m[0]; };
 
 /* ---------------- 1. auto resolution ---------------- */
-function perfCtx(dpr, store){
+function perfCtx(dpr, store, gfx){
   store = store || new Map();
-  const ctx = vm.createContext({ Math, String, parseInt,
+  const ctx = vm.createContext({ Math, String, parseInt, SETTINGS: { gfx: gfx || 'auto' }, saved: 0, saveSettings(){ ctx.saved++; }, paintGfx(){},
     window: { devicePixelRatio: dpr }, document: { hidden: false }, paused: false,
     localStorage: { getItem: k => store.has(k) ? store.get(k) : null, setItem: (k, v) => store.set(k, String(v)) },
     renderer: { ratio: null, setPixelRatio(r){ this.ratio = r; } }, sizeRenderer: () => {} });
-  vm.runInContext([line(/const PERF_LADDER = [^\n]*;/), line(/const PERF_KEY = [^\n]*;/), line(/const PERF = \{[^\n]*\};/),
+  vm.runInContext([line(/const GFX_MODES = [^\n]*;/), line(/const gfxMode = [^\n]*;/), lift('setGfx'), lift('gfxChanged'),
+    line(/const PERF_LADDER = [^\n]*;/), line(/const PERF_KEY = [^\n]*;/), line(/const PERF = \{[^\n]*\};/),
     line(/try\{ PERF\.step = [^\n]*\n/), ...['perfTop','perfRatio','perfApply','perfMatchStart','perfFrame'].map(lift),
     'this.PERF = PERF;'].join('\n'), ctx);
   ctx.store = store;
@@ -97,6 +98,44 @@ function play(ctx, t0, secs, fps, hitchEvery){
   play(c, 0, 10, 20);
   ok('paused (menu open) never counts against the machine', c.perfRatio() === 2);
 }
+/* ---- the Graphics setting ---- */
+{
+  const c = perfCtx(2, null, 'high'); c.perfMatchStart(0);
+  play(c, 0, 30, 25);
+  ok('HIGH: full sharpness always, even at 25 FPS', c.perfRatio() === 2);
+}
+{
+  const c = perfCtx(2, null, 'low'); c.perfMatchStart(0);
+  ok('LOW on a Retina screen: starts at 1x, not 2x', c.perfRatio() === 1);
+  play(c, 0, 8, 30);
+  ok('  and auto can still take it lower if even that struggles', c.perfRatio() < 1 && c.perfRatio() >= 0.75, c.perfRatio());
+  play(c, 8000, 200, 60);
+  ok('  but never back above 1x', c.perfRatio() <= 1);
+}
+{
+  const c = perfCtx(2); c.perfMatchStart(0);
+  play(c, 0, 8, 30);
+  ok('AUTO had stepped down', c.perfRatio() < 2);
+  c.setGfx('high');
+  ok('switching mode applies at once and is saved', c.perfRatio() === 2 && c.saved === 1 && c.SETTINGS.gfx === 'high');
+  c.setGfx('auto');
+  ok('  and a new mode starts clean - what AUTO learned before does not carry over', c.perfRatio() === 2 && Object.keys(c.PERF.fails).length === 0);
+  c.setGfx('ultra');
+  ok('an unknown mode is ignored', c.SETTINGS.gfx === 'auto');
+}
+ok('saved settings are checked: a bad value falls back to AUTO', /SETTINGS\.gfx\s*= GFX_MODES\.includes\(s\.gfx\) \? s\.gfx : 'auto';/.test(html));
+ok('AUTO is the default, and RESET TO DEFAULT restores it',
+   /let SETTINGS = \{[^}]*gfx: 'auto'/.test(html) && (html.match(/SETTINGS = \{ volume:0\.8, sens:1\.0, gfx:'auto'/g) || []).length === 2);
+ok('LOW turns anti-aliasing off (a fresh canvas, since a WebGL context keeps its first settings)',
+   /const aa = gfxMode\(\) !== 'low';/.test(html) && /antialias:aa/.test(html) && /cv\.replaceWith\(fresh\)/.test(html));
+ok('  and the fresh canvas keeps its click-to-aim listener', /cv\.replaceWith\(fresh\); cv = fresh;\s*cv\.addEventListener\('mousedown', onCanvasDown\)/.test(html));
+ok('LOW uses per-vertex lighting', /if\(gfxMode\(\) === 'low'\) return new THREE\.MeshLambertMaterial/.test(html));
+ok('LOW drops the muzzle light and cosmetic muzzle fire, but keeps hit sparks',
+   /if\(gfxMode\(\) !== 'low'\) vm\.add\(muzzleLight\)/.test(html) && /if\(gfxMode\(\) === 'low'\) return;\s*\/\/ purely cosmetic/.test(html)
+   && !/gfxMode/.test(lift('spawnSpark')));
+ok('the setting is in home Settings AND the in-match panel', (html.match(/class="gfxhost"/g) || []).length === 2 && /\+'<div class="gfxhost">'\+gfxHtml\(\)/.test(html));
+ok('no graphics mode touches field of view, fog or draw distance',
+   !/fov|fog|\.far\b/i.test(['setGfx','gfxChanged','perfTop','perfRatio','initRenderer','mat'].map(lift).join('')));
 ok('the renderer asks for the discrete GPU on dual-GPU Macs', /powerPreference:\s*'high-performance'/.test(html));
 ok('resolution never touches what you can SEE: field of view and fog are not in the perf code',
    !/fov|fog|far\s*=/.test(['perfApply','perfFrame','perfRatio'].map(lift).join('')));

@@ -71,7 +71,7 @@ const ctx = vm.createContext({
   LoadoutCore, equippedParts: () => ({}),
 });
 vm.runInContext('let VMT=null, VMT_AIM=null, VMT_ADS=null;\n'
-  + CONSTS.map(liftConst).join('\n') + '\n' + FNS.map(lift).join('\n'), ctx);
+  + CONSTS.map(liftConst).join('\n') + '\n' + FNS.map(lift).join('\n') + "\nconst gfxMode = () => 'auto';", ctx);
 
 const WEAPONS = Object.keys(LoadoutCore.WEAPONS);
 const build = (grunt, wid) => ctx.botMesh(0xE8734A, grunt, grunt ? null : { wid, eq: {} });

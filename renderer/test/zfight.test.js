@@ -51,7 +51,7 @@ const ctx = vm.createContext({ THREE, Math, console,
   WEAPONS: LoadoutCore.WEAPONS, SLOTS: LoadoutCore.SLOTS, SETS: LoadoutCore.SETS, LoadoutCore });
 vm.runInContext('let VMT=null, VMT_AIM=null, VMT_ADS=null;\n'
   + ['RCOL','FIT_SPAN','HAZ'].concat(COLOR_CONSTS).map(liftConst).join('\n')
-  + '\n' + FNS.map(lift).join('\n'), ctx);
+  + '\n' + FNS.map(lift).join('\n') + "\nconst gfxMode = () => 'auto';", ctx);
 
 /* A ratchet, not a clean sheet. Hornet, Dragon and Juggernaut were built before this
    test existed and carry a backlog; rewriting three sets the moment the test lands would

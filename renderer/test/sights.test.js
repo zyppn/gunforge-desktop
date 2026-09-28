@@ -50,7 +50,7 @@ const ctx = vm.createContext({ THREE, Math, console,
 const COLOR_CONSTS = [...html.matchAll(/^const ([A-Z][A-Z0-9_]*) = 0x[0-9A-Fa-f]+;/gm)].map(m => m[1]);
 vm.runInContext('let VMT=null, VMT_AIM=null, VMT_ADS=null;\n'
   + ['RCOL','FIT_SPAN'].concat(COLOR_CONSTS).map(liftConst).join('\n') + '\n'
-  + FNS.map(lift).join('\n'), ctx);
+  + FNS.map(lift).join('\n') + "\nconst gfxMode = () => 'auto';", ctx);
 
 /* A standing player is 1.8m. At 32m that is 1.61 degrees tall and 0.98 wide. */
 const TGT_D = 32, TGT_H = 0.9, TGT_W = 0.28;
