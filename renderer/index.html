@@ -135,6 +135,8 @@
     padding:14px 16px 12px;opacity:0;pointer-events:none;transition:opacity .22s;
     z-index:70;backdrop-filter:blur(3px)}
   #deathcard.on{opacity:1}
+  /* the card sits above almost everything, but never over Settings */
+  body:has(#setov.on) #deathcard{opacity:0}
   #deathcard .dc-eyebrow{font-size:10px;letter-spacing:.18em;color:#8A96A0;text-transform:uppercase}
   #deathcard .dc-who{font-size:22px;font-weight:700;margin:2px 0 1px;letter-spacing:.02em}
   #deathcard .dc-wep{font-size:12px;color:#C8D2DA;margin-bottom:11px}
@@ -3427,26 +3429,33 @@ function sfx(kind, vol, ear){
       o.frequency.exponentialRampToValueAtTime(32, t+0.3);
       const g2 = AC.createGain(); g2.gain.setValueAtTime(0.22*(vol||1), t); g2.gain.exponentialRampToValueAtTime(0.001, t+0.4);
       o.connect(g2); g2.connect(out); o.start(t); o.stop(t+0.42);
+    /* The interface sounds were the last square-wave beeps from the first prototype - the
+       "pixelated" sound. Rebuilt from the same parts as the combat sounds: short filtered
+       ticks with a soft body, a hair different every time. */
     } else if(kind==='ui'){
-      const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(740, t);
-      const g = AC.createGain(); g.gain.setValueAtTime(0.035*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.05);
-      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.06);
-    } else if(kind==='hit'){
-      const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(660,t);
-      const g = AC.createGain(); g.gain.setValueAtTime(0.05,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.06);
-      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.07);
+      // menu click: a small, soft tick - felt more than heard
+      noiseHit(masterBus(), t, 400, 3, 'bandpass', rnd(3000, 3600), 2, 0.035*(vol||1), 0.012);
+      toneHit(masterBus(), t, 'sine', rnd(1150, 1250), 1000, 0.022*(vol||1), 0.035);
+    } else if(kind==='hit' || kind==='crit'){
+      // hitmarker: a dry, tight tick with a little weight; a crit is brighter and adds a snap
+      const crit = kind === 'crit';
+      noiseHit(masterBus(), t, 500, 3, 'bandpass', rnd(2100, 2500) * (crit ? 1.35 : 1), 1.6, 0.14, 0.02);
+      noiseHit(masterBus(), t, 500, 3, 'lowpass', 900, 0, 0.08, 0.025);
+      toneHit(masterBus(), t, 'triangle', rnd(1500, 1600) * (crit ? 1.25 : 1), 1200, 0.03, 0.03);
+      if(crit) noiseHit(masterBus(), t + 0.028, 400, 3, 'highpass', 4200, 0.8, 0.07, 0.015);
     } else if(kind==='kill'){
-      const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(440,t); o.frequency.setValueAtTime(880,t+0.07);
-      const g = AC.createGain(); g.gain.setValueAtTime(0.06,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.16);
-      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.17);
+      // store purchase: a small, bright metal tick - acquired, not a coin
+      noiseHit(masterBus(), t, 500, 3, 'highpass', 2500, 0.7, 0.04, 0.012);
+      for(const [ratio, amp, dk] of [[1, 1, 1], [2.76, 0.4, 0.55], [5.4, 0.15, 0.3]])
+        toneHit(masterBus(), t, 'sine', 1244.5 * ratio, 1244.5 * ratio * 0.998, 0.035 * amp, 0.3 * dk);
     } else if(kind==='reload'){
-      const o = AC.createOscillator(); o.type='triangle'; o.frequency.setValueAtTime(220,t);
-      const g = AC.createGain(); g.gain.setValueAtTime(0.05,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.08);
-      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.09);
+      // reset / confirm: two soft ticks, down a step
+      noiseHit(masterBus(), t, 400, 3, 'bandpass', 2800, 2, 0.03, 0.012);
+      toneHit(masterBus(), t, 'sine', 1100, 950, 0.02, 0.035);
+      noiseHit(masterBus(), t + 0.07, 400, 3, 'bandpass', 2300, 2, 0.03, 0.012);
+      toneHit(masterBus(), t + 0.07, 'sine', 880, 760, 0.02, 0.045);
     } else if(kind==='hurt'){
-      const o = AC.createOscillator(); o.type='sawtooth'; o.frequency.setValueAtTime(160,t);
-      const g = AC.createGain(); g.gain.setValueAtTime(0.07,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.12);
-      o.connect(g); g.connect(masterBus()); o.start(t); o.stop(t+0.13);
+      hurtSound(10, false);
     }
   }catch(e){}
 }
@@ -5987,7 +5996,7 @@ function showHitmark(isCrit){
   const hm = $('#hitmark');
   if(!hm) return;
   hm.classList.toggle('crit', !!isCrit);
-  hm.style.opacity = 1; sfx('hit');
+  hm.style.opacity = 1; sfx(isCrit ? 'crit' : 'hit');
   clearTimeout(hm._t); hm._t = setTimeout(() => { hm.style.opacity = 0; }, 90);
 }
 function seekCandidates(owner){

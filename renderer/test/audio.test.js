@@ -180,5 +180,12 @@ ok('reload steps have a low body under the click, so they survive laptop speaker
    ['clack','slide','pump','latch','shell','boltdown'].every(k => new RegExp("case '" + k + "':[\\s\\S]*?reloadBody\\(").test(lift('reloadPart'))));
 ok('  and sit at a level measured to be audible (was ~17 dB quieter)', /const v = own \? 0\.16 :/.test(lift('reloadSound')));
 
+/* ---- no prototype beeps left ---- */
+ok('no square- or sawtooth-wave beeps in any game sound (the "pixelated" ones; the music pad\'s filtered saws are not beeps)',
+   !/'(square|sawtooth)'/.test(['sfx','gunSound','killSound','hurtPlay','deathSound','whizSound','reloadPart','noiseHit','toneHit'].map(lift).join('')));
+ok('menu clicks, hitmarkers, reset and purchase are all rebuilt', ['ui', 'hit', 'reload', 'kill'].every(k => new RegExp("kind==='" + k + "'").test(lift('sfx'))));
+ok('a crit hitmarker sounds different from a normal one', /sfx\(isCrit \? 'crit' : 'hit'\)/.test(lift('showHitmark')) && /kind==='crit'/.test(lift('sfx')));
+ok('the death card never covers Settings', /body:has\(#setov\.on\) #deathcard\{opacity:0\}/.test(html));
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);
