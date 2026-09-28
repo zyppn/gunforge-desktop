@@ -176,5 +176,9 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('  a second kill within ~1s is a smaller, shorter ding', /quick = now - KILLSND\.last < 1\.1/.test(src) && /g = quick \? 0\.6 : 1/.test(src));
 }
 
+ok('reload steps have a low body under the click, so they survive laptop speakers',
+   ['clack','slide','pump','latch','shell','boltdown'].every(k => new RegExp("case '" + k + "':[\\s\\S]*?reloadBody\\(").test(lift('reloadPart'))));
+ok('  and sit at a level measured to be audible (was ~17 dB quieter)', /const v = own \? 0\.16 :/.test(lift('reloadSound')));
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);

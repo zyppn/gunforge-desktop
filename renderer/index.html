@@ -3339,27 +3339,44 @@ const RELOAD_SEQ = {
   'Sniper':        [[0.08,'boltup'], [0.28,'swish'], [0.56,'clack'], [0.84,'boltdown']],
   'LMG':           [[0.08,'latch'], [0.28,'rattle'], [0.5,'clack'], [0.66,'rattle'], [0.84,'latch'], [0.93,'pull']],
 };
+/* Each step is a bright edge (the click you notice) over a short low-mid body (the part
+   that survives laptop speakers). The first pass was edges only - high, narrow and ~20ms
+   long - and measured 20-25 dB under the gunshots: technically there, practically silent,
+   worst on the SMG. Every step now lands within a few dB of the same loudness. */
+function reloadBody(out, t, f, v, dur){ toneHit(out, t, 'triangle', f, f * 0.7, v * 0.5, dur || 0.05); }
 function reloadPart(out, t, kind, v){
   const r = rnd(0.94, 1.06);
   switch(kind){
-    case 'click':    noiseHit(out, t, 500, 3, 'bandpass', 3400*r, 5, v * 0.9, 0.02); break;
-    case 'swish':    noiseHit(out, t, 4400, 1.2, 'bandpass', 1300*r, 1.2, v * 0.35, 0.12); break;
-    case 'clack':    noiseHit(out, t, 900, 3, 'bandpass', 1500*r, 2.5, v, 0.04);
-                     noiseHit(out, t + 0.012, 700, 3, 'lowpass', 700*r, 0, v * 0.8, 0.05); break;
-    case 'slide':    noiseHit(out, t, 800, 3, 'bandpass', 2500*r, 3, v * 0.8, 0.03);
-                     noiseHit(out, t + 0.05, 800, 3, 'bandpass', 3200*r, 4, v, 0.03); break;
-    case 'pull':     noiseHit(out, t, 2200, 1.6, 'bandpass', 2000*r, 2, v * 0.5, 0.07); break;
-    case 'shell':    noiseHit(out, t, 700, 3, 'bandpass', 2200*r, 3, v * 0.7, 0.025);
-                     noiseHit(out, t + 0.03, 1400, 2, 'bandpass', 1100*r, 1.5, v * 0.4, 0.06); break;
-    case 'pump':     noiseHit(out, t, 900, 3, 'bandpass', 1800*r, 2.5, v, 0.045);
-                     noiseHit(out, t + 0.13, 900, 3, 'bandpass', 2400*r, 3, v * 1.2, 0.04); break;
-    case 'boltup':   noiseHit(out, t, 700, 3, 'bandpass', 3100*r, 4, v * 0.8, 0.03);
-                     noiseHit(out, t + 0.08, 1800, 2, 'bandpass', 2000*r, 2, v * 0.5, 0.06); break;
-    case 'boltdown': noiseHit(out, t, 1800, 2, 'bandpass', 2000*r, 2, v * 0.5, 0.06);
-                     noiseHit(out, t + 0.07, 700, 3, 'bandpass', 2600*r, 3.5, v, 0.035); break;
-    case 'latch':    noiseHit(out, t, 700, 3, 'bandpass', 1200*r, 2, v, 0.05);
-                     noiseHit(out, t + 0.02, 500, 3, 'bandpass', 3600*r, 5, v * 0.6, 0.02); break;
-    case 'rattle':   for(let k = 0; k < 5; k++) noiseHit(out, t + k * rnd(0.025, 0.04), 400, 3, 'bandpass', rnd(2400, 3600), 5, v * 0.45, 0.018); break;
+    case 'click':    noiseHit(out, t, 500, 3, 'bandpass', 3000*r, 3, v * 1.1, 0.025);
+                     reloadBody(out, t, 420*r, v * 0.7, 0.03); break;
+    case 'swish':    noiseHit(out, t, 4400, 1.2, 'bandpass', 1200*r, 0.9, v * 1.1, 0.14); break;
+    case 'clack':    noiseHit(out, t, 900, 3, 'bandpass', 1400*r, 1.6, v * 1.3, 0.05);
+                     noiseHit(out, t + 0.012, 700, 3, 'lowpass', 800*r, 0, v * 1.1, 0.06);
+                     reloadBody(out, t + 0.012, 190*r, v, 0.07); break;
+    case 'slide':    noiseHit(out, t, 800, 3, 'bandpass', 2200*r, 2, v, 0.035);
+                     noiseHit(out, t + 0.05, 800, 3, 'bandpass', 2900*r, 2.5, v * 1.3, 0.04);
+                     reloadBody(out, t + 0.05, 300*r, v, 0.05); break;
+    case 'pull':     noiseHit(out, t, 2200, 1.6, 'bandpass', 1800*r, 1.2, v * 1.2, 0.09);
+                     reloadBody(out, t, 260*r, v * 0.6, 0.06); break;
+    case 'shell':    noiseHit(out, t, 700, 3, 'bandpass', 2000*r, 2, v, 0.03);
+                     noiseHit(out, t + 0.03, 1400, 2, 'bandpass', 1000*r, 1.2, v * 0.9, 0.07);
+                     reloadBody(out, t + 0.03, 230*r, v * 0.8, 0.06); break;
+    case 'pump':     noiseHit(out, t, 900, 3, 'bandpass', 1600*r, 1.8, v * 1.3, 0.05);
+                     reloadBody(out, t, 170*r, v, 0.06);
+                     noiseHit(out, t + 0.13, 900, 3, 'bandpass', 2200*r, 2, v * 1.5, 0.045);
+                     reloadBody(out, t + 0.13, 210*r, v, 0.06); break;
+    case 'boltup':   noiseHit(out, t, 700, 3, 'bandpass', 2600*r, 2.5, v * 1.1, 0.035);
+                     reloadBody(out, t, 320*r, v * 0.8, 0.04);
+                     noiseHit(out, t + 0.08, 1800, 2, 'bandpass', 1700*r, 1.4, v * 0.9, 0.07); break;
+    case 'boltdown': noiseHit(out, t, 1800, 2, 'bandpass', 1700*r, 1.4, v * 0.9, 0.07);
+                     noiseHit(out, t + 0.07, 700, 3, 'bandpass', 2300*r, 2.5, v * 1.3, 0.04);
+                     reloadBody(out, t + 0.07, 280*r, v, 0.05); break;
+    case 'latch':    noiseHit(out, t, 700, 3, 'bandpass', 1100*r, 1.5, v * 1.3, 0.06);
+                     noiseHit(out, t + 0.02, 500, 3, 'bandpass', 3000*r, 3, v * 0.8, 0.025);
+                     reloadBody(out, t, 160*r, v, 0.07); break;
+    case 'rattle':   for(let k = 0; k < 5; k++){ const tk = t + k * rnd(0.025, 0.04);
+                       noiseHit(out, tk, 400, 3, 'bandpass', rnd(1800, 2800), 2.5, v * 1.5, 0.022);
+                       if(k % 2 === 0) reloadBody(out, tk, rnd(350, 450), v * 0.9, 0.025); } break;
   }
 }
 let RELOAD_PLAYING = null;     // the player's own: stopped if they die or the match ends mid-reload
@@ -3368,7 +3385,7 @@ function reloadSound(type, ms, ear, own){
   try{
     const seq = RELOAD_SEQ[type] || RELOAD_SEQ['Assault Rifle'];
     const out = earOut(ear), t0 = AC.currentTime, len = Math.max(0.4, (ms || 1500) / 1000);
-    const v = own ? 0.11 : 0.11 * (ear ? ear.vol : 1);
+    const v = own ? 0.16 : 0.16 * (ear ? ear.vol : 1);
     if(v < 0.012) return;
     // scheduled, but through one gain we can close: a death mid-reload must not finish it
     const gate = AC.createGain(); gate.connect(out);
