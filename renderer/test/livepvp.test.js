@@ -75,7 +75,7 @@ ok('the live path calls the same one', /playerFlinch\(live\.lastHp - sp\.hp\)/.t
   // the whole effect must live inside that one function, or a caller can be short-changed
   const i = html.indexOf('function playerFlinch');
   const blk = html.slice(i, i + 620);
-  for(const part of ['G.shake', 'G.kickPitch', 'G.kickYaw', "$('#vign')", "sfx('hurt')"])
+  for(const part of ['G.shake', 'G.kickPitch', 'G.kickYaw', "$('#vign')", 'hurtSound('])
     ok('playerFlinch still does ' + part, blk.includes(part));
 }
 ok('the flinch maths exists in exactly one place',
