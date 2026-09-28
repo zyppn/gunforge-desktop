@@ -192,5 +192,12 @@ ok('menu clicks, hitmarkers, reset and purchase are all rebuilt', ['ui', 'hit', 
 ok('a crit hitmarker sounds different from a normal one', /sfx\(isCrit \? 'crit' : 'hit'\)/.test(lift('showHitmark')) && /kind==='crit'/.test(lift('sfx')));
 ok('the death card never covers Settings', /body:has\(#setov\.on\) #deathcard\{opacity:0\}/.test(html));
 
+{
+  const src = lift('deathSound');
+  ok('death is the armour break: a crack, splinters, shards both ways, then the body lands', /splinter/.test(src) && /shards skittering/.test(src) && /the body lands/.test(src));
+  ok('  no heartbeat and no tone sliding down', !/heart/i.test(src) && !/'triangle', 330/.test(src));
+  ok('  the landing is on the fall animation\'s beat (~0.55s)', /d = t \+ rnd\(0\.53, 0\.57\)/.test(src));
+}
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);
