@@ -724,6 +724,113 @@ async function refreshCredits(){
     if(typeof c === 'number' && c !== P.credits){ P.credits = c; refreshChips(); }
   }catch(e){}
 }
+/* ---- live wallet: a sale pays the seller on their screen the instant it happens ----
+   buy_listing pays the seller inside the buyer's transaction, but the seller is another
+   person on another PC and nothing told their game. Supabase Realtime does: this holds
+   one websocket subscribed to two things -
+     players   UPDATE where id = me          -> the balance, whatever moved it
+     listings  UPDATE where seller_id = me   -> "SOLD", with the part and the price
+   Raw Phoenix-channel frames, like the rest of this file's raw GoTrue/PostgREST calls.
+   If Realtime is unreachable or not switched on for these tables (migration 022), a
+   poll takes over every LIVE_POLL_MS until the socket is back - slower, never silent. */
+const LIVE_POLL_MS = 10000, LIVE_BEAT_MS = 25000;
+const LIVE = { ws:null, pid:null, ref:0, beat:null, poll:null, retry:null, fails:0, joined:false,
+               since:null, seen:new Set() };
+function liveSend(msg){ try{ if(LIVE.ws && LIVE.ws.readyState === 1) LIVE.ws.send(JSON.stringify(msg)); }catch(e){} }
+function liveWalletStop(){
+  const ws = LIVE.ws; LIVE.ws = null; LIVE.pid = null; LIVE.joined = false;
+  clearInterval(LIVE.beat); clearInterval(LIVE.poll); clearTimeout(LIVE.retry);
+  LIVE.beat = LIVE.poll = LIVE.retry = null;
+  if(ws){ try{ ws.onclose = null; ws.close(); }catch(e){} }
+}
+function liveWalletStart(){
+  const pid = ACCOUNT.playerId;
+  if(!HAS_SUPABASE() || !pid || typeof WebSocket === 'undefined') return;
+  if(LIVE.pid === pid && LIVE.ws && LIVE.ws.readyState <= 1) return;   // already watching this account
+  liveWalletStop();
+  LIVE.pid = pid;
+  if(!LIVE.since) LIVE.since = new Date().toISOString();
+  livePollStart();                    // covers the gap until the channel confirms, and any outage
+  let ws;
+  try{
+    ws = new WebSocket(BACKEND.supabaseUrl.replace(/^http/, 'ws') + '/realtime/v1/websocket?apikey='
+      + encodeURIComponent(BACKEND.supabaseAnonKey) + '&vsn=1.0.0');
+  }catch(e){ return liveRetry(); }
+  LIVE.ws = ws;
+  const topic = 'realtime:gf-wallet-' + pid;
+  ws.onopen = () => {
+    const ref = String(++LIVE.ref);
+    liveSend({ topic, event:'phx_join', ref, join_ref: ref, payload: {
+      config: { broadcast:{ self:false }, presence:{ key:'' }, postgres_changes: [
+        { event:'UPDATE', schema:'public', table:'players',  filter:'id=eq.' + pid },
+        { event:'UPDATE', schema:'public', table:'listings', filter:'seller_id=eq.' + pid } ] },
+      access_token: AUTH.token } });
+    LIVE.beat = setInterval(() => {
+      liveSend({ topic:'phoenix', event:'heartbeat', payload:{}, ref:String(++LIVE.ref) });
+      // the account token rotates hourly; the channel must be told or it closes on expiry
+      if(AUTH.token) liveSend({ topic, event:'access_token', payload:{ access_token: AUTH.token }, ref:String(++LIVE.ref) });
+    }, LIVE_BEAT_MS);
+  };
+  ws.onmessage = ev => {
+    let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
+    if(m.topic !== topic) return;
+    if(m.event === 'phx_reply' && m.payload && m.payload.response && m.payload.response.postgres_changes){
+      if(m.payload.status === 'ok'){ LIVE.joined = true; LIVE.fails = 0; livePollStop(); }
+      return;
+    }
+    if(m.event === 'system' && m.payload && m.payload.status === 'error'){ LIVE.joined = false; livePollStart(); return; }
+    if(m.event === 'phx_error' || m.event === 'phx_close'){ LIVE.joined = false; livePollStart(); return; }
+    if(m.event !== 'postgres_changes' || !m.payload || !m.payload.data) return;
+    const d = m.payload.data, rec = d.record || {};
+    if(d.table === 'players' && rec.id === LIVE.pid) liveBalance(rec.credits);
+    else if(d.table === 'listings' && rec.seller_id === LIVE.pid && rec.status === 'sold') liveSold([rec]);
+  };
+  ws.onclose = () => { if(LIVE.ws === ws){ LIVE.ws = null; LIVE.joined = false; clearInterval(LIVE.beat); livePollStart(); liveRetry(); } };
+  ws.onerror = () => {};
+}
+function liveRetry(){
+  clearTimeout(LIVE.retry);
+  const wait = Math.min(60000, 2000 * Math.pow(2, LIVE.fails++));
+  LIVE.retry = setTimeout(() => { if(ACCOUNT.playerId && !authSignedOut()){ LIVE.pid = null; liveWalletStart(); } }, wait);
+}
+function livePollStart(){ if(!LIVE.poll) LIVE.poll = setInterval(livePoll, LIVE_POLL_MS); }
+function livePollStop(){ clearInterval(LIVE.poll); LIVE.poll = null; }
+async function livePoll(){
+  const pid = LIVE.pid;
+  if(!pid || pid !== ACCOUNT.playerId) return;
+  try{
+    const sold = await sbSelect('listings?select=id,part_uid,price,status,seller_id,resolved_at&seller_id=eq.' + pid
+      + '&status=eq.sold&resolved_at=gt.' + encodeURIComponent(LIVE.since) + '&order=resolved_at.asc');
+    if(sold.length) liveSold(sold);
+    else await refreshCredits();
+  }catch(e){}
+}
+function liveBalance(c){
+  if(typeof c !== 'number' || !P || c === P.credits) return;
+  P.credits = c; refreshChips();
+  const au = document.getElementById('auction');
+  if(au && au.classList.contains('on')) renderAuction();   // BUY buttons follow the new balance
+}
+/* One sale, announced once, however it arrives (socket, poll, or both). */
+function liveSold(rows){
+  const fresh = rows.filter(r => r && r.id && !LIVE.seen.has(r.id));
+  if(!fresh.length) return;
+  for(const r of fresh){
+    LIVE.seen.add(r.id);
+    if(r.resolved_at && r.resolved_at > LIVE.since) LIVE.since = r.resolved_at;
+    const part = P && (P.inventory || []).find(x => x.uid === r.part_uid);
+    if(P){
+      P.inventory = (P.inventory || []).filter(x => x.uid !== r.part_uid);
+      P.listedUids = (P.listedUids || []).filter(u => u !== r.part_uid);
+    }
+    toast('SOLD \u00B7 ' + (part ? part.name : 'A PART') + ' \u00B7 +' + (r.price|0) + ' CR');
+    try{ sfx('ui'); }catch(e){}
+  }
+  refreshCredits();                  // the database's balance, not a sum kept by hand
+  const au = document.getElementById('auction');
+  if(au && au.classList.contains('on')) renderAuction();
+  repaintParts();
+}
 async function resyncProfile(){
   try{ const fresh = await loadCloudProfile(); if(fresh) P = fresh; refreshChips(); }catch(e){}
 }
@@ -771,6 +878,33 @@ async function outboxAdd(entry){
 }
 async function outboxCount(){ return (await outboxGet()).length; }
 // Replay queued matches. Returns how many were credited this pass.
+/* One way to hand a match to the server, for the results screen and the outbox alike.
+   The results screen used to post without this launch's session id, and the server has
+   refused rewards from anything but the account's active session since one-device-per-
+   account landed - so EVERY match fell to "salvage pending" and only paid out when the
+   outbox (which did send the session) was retried. Two copies of one request had drifted
+   apart; now there is one. Returns the server's reply, or { superseded:true }. Throws
+   only when the server cannot be reached. */
+async function sendReward(entry, timeoutMs){
+  const send = async () => {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), timeoutMs || 8000);
+    try{
+      const r = await fetch(liveHttpUrl()+'/reward/offline', {
+        method:'POST', signal: ctrl.signal,
+        headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
+        body: JSON.stringify(Object.assign({}, entry, { session: SESSION_ID }))
+      });
+      return { status: r.status, sv: await r.json().catch(() => null) };
+    } finally { clearTimeout(to); }
+  };
+  let { status, sv } = await send();
+  // the server lost track of this launch (restart, first match after a long idle):
+  // claim again - this launch IS the active one - and send once more
+  if(sv && sv.reason === 'no-session' && await sessionClaim() === 'ok') ({ status, sv } = await send());
+  if(sv && sv.reason === 'superseded') return { superseded: true };
+  return sv || { ok:false, reason:'bad-reply', status };
+}
 async function outboxDrain(){
   if(!HAS_SUPABASE()) return 0;
   const q = await outboxGet();
@@ -779,31 +913,16 @@ async function outboxDrain(){
   if(!uid_) return 0;                     // still no session — leave the queue intact
   const left = [];
   const got = [];                          // what the server actually granted on replay
-  let claimedOnce = false, lost = false;
+  let lost = false;
   for(const e of q){
     if(lost){ left.push(e); continue; }
     try{
       /* the session is the one this launch holds NOW, not whatever was current when the
          match was queued - an offline match played last week is replayed by this launch */
-      const send = async () => {
-        const ctrl = new AbortController();
-        const to = setTimeout(()=>ctrl.abort(), 8000);
-        const r = await fetch(liveHttpUrl()+'/reward/offline', {
-          method:'POST', signal: ctrl.signal,
-          headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
-          body: JSON.stringify(Object.assign({}, e, { session: SESSION_ID }))
-        });
-        clearTimeout(to);
-        return { r, sv: await r.json().catch(()=>null) };
-      };
-      let { r, sv } = await send();
-      if(sv && sv.reason === 'no-session' && !claimedOnce){
-        claimedOnce = true;
-        if(await sessionClaim() === 'ok') ({ r, sv } = await send());
-      }
-      if(sv && sv.reason === 'superseded'){ lost = true; left.push(e); sessionSuperseded(); continue; }
-      if(sv && sv.ok){ got.push(sv); continue; }      // delivered (or already known) -> drop it
-      console.error('[outbox] replay declined', r.status, sv && sv.reason);
+      const sv = await sendReward(e, 8000);
+      if(sv.superseded){ lost = true; left.push(e); sessionSuperseded(); continue; }
+      if(sv.ok){ got.push(sv); continue; }             // delivered (or already known) -> drop it
+      console.error('[outbox] replay declined', sv.status, sv.reason);
       left.push(e);                                    // keep for the next attempt
     }catch(err){
       left.push(e);
@@ -920,6 +1039,7 @@ async function loadCloudProfile(){
     listedUids = ls.map(l => l.part_uid);
   }catch(e){ console.error('listed lookup failed', e); }
   ACCOUNT.online = true; ACCOUNT.uid = uid; ACCOUNT.playerId = row.id;
+  liveWalletStart();                  // sales and balance changes arrive the moment they happen
   return {
     id: row.id, name: row.callsign,
     xp: row.xp, level: row.level, credits: row.credits,
@@ -1959,6 +2079,7 @@ async function doSignOut(){
    nothing else - until the player picks PLAY AS GUEST or signs in. Nothing of the old account may be
    left behind to inherit (queued rewards would drain into the next account) or display. */
 async function forgetAccount(){
+  liveWalletStop();
   await authSignOut();
   authSetSignedOut(true);
   try{ await sSet(OUTBOX_KEY, []); }catch(e){}
@@ -2446,7 +2567,7 @@ async function renderAuction(){
   $('#auction').innerHTML =
    '<div class="eyebrow">Auction House</div><h2>Live Market</h2>'
    +'<p class="note" style="color:var(--brass)">'+storageModeLabel()+'</p>'
-   +'<p class="note">Listings and sales are shared across all GUNFORGE operators — anything you post here is publicly visible. Weapons can never be listed, only parts. Sales pay out automatically next time the seller logs in.</p>'
+   +'<p class="note">Listings and sales are shared across all GUNFORGE operators — anything you post here is publicly visible. Weapons can never be listed, only parts. Sellers are paid the moment a part sells.</p>'
    +'<div class="btnrow"><button class="btn sm" onclick="renderAuction()">⟳ REFRESH</button><button class="btn sm" onclick="renderInventory()">LIST A PART →</button><button class="btn sm" onclick="renderMenu()">← BACK</button></div>'
    +'<div class="panel" style="margin-top:12px"><div class="eyebrow">Your listings ('+mine.length+')</div>'
    +(mine.map(l=>row(l,true)).join('') || '<div class="note" style="margin-top:6px">Nothing listed. Head to the Parts Locker to post a part.</div>')+'</div>'
@@ -6666,16 +6787,9 @@ function endMatch(campWin){
   if(ACCOUNT.online){
     (async () => {
       try{
-        const ctrl = new AbortController();
-        const to = setTimeout(()=>ctrl.abort(), 6000); // hard cap: never hang
-        const r = await fetch(liveHttpUrl()+'/reward/offline', {
-          method:'POST', signal: ctrl.signal,
-          headers:{'Authorization':'Bearer '+(AUTH&&AUTH.token),'Content-Type':'application/json'},
-          body: JSON.stringify({ mid, kills, deaths, win, mode })
-        });
-        clearTimeout(to);
-        const sv = await r.json();
-        if(sv && sv.ok){
+        const sv = await sendReward({ mid, kills, deaths, win, mode }, 6000); // hard cap: never hang
+        if(sv.superseded){ await queueMatch('signed in elsewhere'); sessionSuperseded(); return; }
+        if(sv.ok){
           // server persisted the authoritative reward — re-sync inventory quietly,
           // then paint the REAL numbers and the REAL part over the pending rows
           const fresh = await loadCloudProfile();
@@ -7460,6 +7574,10 @@ function liveExitToLobby(){
       // Replay any match whose reward never reached the server, BEFORE pulling the
       // profile, so freshly granted parts are in the inventory we load.
       // this launch becomes the account's active device before anything is earned or read
+      /* First launch ever: nothing on this PC has an account yet. That is the sign-in
+         screen, not a guest made behind the player's back - a guest is only ever made
+         by pressing PLAY AS GUEST. Anyone who already has a session keeps it. */
+      if(!authStore() && !authSignedOut()) authSetSignedOut(true);
       try{ if(await ensureAuth()) await sessionClaim(); }catch(e){ console.error('session claim failed', e); }
       try{ replayed = await outboxDrain(); }
       catch(e){ console.error('outbox drain failed', e); }

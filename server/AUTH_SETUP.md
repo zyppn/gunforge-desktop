@@ -145,7 +145,27 @@ no parts, listings, store purchases or claimed matches. One XP point keeps it.
 `server/test/cleanup-guests.test.js` runs it on real Postgres (PGlite) against seventeen
 accounts; it skips when PGlite is not installed (`cd server && npm i -D @electric-sql/pglite`).
 
-## 7. Moving to Steam later
+## 7. Auction pays, and the seller sees it instantly
+
+Run `server/migrations/021_auction_pays_instantly.sql` in the SQL editor
+(`pbcopy < server/migrations/021_auction_pays_instantly.sql`). It does two things:
+
+- **Fixes the bug.** The player guard from section 2 reset every credit change made
+  during a signed-in player's request - including the ones inside `buy_listing` and
+  `scrap_part`. So a sale moved the part but no credits: the buyer was not charged,
+  the seller was not paid, and scrapping paid nothing. The guard now only applies
+  when a player writes their own row directly, which is what it was for.
+- **Turns on Realtime** for `players` and `listings`, so the seller's game shows
+  "SOLD · part · +price CR" and the new balance the moment the sale happens. Until
+  it runs, the game checks every 10 seconds instead.
+
+It prints two small tables at the end: both guards should show
+`security_definer = false`, and `players` and `listings` should both be listed.
+
+`server/test/economy-db.test.js` runs a real sale, a refused sale, a scrap and the
+guard against Postgres on every `./ship.sh`.
+
+## 8. Moving to Steam later
 
 Yes, this carries over. Accounts are keyed by the Supabase user id
 (`players.auth_uid`), not by how someone signs in. Discord is one identity on that user,
