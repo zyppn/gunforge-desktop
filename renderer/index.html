@@ -2960,7 +2960,37 @@ const GUN_LOUD = { 'Sniper':1.35, 'Shotgun':1.25, 'LMG':1.05, 'Assault Rifle':0.
 const MUSIC = { on: false, bus: null, echo: null, timer: null, next: 0, step: 0 };
 const MUSIC_BPM = 84, MUSIC_STEP = 60 / MUSIC_BPM / 4;          // one sixteenth note
 const MUSIC_CHORDS = [[50, 53, 57], [46, 50, 53], [53, 57, 60], [48, 52, 55]];   // Dm Bb F C (midi)
-const MUSIC_ARP = [0, 1, 2, 1, 2, 0, 1, 2, 0, 2, 1, 0, 2, 1, 0, 1];
+/* Variation, so it does not repeat for three-quarters of an hour. A cycle is the 16-bar
+   form (~46s). Each cycle picks, from its own number:
+     arpeggio   one of three patterns                     (cycle % 3)
+     section    plain, melody A, breakdown, melody B       (cycle % 4)
+                (breakdown: no drums, the pad opens up and the arpeggio climbs an octave)
+     harmony    C becomes Am every third cycle, Bb becomes Gm every fourth
+     fill       a drum fill into the next cycle every fifth
+   24 different kinds of cycle, in an order that only comes round again after 60
+   cycles (3 x 4 x 5): about 46 minutes before the music repeats itself exactly. */
+const MUSIC_ARPS = [
+  [0, 1, 2, 1, 2, 0, 1, 2, 0, 2, 1, 0, 2, 1, 0, 1],
+  [0, 2, 1, 2, 0, 2, 1, 2, 0, 2, 1, 2, 1, 0, 2, 0],
+  [2, 1, 0, 1, 2, 1, 0, 2, 2, 1, 0, 1, 0, 1, 2, 1],
+];
+// melodies: per bar, [sixteenth, midi note, length in sixteenths] - D minor, over Dm Bb F C
+const MUSIC_LEADS = [
+  [[[0,69,6],[6,67,2],[8,65,4],[12,62,4]], [[0,65,6],[6,67,2],[8,69,4],[12,70,4]],
+   [[0,72,6],[6,70,2],[8,69,4],[12,65,4]], [[0,67,8],[8,64,4],[12,67,4]]],
+  [[[0,74,4],[4,72,4],[8,69,8]],           [[0,70,4],[4,69,4],[8,65,8]],
+   [[0,69,4],[4,72,4],[8,77,6],[14,76,2]], [[0,76,8],[8,72,4],[12,67,4]]],
+];
+function musicPlan(cycle){
+  return {
+    arp: MUSIC_ARPS[cycle % 3],
+    lead: cycle % 4 === 1 ? MUSIC_LEADS[0] : cycle % 4 === 3 ? MUSIC_LEADS[1] : null,
+    chords: MUSIC_CHORDS.map((c, b) => (b === 3 && cycle % 3 === 2) ? [45, 48, 52]      // C -> Am
+                                     : (b === 1 && cycle % 4 === 3) ? [43, 46, 50] : c), // Bb -> Gm
+    breakdown: cycle % 4 === 2,
+    fill: cycle % 5 === 4,
+  };
+}
 const MUSIC_SCREENS = ['signin', 'menu', 'loadout', 'inventory', 'auction', 'store', 'setup', 'results'];
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 function musicLevel(){ return 0.35 * (typeof SETTINGS.music === 'number' ? SETTINGS.music : 0.6); }
@@ -3008,12 +3038,16 @@ function musicTick(){
 function musicStep(i, t){
   const bus = MUSIC.bus; if(!bus) return;
   const s16 = i % 16, bar = Math.floor(i / 16) % 4, phrase = Math.floor(i / 64) % 4;
-  const chord = MUSIC_CHORDS[bar];
-  const arp = phrase === 1 || phrase === 2, drums = phrase >= 2;
+  const plan = musicPlan(Math.floor(i / 256));
+  const chord = plan.chords[bar];
+  const lead = plan.lead && (phrase === 1 || phrase === 2);
+  const arp = phrase === 1 || phrase === 2, drums = phrase >= 2 && !plan.breakdown;
+  const lastBar = phrase === 3 && bar === 3;
   if(s16 === 0){                                              // pad: the whole bar, two detuned saws a note
     const len = MUSIC_STEP * 16;
     const lp = AC.createBiquadFilter(); lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(500, t); lp.frequency.linearRampToValueAtTime(1100, t + len * 0.5); lp.frequency.linearRampToValueAtTime(600, t + len);
+    const open = plan.breakdown ? 1900 : 1100;
+    lp.frequency.setValueAtTime(500, t); lp.frequency.linearRampToValueAtTime(open, t + len * 0.5); lp.frequency.linearRampToValueAtTime(600, t + len);
     const g = AC.createGain();
     g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05, t + 0.7);
     g.gain.setValueAtTime(0.05, t + len - 0.6); g.gain.linearRampToValueAtTime(0.0001, t + len + 0.3);
@@ -3031,11 +3065,39 @@ function musicStep(i, t){
     o.connect(lp); lp.connect(g); g.connect(bus); o.start(t); o.stop(t + MUSIC_STEP * 2);
   }
   if(arp){                                                    // arpeggio: an octave up, into the echo
-    const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(chord[MUSIC_ARP[s16]] + 12);
-    const g = AC.createGain(); const a = s16 % 4 === 0 ? 0.045 : 0.028;
+    const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(chord[plan.arp[s16]] + (plan.breakdown ? 24 : 12));
+    // steps back when a melody is playing over it, so the two do not fight
+    const g = AC.createGain(); const a = (s16 % 4 === 0 ? 0.045 : 0.028) * (lead ? 0.55 : 1);
     g.gain.setValueAtTime(a, t); g.gain.exponentialRampToValueAtTime(0.0008, t + MUSIC_STEP * 1.5);
     o.connect(g); g.connect(bus); if(MUSIC.echo) g.connect(MUSIC.echo);
     o.start(t); o.stop(t + MUSIC_STEP * 1.6);
+  }
+  if(lead){                                                   // the melody: a soft lead, into the echo
+    for(const [st, note, len] of plan.lead[bar]){
+      if(st !== s16) continue;
+      const dur = MUSIC_STEP * len;
+      const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(note);
+      const vib = AC.createOscillator(); vib.frequency.value = 5.2;          // a little life in the held notes
+      const vg = AC.createGain(); vg.gain.value = 3; vib.connect(vg); vg.connect(o.detune);
+      const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1900;
+      const g = AC.createGain();
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.055, t + 0.03);
+      g.gain.setValueAtTime(0.05, t + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.0008, t + dur + 0.15);
+      o.connect(lp); lp.connect(g); g.connect(bus); if(MUSIC.echo) g.connect(MUSIC.echo);
+      o.start(t); o.stop(t + dur + 0.2); vib.start(t); vib.stop(t + dur + 0.2);
+    }
+  }
+  if(plan.fill && lastBar && s16 >= 8){                        // fill: sixteenth hats and a kick pickup into the next cycle
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(800, 4);
+    const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
+    const g = AC.createGain(); g.gain.setValueAtTime(0.018 + (s16 - 8) * 0.003, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.035);
+    src.connect(hp); hp.connect(g); g.connect(bus); src.start(t); src.stop(t + 0.05);
+    if(s16 === 14){
+      const o = AC.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      const g2 = AC.createGain(); g2.gain.setValueAtTime(0.18, t); g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.18);
+      o.connect(g2); g2.connect(bus); o.start(t); o.stop(t + 0.2);
+    }
   }
   if(drums && (s16 === 0 || s16 === 8)){                      // soft kick
     const o = AC.createOscillator(); o.type = 'sine';

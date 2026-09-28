@@ -94,5 +94,24 @@ ok('notes are queued ahead, so a slow frame cannot make it stumble', /AC\.curren
 ok('a hidden window stops it', /if\(document\.hidden\) musicStop\(true\);/.test(html));
 ok('saved music level is checked and defaults to 60%', /SETTINGS\.music  = \(typeof s\.music === 'number' && isFinite\(s\.music\)\) \? Math\.min\(1, Math\.max\(0, s\.music\)\) : 0\.6;/.test(html));
 
+/* ---- the music does not repeat for ~46 minutes ---- */
+{
+  const c3 = vm.createContext({});
+  vm.runInContext([line(/const MUSIC_BPM = [^\n]*;/), line(/const MUSIC_CHORDS = [^\n]*;/), line(/const MUSIC_ARPS = \[[\s\S]*?\n\];/),
+                   line(/const MUSIC_LEADS = \[[\s\S]*?\n\];/), lift('musicPlan')].join('\n') + '\nthis.plan = musicPlan; this.STEP = MUSIC_STEP; this.LEADS = MUSIC_LEADS; this.ARPS = MUSIC_ARPS;', c3);
+  const key = pl => [c3.ARPS.indexOf(pl.arp), pl.lead ? c3.LEADS.indexOf(pl.lead) : -1, pl.chords.map(c => c[0]).join('.'), pl.breakdown, pl.fill].join('|');
+  const seq = []; for(let c = 0; c < 240; c++) seq.push(key(c3.plan(c)));
+  let period = 0; for(let P = 1; P < 240; P++) if(seq.slice(0, 240 - P).every((v, k) => v === seq[k + P])){ period = P; break; }
+  const mins = period * 256 * c3.STEP / 60;
+  ok('the order of cycles only comes round again after ~46 minutes', period === 60 && mins > 45, period + ' cycles = ' + mins.toFixed(1) + ' min');
+  ok('  made of 24 different kinds of cycle', new Set(seq).size === 24, new Set(seq).size);
+  ok('  no two cycles in a row are the same', seq.every((v, k) => k === 0 || v !== seq[k - 1]));
+  const DMIN = new Set([2, 4, 5, 7, 9, 10, 0]);   // D E F G A Bb C, as pitch classes
+  const notes = c3.LEADS.flat(3).filter((x, k) => k % 3 === 1);
+  ok('every melody note is in D minor', notes.every(n => DMIN.has(n % 12)), notes.filter(n => !DMIN.has(n % 12)).join(',') || 'all');
+  ok('every melody note ends inside its bar', c3.LEADS.every(m => m.every(bar => bar.every(([st, , len]) => st + len <= 16))));
+  ok('melodies sit in a comfortable range (D4 to F5)', notes.every(n => n >= 62 && n <= 77));
+}
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);
