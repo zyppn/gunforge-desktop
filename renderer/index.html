@@ -2881,15 +2881,17 @@ function roomBus(){
   if(ROOM || !AC) return ROOM;
   try{
     // one generated impulse: a dense, fast-decaying tail, slightly different per ear
-    const len = Math.floor(AC.sampleRate * 1.2), ir = AC.createBuffer(2, len, AC.sampleRate);
+    const len = Math.floor(AC.sampleRate * 0.8), ir = AC.createBuffer(2, len, AC.sampleRate);
     for(let ch = 0; ch < 2; ch++){
       const d = ir.getChannelData(ch);
       for(let i = 0; i < len; i++) d[i] = (Math.random()*2 - 1) * Math.pow(1 - i/len, 3.4) * (i < 90 ? i/90 : 1);
     }
     const conv = AC.createConvolver(); conv.buffer = ir;
-    // the convolver normalises its impulse, so the tail comes out ~20 dB under the dry
-    // hit; 6x was measured to make a far shot (send 0.55) about a quarter echo
-    const g = AC.createGain(); g.gain.value = 6;
+    // The convolver normalises its impulse, so the tail comes out ~20 dB under the dry
+    // hit. First pass was a 1.2s tail at 6x with sends up to 0.55 - measured about 15%
+    // echo on a far shot, and it read as a big hall. Now 0.8s at 4.5x, sends to 0.4: an
+    // arena with walls, not a cathedral.
+    const g = AC.createGain(); g.gain.value = 4.5;
     conv.connect(g); g.connect(masterBus());
     ROOM = conv;
   }catch(e){ ROOM = null; }
@@ -2911,7 +2913,7 @@ function earAt(x, z, loud){
   const behind = fwd < 0 ? 1 + fwd * 0.45 : 1;                                  // up to 45% duller behind
   const cut = Math.max(500, Math.min(18000, 16000 * Math.exp(-d / (16 * loud)) * behind));
   const vol = loud / (1 + d / (EAR.REF * loud));
-  const wet = Math.max(0, Math.min(0.55, (d - 4) / 40));
+  const wet = Math.max(0, Math.min(0.4, (d - 4) / 45));
   return { vol, pan, cut, wet, d };
 }
 /* The output a placed sound plugs into: its own lowpass and panner, a dry path to the
@@ -3182,6 +3184,191 @@ function gunSound(type, vol, ear){
     }
   }catch(e){}
 }
+/* ---- combat sounds: near misses, taking hits, kills, death, reloads -----------------
+   Built like the gun voices: short layers of filtered noise and falling tones, with
+   something randomised in every one, so no two ever sound identical. */
+
+/* A tiny tone with a pitch fall - the other building block, next to noiseHit. */
+function toneHit(out, t, type, f0, f1, gain, dur){
+  const o = AC.createOscillator(); o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  if(f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(gain, t + Math.min(0.006, dur * 0.2));
+  g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
+  return o;
+}
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+/* ---- near misses ----
+   A round that passes close to your head without hitting you: the air it tears is
+   what you hear. Occasional by design - only close passes (under 1.6m), only a share of
+   those, and never more often than every ~0.2-0.45s - so a firefight has a few of them,
+   not a wall of them. A round that HIT you plays the impact instead, never both.
+   Four families, each randomised: a rising-and-falling whizz, a thin zip, a lower buzz,
+   and for the LS-1 the sharp supersonic crack of a round going faster than sound. */
+const WHIZ = { R: 1.6, nextOK: 0, lastHurt: -9 };
+function whizCheck(b, x, y, z, sniper){
+  if(!G || !G.me || G.me.dead || b.whizzed) return;
+  const d = Math.hypot(x - G.me.x, y - EYE, z - G.me.z);
+  const prev = b.whizD;
+  b.whizD = d;
+  if(prev === undefined || d <= prev) return;           // still closing in
+  b.whizzed = true;                                      // judged once, at its closest point
+  if(prev > WHIZ.R) return;
+  const now = performance.now() / 1000;
+  if(now < WHIZ.nextOK || now - WHIZ.lastHurt < 0.2) return;
+  if(Math.random() > 0.7) return;                        // some just go by unheard
+  WHIZ.nextOK = now + rnd(0.2, 0.45);
+  whizSound(x, z, 1 - prev / WHIZ.R, sniper);
+}
+function whizSound(x, z, closeness, sniper){
+  au(); if(!AC || !masterBus()) return;
+  try{
+    const ear = earAt(x, z, 1);
+    ear.cut = 18000; ear.wet = 0.06;                       // it is right by your head: no distance treatment
+    const out = earOut(ear), t = AC.currentTime, v = 0.05 + 0.1 * closeness;
+    if(sniper){
+      noiseHit(out, t, 500, 1.2, 'highpass', rnd(2600, 3400), 0.8, v * 3.2, 0.012);
+      noiseHit(out, t + 0.004, 2600, 2.2, 'bandpass', rnd(1600, 2200), 1.5, v * 1.2, rnd(0.08, 0.13));
+      return;
+    }
+    const kind = Math.floor(Math.random() * 3), dur = rnd(0.1, 0.22);
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(6000, 0.6);
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass';
+    const f0 = kind === 0 ? rnd(2600, 3800) : kind === 1 ? rnd(4200, 5600) : rnd(1400, 2000);
+    bp.Q.value = kind === 1 ? rnd(9, 14) : rnd(4, 8);
+    bp.frequency.setValueAtTime(f0 * 0.8, t);
+    bp.frequency.linearRampToValueAtTime(f0, t + dur * 0.35);            // rising as it arrives...
+    bp.frequency.exponentialRampToValueAtTime(f0 * rnd(0.35, 0.5), t + dur);   // ...falling as it leaves
+    const g = AC.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v * (kind === 1 ? 1.6 : 2.4), t + dur * 0.35);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    src.connect(bp); bp.connect(g); g.connect(out); src.start(t); src.stop(t + dur + 0.02);
+  }catch(e){}
+}
+
+/* ---- taking a hit ----
+   A dull body thud and a short slap, pitched a little differently every time; a
+   plate absorbing it adds a bright ring, so you can hear your shield working. A shotgun
+   blast is eight pellets in one frame - they merge into one bigger hit, not eight. */
+const HURT = { nextOK: 0, acc: 0, sh: false, queued: false };
+function hurtSound(dmg, shielded){
+  WHIZ.lastHurt = performance.now() / 1000;
+  // every pellet that lands in this frame adds up, and plays once when the frame is done
+  HURT.acc += dmg || 10; HURT.sh = HURT.sh || shielded;
+  if(HURT.queued) return;
+  HURT.queued = true;
+  queueMicrotask(() => { HURT.queued = false; const d = HURT.acc, sh = HURT.sh; HURT.acc = 0; HURT.sh = false; hurtPlay(d, sh); });
+}
+function hurtPlay(dmg, shielded){
+  au(); if(!AC || !masterBus()) return;
+  const now = performance.now() / 1000;
+  if(now < HURT.nextOK) return;
+  HURT.nextOK = now + 0.05;
+  try{
+    const out = masterBus(), t = AC.currentTime, k = Math.min(1, 0.45 + (dmg || 10) / 40);
+    toneHit(out, t, 'sine', rnd(95, 125), rnd(45, 55), 0.2 * k, rnd(0.1, 0.14));
+    noiseHit(out, t, 2400, 2.6, 'lowpass', rnd(380, 520), 0, 0.3 * k, rnd(0.07, 0.1));
+    noiseHit(out, t, 900, 3, 'bandpass', rnd(1500, 2200), 2, 0.12 * k, 0.03);
+    if(shielded){
+      toneHit(out, t, 'sine', rnd(1750, 1950), 0, 0.045, 0.22);
+      toneHit(out, t, 'sine', rnd(2550, 2750), 0, 0.03, 0.16);
+    }
+  }catch(e){}
+}
+
+/* ---- the kill confirm ----
+   A punch and a rising two-note chime: you know without looking. */
+function killSound(){
+  au(); if(!AC || !masterBus()) return;
+  try{
+    const out = masterBus(), t = AC.currentTime, up = rnd(0.985, 1.015);
+    toneHit(out, t, 'sine', 95, 48, 0.2, 0.13);
+    noiseHit(out, t, 600, 2, 'highpass', 3000, 0.7, 0.05, 0.02);
+    toneHit(out, t + 0.02, 'triangle', 880 * up, 0, 0.07, 0.2);
+    toneHit(out, t + 0.1, 'triangle', 1318.5 * up, 0, 0.075, 0.32);
+    toneHit(out, t + 0.1, 'sine', 2637 * up, 0, 0.02, 0.22);           // a little shimmer on top
+  }catch(e){}
+}
+
+/* ---- your death ----
+   A heavy hit, then the world falls away: a dark swell sinking in pitch and a low
+   tone going down with it. Short enough to be over before the death card settles. */
+function deathSound(){
+  au(); if(!AC || !masterBus()) return;
+  try{
+    const out = masterBus(), t = AC.currentTime;
+    toneHit(out, t, 'sine', 80, 34, 0.3, 0.35);
+    noiseHit(out, t, 2400, 2.2, 'lowpass', 600, 0, 0.35, 0.18);
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(44100, 0.4);
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1400, t + 0.05); lp.frequency.exponentialRampToValueAtTime(140, t + 1.0);
+    const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.09, t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 1.05);
+    src.connect(lp); lp.connect(g); g.connect(out); src.start(t); src.stop(t + 1.1);
+    toneHit(out, t + 0.06, 'triangle', 330, 82, 0.05, 0.9);
+  }catch(e){}
+}
+
+/* ---- reloads ----
+   Each class has its own routine, timed across its real reload length (so a faster
+   reload from parts plays faster): mag out, mag in, then the action. The Warden loads
+   shells one at a time and racks the pump; the Goliath opens its lid, swaps the box,
+   lays the belt and slams it shut. Other players' reloads are audible close by - a
+   reload is an opening, and everyone can hear it the same way. */
+const RELOAD_SEQ = {
+  'Pistol':        [[0.08,'click'], [0.16,'swish'], [0.58,'clack'], [0.84,'slide']],
+  'SMG':           [[0.1,'click'], [0.18,'swish'], [0.55,'clack'], [0.76,'pull'], [0.86,'slide']],
+  'Assault Rifle': [[0.1,'click'], [0.17,'swish'], [0.52,'clack'], [0.6,'click'], [0.84,'slide']],
+  'Shotgun':       [[0.14,'shell'], [0.32,'shell'], [0.5,'shell'], [0.68,'shell'], [0.84,'pump']],
+  'Sniper':        [[0.08,'boltup'], [0.28,'swish'], [0.56,'clack'], [0.84,'boltdown']],
+  'LMG':           [[0.08,'latch'], [0.28,'rattle'], [0.5,'clack'], [0.66,'rattle'], [0.84,'latch'], [0.93,'pull']],
+};
+function reloadPart(out, t, kind, v){
+  const r = rnd(0.94, 1.06);
+  switch(kind){
+    case 'click':    noiseHit(out, t, 500, 3, 'bandpass', 3400*r, 5, v * 0.9, 0.02); break;
+    case 'swish':    noiseHit(out, t, 4400, 1.2, 'bandpass', 1300*r, 1.2, v * 0.35, 0.12); break;
+    case 'clack':    noiseHit(out, t, 900, 3, 'bandpass', 1500*r, 2.5, v, 0.04);
+                     noiseHit(out, t + 0.012, 700, 3, 'lowpass', 700*r, 0, v * 0.8, 0.05); break;
+    case 'slide':    noiseHit(out, t, 800, 3, 'bandpass', 2500*r, 3, v * 0.8, 0.03);
+                     noiseHit(out, t + 0.05, 800, 3, 'bandpass', 3200*r, 4, v, 0.03); break;
+    case 'pull':     noiseHit(out, t, 2200, 1.6, 'bandpass', 2000*r, 2, v * 0.5, 0.07); break;
+    case 'shell':    noiseHit(out, t, 700, 3, 'bandpass', 2200*r, 3, v * 0.7, 0.025);
+                     noiseHit(out, t + 0.03, 1400, 2, 'bandpass', 1100*r, 1.5, v * 0.4, 0.06); break;
+    case 'pump':     noiseHit(out, t, 900, 3, 'bandpass', 1800*r, 2.5, v, 0.045);
+                     noiseHit(out, t + 0.13, 900, 3, 'bandpass', 2400*r, 3, v * 1.2, 0.04); break;
+    case 'boltup':   noiseHit(out, t, 700, 3, 'bandpass', 3100*r, 4, v * 0.8, 0.03);
+                     noiseHit(out, t + 0.08, 1800, 2, 'bandpass', 2000*r, 2, v * 0.5, 0.06); break;
+    case 'boltdown': noiseHit(out, t, 1800, 2, 'bandpass', 2000*r, 2, v * 0.5, 0.06);
+                     noiseHit(out, t + 0.07, 700, 3, 'bandpass', 2600*r, 3.5, v, 0.035); break;
+    case 'latch':    noiseHit(out, t, 700, 3, 'bandpass', 1200*r, 2, v, 0.05);
+                     noiseHit(out, t + 0.02, 500, 3, 'bandpass', 3600*r, 5, v * 0.6, 0.02); break;
+    case 'rattle':   for(let k = 0; k < 5; k++) noiseHit(out, t + k * rnd(0.025, 0.04), 400, 3, 'bandpass', rnd(2400, 3600), 5, v * 0.45, 0.018); break;
+  }
+}
+let RELOAD_PLAYING = null;     // the player's own: stopped if they die or the match ends mid-reload
+function reloadSound(type, ms, ear, own){
+  au(); if(!AC || !masterBus()) return;
+  try{
+    const seq = RELOAD_SEQ[type] || RELOAD_SEQ['Assault Rifle'];
+    const out = earOut(ear), t0 = AC.currentTime, len = Math.max(0.4, (ms || 1500) / 1000);
+    const v = own ? 0.11 : 0.11 * (ear ? ear.vol : 1);
+    if(v < 0.012) return;
+    // scheduled, but through one gain we can close: a death mid-reload must not finish it
+    const gate = AC.createGain(); gate.connect(out);
+    for(const [f, kind] of seq) reloadPart(gate, t0 + f * len, kind, v);
+    if(own){ reloadStop(); RELOAD_PLAYING = gate; }
+  }catch(e){}
+}
+function reloadStop(){
+  if(!RELOAD_PLAYING || !AC) return;
+  try{ RELOAD_PLAYING.gain.setTargetAtTime(0, AC.currentTime, 0.01); }catch(e){}
+  RELOAD_PLAYING = null;
+}
+
 function sfx(kind, vol, ear){
   if(!AC) return;
   try{
@@ -5755,7 +5942,7 @@ function dropWeaponFromMesh(mesh){
    no damage flash. Nothing errored - the live copy just quietly did less. One function
    now, because a second copy is how it drifted in the first place. */
 function playerFlinch(dmg){
-  sfx('hurt');
+  hurtSound(dmg, !!(G && G.me && G.me.shield > 0));
   const hitF = Math.min(1, dmg / 30);
   G.shake     = Math.min(1, G.shake + 0.12 + hitF * 0.25);
   G.kickPitch = Math.min(0.085, G.kickPitch + 0.006 + hitF * 0.008);
@@ -5948,7 +6135,7 @@ function fire(e, dir){
   }
   if(e.isPlayer){
     // your own gun: centred and full, with a little of the arena answering it
-    gunSound(e.wep.type, 1, { pan: 0, cut: 18000, wet: 0.15 });
+    gunSound(e.wep.type, 1, { pan: 0, cut: 18000, wet: 0.1 });
     // violence scales with the shot: energy = dmg x pellets, plus class mass
     const E = w.dmg * w.pellets;
     const mass = w.type==='LMG' ? 0.5 : w.type==='Shotgun' ? 0.35 : w.type==='Sniper' ? 0.45 : 0;
@@ -5978,7 +6165,8 @@ function fire(e, dir){
 function startReload(e){
   if(e.reloading || e.wep.reload<=0 || e.ammo>=e.wep.mag) return;
   e.reloading = true; e.reloadT = G.elapsed + e.wep.reload/1000;
-  if(e.isPlayer) sfx('reload');
+  if(e.isPlayer) reloadSound(e.wep.type, e.wep.reload, null, true);
+  else if(G.me && Math.hypot(e.x - G.me.x, e.z - G.me.z) < 14) reloadSound(e.wep.type, e.wep.reload, earAt(e.x, e.z, 0.6));
 }
 function damage(t, amount, src, isCrit){
   if(t.dead) return;
@@ -6018,12 +6206,13 @@ function damage(t, amount, src, isCrit){
 }
 function kill(t, src){
   t.dead = true; t.deaths++;
+  if(t.isPlayer){ reloadStop(); deathSound(); }
   t.burnT = 0; t.slowT = 0; t.burnSrc = null; t.burnSpread = false; t.reloading = false;
   t.target = null; t.alertSrc = null; t.alertT = 0; t.path = null;
   spawnBurst(t.x, t.z, t.grunt ? 0x8A4640 : 0xE8A33D);
   if(src && src!==t){
     src.kills++;
-    if(src.isPlayer) sfx('kill');
+    if(src.isPlayer) killSound();
     if(src.wep && src.wep.abilities.has('killshield')){
       const before = src.shield;
       src.shield = Math.min(LoadoutCore.BULWARK.cap, src.shield + LoadoutCore.BULWARK.perKill);
@@ -7105,6 +7294,12 @@ function tick(now){
     }
   }
 
+  // near misses: hostile rounds passing close to your head
+  for(const b of G.bullets){
+    if(b.owner === G.me || !hostile(b.owner, G.me)) continue;
+    const bp = b.mesh.position;
+    whizCheck(b, bp.x, bp.y, bp.z, b.wid === 'ls1');
+  }
   // fx
   for(let i=G.fx.length-1;i>=0;i--){
     const f = G.fx[i];
@@ -7269,6 +7464,7 @@ function enterGameScreen(){
   tryLock();
 }
 function abandonMatch(){
+  reloadStop();
   if(!G || !G.running) return;
   liveLeave();
   G.running = false; G = null; paused = false; settingsOpen = false;
@@ -7279,6 +7475,7 @@ function abandonMatch(){
   renderMenu();
 }
 function endMatch(campWin){
+  reloadStop();
   if(!G || !G.running) return;
   G.running = false; paused = false; settingsOpen = false;
   hideDeathCard(); G.killcam = null;   // the loop stops here; nothing else would
@@ -7559,8 +7756,9 @@ function startLiveMatch(){
     });
     room.onMessage('kill', m => {
       feed(m.killer+'  ⟿  '+m.victim, m.killer===P.name || m.victim===P.name);
-      if(m.killer === P.name){ sfx('kill'); noteKill(m.victim, false); }
+      if(m.killer === P.name){ killSound(); noteKill(m.victim, false); }
       if(m.victim === P.name){
+        reloadStop(); deathSound();
         noteKill(m.killer, true);
         // p.eq is already synced for every player, so the killer's full build
         // is sitting in state - no extra round trip to show it.
@@ -7612,7 +7810,7 @@ function startLiveMatch(){
                            wire[i+1] + (Math.random()-0.5)*0.05,
                            wire[i+2] + (Math.random()-0.5)*0.05, false);
         scene.add(tm);
-        live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6 });
+        live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6, sn: w.type === 'Sniper' });
       }
       const sx = m.x0 != null ? m.x0 : (wire[0]||0), sz = m.z0 != null ? m.z0 : (wire[2]||0);
       const ear = earAt(sx, sz, GUN_LOUD[w.type] || 0.85);
@@ -7788,7 +7986,7 @@ function liveResetWeapon(){
   if(!G || !G.me) return;
   const me = G.me;
   me.ammo = me.wep.mag;
-  me.reloading = false; me.reloadT = 0;
+  me.reloading = false; me.reloadT = 0; reloadStop();
   me.fireT = 0; me.lastFire = -9999;
   G.recoil = 0; G.kickPitch = 0; G.kickYaw = 0; G.shake = 0;
 }
@@ -7947,6 +8145,12 @@ function liveTick(dt){
     // (it taxes movement speed and spread with them) but never broadcast, so remote
     // players never shouldered a weapon and never tilted to reload.
     poseUpper(u, t.ads || 0, !!t.reloading, dt, 5);
+    // a remote player starting a reload is heard, close by, like a bot's
+    if(t.reloading && !r.wasReloading && Math.hypot(r.cx - G.me.x, r.cz - G.me.z) < 14){
+      const rw = WEAPONS.find(x => x.id === (t.wid || 'm17')) || WEAPONS[0];
+      reloadSound(rw.type, rw.reload, earAt(r.cx, r.cz, 0.6));
+    }
+    r.wasReloading = !!t.reloading;
   });
 
   // ---- remote tracers (cosmetic) ----
@@ -7969,6 +8173,7 @@ function liveTick(dt){
         continue;
       }
       q.set(nx, ny, nz);
+      whizCheck(t2, nx, ny, nz, t2.sn);
     }
   }
 

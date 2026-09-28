@@ -113,5 +113,59 @@ ok('saved music level is checked and defaults to 60%', /SETTINGS\.music  = \(typ
   ok('melodies sit in a comfortable range (D4 to F5)', notes.every(n => n >= 62 && n <= 77));
 }
 
+/* ---- near misses ---- */
+{
+  let played = [], clock = 100;
+  const c4 = vm.createContext({ Math: Object.create(Math), G: { me: { x: 0, z: 0, dead: false } }, EYE: 1.6,
+    performance: { now: () => clock * 1000 }, whizSound: (x, z, close, sn) => played.push({ x, close, sn }) });
+  c4.Math.random = () => 0.1;                              // always inside the 70% that are heard
+  vm.runInContext([line(/const WHIZ = \{[^\n]*;/), line(/const rnd = [^\n]*;/), lift('whizCheck')].join('\n') + '\nthis.WHIZ = WHIZ;', c4);
+  // fly a round along x at a given miss distance, sampled like frames
+  const fly = (miss, sn) => { const b = {}; for(let x = -10; x <= 10; x += 0.7) c4.whizCheck(b, x, 1.6, miss, sn); return b; };
+  fly(1.0); ok('a round passing 1m from your head whizzes', played.length === 1, played.length);
+  ok('  once, at its closest point, from the side it passed', played.length === 1 && Math.abs(played[0].x) < 0.8);
+  clock += 5; fly(3.0); ok('a round 3m away is silent', played.length === 1);
+  clock += 5; fly(0.8); fly(0.8); fly(0.8);
+  ok('a burst is not a wall of whizzes (rate-limited)', played.length === 2, played.length);
+  clock += 5; c4.WHIZ.lastHurt = clock; fly(0.5);
+  ok('a round that hit you plays the impact, not a whizz', played.length === 2);
+  clock += 5; fly(0.6, true); ok('the LS-1 cracks instead', played.length === 3 && played[2].sn === true);
+  c4.Math.random = () => 0.9; clock += 5; fly(0.5);
+  ok('some close passes go by unheard - occasional, by design', played.length === 3);
+}
+/* ---- taking hits ---- */
+{
+  const plays = []; const q = [];
+  const c5 = vm.createContext({ WHIZ: { lastHurt: 0 }, performance: { now: () => 0 }, queueMicrotask: f => q.push(f),
+    hurtPlay: (d, sh) => plays.push([d, sh]) });
+  vm.runInContext([line(/const HURT = \{[^\n]*;/), lift('hurtSound')].join('\n'), c5);
+  for(let k = 0; k < 8; k++) c5.hurtSound(9, k === 3);
+  q.forEach(f => f());
+  ok('eight shotgun pellets in one frame are ONE hit, carrying all the damage', plays.length === 1 && plays[0][0] === 72, JSON.stringify(plays));
+  ok('  and if any pellet hit a shield, the ring plays', plays[0][1] === true);
+}
+ok('the impact rings when a shield takes the hit', /hurtSound\(dmg, !!\(G && G\.me && G\.me\.shield > 0\)\)/.test(lift('playerFlinch')));
+ok('kills use the new confirm, offline and live', (html.match(/killSound\(\);/g) || []).length >= 2 && !/sfx\('kill'\); noteKill/.test(html));
+ok('your death has a sound, offline and live', /if\(t\.isPlayer\)\{ reloadStop\(\); deathSound\(\); \}/.test(lift('kill')) && /reloadStop\(\); deathSound\(\);/.test(html));
+/* ---- reloads ---- */
+{
+  const c6 = vm.createContext({});
+  vm.runInContext(line(/const RELOAD_SEQ = \{[\s\S]*?\n\};/) + '\nthis.S = RELOAD_SEQ;', c6);
+  const S = c6.S;
+  ok('every class has its own reload', ['Pistol','SMG','Assault Rifle','Shotgun','Sniper','LMG'].every(t => S[t] && S[t].length >= 4));
+  ok('  each step lands inside the reload, in order', Object.values(S).every(q => q.every(([f], k) => f > 0 && f < 1 && (k === 0 || f > q[k-1][0]))));
+  ok('  the Warden loads four shells and racks the pump', S.Shotgun.filter(x => x[1] === 'shell').length === 4 && S.Shotgun[S.Shotgun.length - 1][1] === 'pump');
+  ok('  the LS-1 works its bolt; the Goliath opens and slams its lid', S.Sniper[0][1] === 'boltup' && S.Sniper.some(x => x[1] === 'boltdown') && S.LMG.filter(x => x[1] === 'latch').length === 2);
+  const names = new Set(Object.values(S).map(q => q.map(x => x[1]).join()));
+  ok('  no two classes share a routine', names.size === 6);
+}
+ok('reloads follow the weapon\'s REAL reload time (parts that speed it up speed the sound up)', /reloadSound\(e\.wep\.type, e\.wep\.reload, null, true\)/.test(lift('startReload')));
+ok('other players\' reloads are heard close by (bots and PvP)', /reloadSound\(e\.wep\.type, e\.wep\.reload, earAt\(e\.x, e\.z, 0\.6\)\)/.test(lift('startReload')) && /reloadSound\(rw\.type, rw\.reload, earAt\(r\.cx, r\.cz, 0\.6\)\)/.test(html));
+ok('a reload cut short by death or the match ending goes quiet',
+   /reloadStop\(\)/.test(lift('kill')) && /reloadStop\(\)/.test(lift('abandonMatch')) && /reloadStop\(\)/.test(lift('endMatch')) && /reloadStop\(\)/.test(lift('liveResetWeapon')));
+/* ---- echo, toned down ---- */
+ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends to 0.4)',
+   /AC\.sampleRate \* 0\.8\)/.test(lift('roomBus')) && /g\.gain\.value = 4\.5;/.test(lift('roomBus')) && /Math\.min\(0\.4, \(d - 4\) \/ 45\)/.test(lift('earAt')));
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);
