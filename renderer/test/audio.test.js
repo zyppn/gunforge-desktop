@@ -56,8 +56,43 @@ ok('explosions are placed', (html.match(/sfx\('boom', ear\.vol/g) || []).length 
 ok('your own gun stays centred', /gunSound\(e\.wep\.type, 1, \{ pan: 0,/.test(html));
 ok('UI sounds are NOT placed (earOut with no ear = the plain master bus)', /if\(!ear \|\| !m\) return m;/.test(lift('earOut')));
 ok('stereo panning, not HRTF (HRTF is too heavy for 2018 Macs)', /createStereoPanner/.test(lift('earOut')) && !/createPanner\(/.test(html));
-ok('shots reuse cached noise - no fresh random buffer per bullet', !/createBuffer\(/.test(lift('gunSound')) && /noiseBuf\(s\.n/.test(lift('gunSound')));
+ok('shots reuse cached noise - no fresh random buffer per bullet', !/createBuffer\(/.test(lift('gunSound') + lift('noiseHit')) && /noiseBuf\(n, curve\)/.test(lift('noiseHit')));
 ok('one shared room reverb, built once', /if\(ROOM \|\| !AC\) return ROOM;/.test(lift('roomBus')));
+
+/* ---- weapon voices: each class recognisable by ear ---- */
+{
+  const c2 = vm.createContext({});
+  vm.runInContext(line(/const GUNVOICE = \{[\s\S]*?\n\};/) + '\nthis.V = GUNVOICE;', c2);
+  const V = c2.V, types = Object.keys(V);
+  ok('all six classes have their own voice', ['Pistol','SMG','Assault Rifle','Shotgun','Sniper','LMG'].every(t => V[t]));
+  const bodies = types.map(t => V[t].body.f);
+  ok('every class sits at its own pitch (no two bodies within 8% of each other)',
+     bodies.every((f, i) => bodies.every((g, j) => i === j || Math.abs(f - g) / Math.max(f, g) > 0.08)), bodies.join(' / '));
+  ok('the SMG is the brightest and the shotgun the deepest', V.SMG.body.f === Math.max(...bodies) && V.Shotgun.body.f === Math.min(...bodies));
+  ok('the heavy guns have weight (a low thump); the SMG does not', ['Shotgun','Sniper','LMG'].every(t => V[t].thump) && !V.SMG.thump);
+  ok('the Warden pumps and the LS-1 cycles its bolt - and only they do',
+     V.Shotgun.mech.kind === 'pump' && V.Sniper.mech.kind === 'bolt' && types.filter(t => V[t].mech).length === 2);
+  ok('  the action is timed inside the fire interval (pump 0.36s < 0.70s, bolt 0.47s < 1.10s)',
+     V.Shotgun.mech.t + 0.13 < 0.7 && V.Sniper.mech.t + 0.09 < 1.1);
+  ok('  and heard only close by', /if\(v\.mech && vol > 0\.25\)/.test(lift('gunSound')));
+  ok('loudness per class matches the old mix (nothing suddenly louder)',
+     V.Pistol.g === 0.13 && V.SMG.g === 0.10 && V['Assault Rifle'].g === 0.15 && V.Shotgun.g === 0.26 && V.Sniper.g === 0.24 && V.LMG.g === 0.17);
+  ok('gun layers go through the placed output (direction and distance still apply)', /g\.connect\(out\)/.test(lift('noiseHit')) && /const t = AC\.currentTime, out = earOut\(ear\)/.test(lift('gunSound')));
+}
+
+/* ---- menu music ---- */
+ok('music plays on the menus and stops when a match starts', /if\(MUSIC_SCREENS\.includes\(id\)\) musicStart\(\); else if\(id === 'game'\) musicStop\(\);/.test(lift('show')));
+{
+  const scr = line(/const MUSIC_SCREENS = \[[^\n]*\];/);
+  ok('  never in the game screen', !/'game'/.test(scr) && /'menu'/.test(scr) && /'results'/.test(scr));
+}
+ok('it has its own slider, in home Settings and in the match panel', /oninput="setMusicPct\(this\.value/.test(html) && /id="mussl"/.test(html));
+ok('0 turns it off', /if\(musicLevel\(\) <= 0\)\{ musicStop\(true\); return; \}/.test(lift('musicSetLevel')) && /musicLevel\(\) <= 0/.test(lift('musicStart')));
+ok('it sits under the master volume', /MUSIC\.bus\.connect\(masterBus\(\)\)/.test(lift('musicBus')));
+ok('it fades in and out instead of cutting', /linearRampToValueAtTime\(musicLevel\(\), t \+ 2\.5\)/.test(lift('musicStart')) && /linearRampToValueAtTime\(0,/.test(lift('musicStop')));
+ok('notes are queued ahead, so a slow frame cannot make it stumble', /AC\.currentTime \+ 0\.25/.test(lift('musicTick')));
+ok('a hidden window stops it', /if\(document\.hidden\) musicStop\(true\);/.test(html));
+ok('saved music level is checked and defaults to 60%', /SETTINGS\.music  = \(typeof s\.music === 'number' && isFinite\(s\.music\)\) \? Math\.min\(1, Math\.max\(0, s\.music\)\) : 0\.6;/.test(html));
 
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);

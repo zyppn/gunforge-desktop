@@ -125,7 +125,7 @@ function play(ctx, t0, secs, fps, hitchEvery){
 }
 ok('saved settings are checked: a bad value falls back to AUTO', /SETTINGS\.gfx\s*= GFX_MODES\.includes\(s\.gfx\) \? s\.gfx : 'auto';/.test(html));
 ok('AUTO is the default, and RESET TO DEFAULT restores it',
-   /let SETTINGS = \{[^}]*gfx: 'auto'/.test(html) && (html.match(/SETTINGS = \{ volume:0\.8, sens:1\.0, gfx:'auto'/g) || []).length === 2);
+   /let SETTINGS = \{[^}]*gfx: 'auto'/.test(html) && (html.match(/SETTINGS = \{ volume:0\.8, music:0\.6, sens:1\.0, gfx:'auto'/g) || []).length === 2);
 ok('LOW turns anti-aliasing off (a fresh canvas, since a WebGL context keeps its first settings)',
    /const aa = gfxMode\(\) !== 'low';/.test(html) && /antialias:aa/.test(html) && /cv\.replaceWith\(fresh\)/.test(html));
 ok('  and the fresh canvas keeps its click-to-aim listener', /cv\.replaceWith\(fresh\); cv = fresh;\s*cv\.addEventListener\('mousedown', onCanvasDown\)/.test(html));

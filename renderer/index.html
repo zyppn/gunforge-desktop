@@ -440,6 +440,8 @@
               <div><div class="eyebrow">Audio &amp; mouse</div>
                 <div class="sldrow"><label>Master volume <span id="volval">80%</span></label>
                   <input type="range" id="volsl" min="0" max="100" value="80"></div>
+                <div class="sldrow"><label>Music <span id="musval">60%</span></label>
+                  <input type="range" id="mussl" min="0" max="100" value="60"></div>
                 <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
                   <input type="range" id="senssl" min="20" max="250" value="100"></div>
                 <div class="gfxhost"></div>
@@ -1447,6 +1449,8 @@ function esc(t){ return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&l
 function show(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
   $('#'+id).classList.add('on');
+  // music belongs to the menus; a match gets your full attention
+  try{ if(MUSIC_SCREENS.includes(id)) musicStart(); else if(id === 'game') musicStop(); }catch(e){}
 }
 function toast(msg){
   const d = document.createElement('div');
@@ -2161,6 +2165,8 @@ function menuSettings(){
    +'<div class="eyebrow">Audio &amp; mouse</div>'
    +'<div class="sldrow"><label>Master volume <span id="mvolval">'+Math.round(SETTINGS.volume*100)+'%</span></label>'
    +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.volume*100)+'" oninput="setVolPct(this.value, \'mvolval\')"></div>'
+   +'<div class="sldrow"><label>Music <span id="mmusval">'+Math.round(SETTINGS.music*100)+'%</span></label>'
+   +'<input type="range" min="0" max="100" value="'+Math.round(SETTINGS.music*100)+'" oninput="setMusicPct(this.value, \'mmusval\')"></div>'
    +'<div class="sldrow"><label>Mouse sensitivity <span id="msensval">'+SETTINGS.sens.toFixed(2)+'x</span></label>'
    +'<input type="range" min="20" max="250" value="'+Math.round(SETTINGS.sens*100)+'" oninput="setSensPct(this.value, \'msensval\')"></div>'
    +'<div class="gfxhost">'+gfxHtml()+'</div>'
@@ -2247,6 +2253,13 @@ function syncHintLine(){
     + ' \u00b7 PAUSE ' + k('ESC');
 }
 
+function setMusicPct(v, labelId){
+  SETTINGS.music = (+v)/100;
+  const el = document.getElementById(labelId); if(el) el.textContent = v+'%';
+  saveSettings(); musicSetLevel();
+  // turned back up from 0 while on a menu: bring it back
+  if(SETTINGS.music > 0 && MUSIC_SCREENS.includes((document.querySelector('.screen.on')||{}).id)) musicStart();
+}
 function setVolPct(v, labelId){
   SETTINGS.volume = (+v)/100;
   if(masterG) masterG.gain.value = SETTINGS.volume;
@@ -2261,7 +2274,8 @@ function setSensPct(v, labelId){
 function resetSettingsAll(){
   bindCapture = null;
   BINDS = Object.assign({}, DEFAULT_BINDS);
-  SETTINGS = { volume:0.8, sens:1.0, gfx:'auto', binds: BINDS };   // RESET TO DEFAULT restores the keys too
+  SETTINGS = { volume:0.8, music:0.6, sens:1.0, gfx:'auto', binds: BINDS };   // RESET TO DEFAULT restores the keys too
+  try{ musicSetLevel(); if(MUSIC_SCREENS.includes((document.querySelector('.screen.on')||{}).id)) musicStart(); }catch(e){}
   gfxChanged();
   if(masterG) masterG.gain.value = 0.8;
   saveSettings(); sfx('reload');
@@ -2818,7 +2832,7 @@ function sanitizeBinds(b){
 const EYE = 1.6, PR = 0.5;
 
 /* --- settings (persisted) --- */
-let SETTINGS = { volume: 0.8, sens: 1.0, gfx: 'auto', binds: Object.assign({}, DEFAULT_BINDS) };
+let SETTINGS = { volume: 0.8, music: 0.6, sens: 1.0, gfx: 'auto', binds: Object.assign({}, DEFAULT_BINDS) };
 let bindCapture = null;   // set while the settings panel is waiting for a key
 async function loadSettings(){
   const s = await sGet('settings');
@@ -2827,6 +2841,7 @@ async function loadSettings(){
     SETTINGS.sens   = (typeof s.sens === 'number' && isFinite(s.sens)) ? Math.min(2.5, Math.max(0.2, s.sens)) : 1.0;
     SETTINGS.binds  = sanitizeBinds(s.binds);
     SETTINGS.gfx    = GFX_MODES.includes(s.gfx) ? s.gfx : 'auto';
+    SETTINGS.music  = (typeof s.music === 'number' && isFinite(s.music)) ? Math.min(1, Math.max(0, s.music)) : 0.6;
     BINDS = SETTINGS.binds;
     if(typeof s.invSort === 'string' && INV_SORTS.some(function(d){ return d[0] === s.invSort; })){
       SETTINGS.invSort = s.invSort; invSort = s.invSort;
@@ -2932,35 +2947,176 @@ function noiseBuf(n, curve){
 /* per-weapon gunshots: character + loudness per class; placement comes from `ear` */
 // how far each class carries (a sniper is heard across the map, an SMG is not)
 const GUN_LOUD = { 'Sniper':1.35, 'Shotgun':1.25, 'LMG':1.05, 'Assault Rifle':0.85, 'Pistol':0.8, 'SMG':0.65 };
-const GUNSND = {
-  'Pistol':        {n:1600, f:1100, g:0.13, d:0.09},
-  'SMG':           {n:1100, f:1500, g:0.10, d:0.07},
-  'Assault Rifle': {n:2000, f:950,  g:0.15, d:0.11},
-  'Shotgun':       {n:4200, f:420,  g:0.26, d:0.22, thump:70},
-  'Sniper':        {n:3800, f:700,  g:0.24, d:0.30, thump:110},
-  'LMG':           {n:2400, f:800,  g:0.17, d:0.13, thump:90},
+/* ---- menu music ---------------------------------------------------------------------
+   Composed in code, like every other sound here: no files to license or ship. A slow
+   D-minor loop (i - VI - III - VII: Dm, Bb, F, C, one bar each at 84 BPM) that builds
+   and breathes in four-bar phrases - pad and bass, then an echoing arpeggio, then soft
+   drums, then the arpeggio drops out again - so it does not feel like a short loop.
+
+   Menus only. It fades out when a match starts, because in a match your ears are
+   busy: footsteps and gunfire are information, and music would bury them. Its own
+   volume slider; 0 turns it off. Sits under the master volume like everything else.
+   A real, commissioned track can replace it later by swapping musicStep() for a file. */
+const MUSIC = { on: false, bus: null, echo: null, timer: null, next: 0, step: 0 };
+const MUSIC_BPM = 84, MUSIC_STEP = 60 / MUSIC_BPM / 4;          // one sixteenth note
+const MUSIC_CHORDS = [[50, 53, 57], [46, 50, 53], [53, 57, 60], [48, 52, 55]];   // Dm Bb F C (midi)
+const MUSIC_ARP = [0, 1, 2, 1, 2, 0, 1, 2, 0, 2, 1, 0, 2, 1, 0, 1];
+const MUSIC_SCREENS = ['signin', 'menu', 'loadout', 'inventory', 'auction', 'store', 'setup', 'results'];
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+function musicLevel(){ return 0.35 * (typeof SETTINGS.music === 'number' ? SETTINGS.music : 0.6); }
+function musicBus(){
+  if(MUSIC.bus || !AC || !masterBus()) return MUSIC.bus;
+  MUSIC.bus = AC.createGain(); MUSIC.bus.gain.value = 0; MUSIC.bus.connect(masterBus());
+  // dotted-eighth echo for the arpeggio: the music's only effect
+  const d = AC.createDelay(1); d.delayTime.value = MUSIC_STEP * 3;
+  const fb = AC.createGain(); fb.gain.value = 0.38;
+  const tone = AC.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 2400;
+  d.connect(tone); tone.connect(fb); fb.connect(d); tone.connect(MUSIC.bus);
+  MUSIC.echo = d;
+  return MUSIC.bus;
+}
+function musicStart(){
+  au();
+  if(MUSIC.on || !AC || musicLevel() <= 0 || document.hidden) return;
+  if(!musicBus()) return;
+  MUSIC.on = true;
+  const t = AC.currentTime;
+  MUSIC.bus.gain.cancelScheduledValues(t);
+  MUSIC.bus.gain.setValueAtTime(MUSIC.bus.gain.value, t);
+  MUSIC.bus.gain.linearRampToValueAtTime(musicLevel(), t + 2.5);   // eases in, never jumps
+  if(!MUSIC.timer){ MUSIC.next = t + 0.12; MUSIC.step = 0; MUSIC.timer = setInterval(musicTick, 60); }
+}
+function musicStop(fast){
+  if(!MUSIC.on || !AC || !MUSIC.bus) return;
+  MUSIC.on = false;
+  const t = AC.currentTime, len = fast ? 0.4 : 1.2;
+  MUSIC.bus.gain.cancelScheduledValues(t);
+  MUSIC.bus.gain.setValueAtTime(MUSIC.bus.gain.value, t);
+  MUSIC.bus.gain.linearRampToValueAtTime(0, t + len);
+  clearInterval(MUSIC.timer); MUSIC.timer = null;             // notes already queued ring out under the fade
+}
+function musicSetLevel(){
+  if(!MUSIC.bus || !AC) return;
+  if(musicLevel() <= 0){ musicStop(true); return; }
+  if(MUSIC.on){ const t = AC.currentTime; MUSIC.bus.gain.cancelScheduledValues(t); MUSIC.bus.gain.setTargetAtTime(musicLevel(), t, 0.08); }
+}
+// queue notes a quarter second ahead, so a busy frame never makes the music stumble
+function musicTick(){
+  if(!AC) return;
+  while(MUSIC.next < AC.currentTime + 0.25){ musicStep(MUSIC.step, MUSIC.next); MUSIC.step++; MUSIC.next += MUSIC_STEP; }
+}
+function musicStep(i, t){
+  const bus = MUSIC.bus; if(!bus) return;
+  const s16 = i % 16, bar = Math.floor(i / 16) % 4, phrase = Math.floor(i / 64) % 4;
+  const chord = MUSIC_CHORDS[bar];
+  const arp = phrase === 1 || phrase === 2, drums = phrase >= 2;
+  if(s16 === 0){                                              // pad: the whole bar, two detuned saws a note
+    const len = MUSIC_STEP * 16;
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(500, t); lp.frequency.linearRampToValueAtTime(1100, t + len * 0.5); lp.frequency.linearRampToValueAtTime(600, t + len);
+    const g = AC.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05, t + 0.7);
+    g.gain.setValueAtTime(0.05, t + len - 0.6); g.gain.linearRampToValueAtTime(0.0001, t + len + 0.3);
+    lp.connect(g); g.connect(bus);
+    for(const n of chord) for(const det of [-7, 7]){
+      const o = AC.createOscillator(); o.type = 'sawtooth'; o.frequency.value = mtof(n); o.detune.value = det;
+      o.connect(lp); o.start(t); o.stop(t + len + 0.35);
+    }
+  }
+  if(s16 % 2 === 0 && s16 !== 6 && s16 !== 14){               // bass: eighths, with two held back for a lope
+    const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(chord[0] - 12);
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
+    const g = AC.createGain(); const a = s16 % 8 === 0 ? 0.16 : 0.1;
+    g.gain.setValueAtTime(a, t); g.gain.exponentialRampToValueAtTime(0.0008, t + MUSIC_STEP * 1.8);
+    o.connect(lp); lp.connect(g); g.connect(bus); o.start(t); o.stop(t + MUSIC_STEP * 2);
+  }
+  if(arp){                                                    // arpeggio: an octave up, into the echo
+    const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(chord[MUSIC_ARP[s16]] + 12);
+    const g = AC.createGain(); const a = s16 % 4 === 0 ? 0.045 : 0.028;
+    g.gain.setValueAtTime(a, t); g.gain.exponentialRampToValueAtTime(0.0008, t + MUSIC_STEP * 1.5);
+    o.connect(g); g.connect(bus); if(MUSIC.echo) g.connect(MUSIC.echo);
+    o.start(t); o.stop(t + MUSIC_STEP * 1.6);
+  }
+  if(drums && (s16 === 0 || s16 === 8)){                      // soft kick
+    const o = AC.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+    const g = AC.createGain(); g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.22);
+    o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.24);
+  }
+  if(drums && s16 % 4 === 2){                                 // hat on the offbeats
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(800, 4);
+    const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
+    const g = AC.createGain(); g.gain.setValueAtTime(s16 === 10 ? 0.035 : 0.022, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.04);
+    src.connect(hp); hp.connect(g); g.connect(bus); src.start(t); src.stop(t + 0.05);
+  }
+}
+// a hidden window stops (timers are throttled there, and nobody is listening)
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden) musicStop(true);
+  else { const on = document.querySelector('.screen.on'); if(on && MUSIC_SCREENS.includes(on.id)) musicStart(); }
+});
+
+/* ---- weapon voices ------------------------------------------------------------------
+   Every gun used to be the same sound through a different lowpass - one noise burst,
+   louder or duller. Now each class is built from layers, and the layers are what make
+   it recognisable by ear:
+     crack   the first few milliseconds: bright, sharp, the part that says "gunshot"
+     body    band-limited noise at the class's own pitch - where one gun differs from another
+     thump   a falling low sine: weight, only on the heavy guns
+     rattle  a second, smaller report right behind the first (the LMG's belt, the SMG's buzz)
+     mech    the action cycling after the shot - the Warden's pump, the LS-1's bolt. Only
+             close by: it is quiet, and it tells you the other player is between shots.
+   Loudness per class is unchanged from the old table, so the mix does not shift. */
+const GUNVOICE = {
+  'Pistol':        { g:0.13, crack:{f:3200, d:0.006, a:0.55}, body:{f:1500, q:1.1, d:0.085}, thump:{f:150, d:0.05, a:0.45} },
+  'SMG':           { g:0.10, crack:{f:4200, d:0.004, a:0.6},  body:{f:2300, q:1.3, d:0.05},  rattle:{t:0.011, a:0.35} },
+  'Assault Rifle': { g:0.15, crack:{f:3000, d:0.006, a:0.5},  body:{f:1100, q:0.9, d:0.11},  thump:{f:115, d:0.08, a:0.55} },
+  'Shotgun':       { g:0.26, crack:{f:2200, d:0.008, a:0.35}, body:{f:620,  q:0.6, d:0.24},  thump:{f:72, d:0.2, a:0.95},
+                     mech:{t:0.36, kind:'pump'} },
+  'Sniper':        { g:0.24, crack:{f:2600, d:0.011, a:0.9},  body:{f:820,  q:0.8, d:0.3},   thump:{f:95, d:0.26, a:0.85},
+                     mech:{t:0.47, kind:'bolt'} },
+  'LMG':           { g:0.17, crack:{f:2800, d:0.006, a:0.45}, body:{f:680,  q:0.75, d:0.14}, thump:{f:88, d:0.1, a:0.7},
+                     rattle:{t:0.014, a:0.3} },
 };
+// one short filtered-noise burst: the building block of every layer
+function noiseHit(out, t, n, curve, type, f, q, gain, dur, rate){
+  const src = AC.createBufferSource(); src.buffer = noiseBuf(n, curve);
+  src.playbackRate.value = rate || 1;
+  const fl = AC.createBiquadFilter(); fl.type = type; fl.frequency.value = f; if(q) fl.Q.value = q;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  src.connect(fl); fl.connect(g); g.connect(out); src.start(t); src.stop(t + dur + 0.02);
+}
 function gunSound(type, vol, ear){
   au(); if(!AC || !masterBus() || (vol||0) <= 0.03) return;
   try{
-    const s = GUNSND[type] || GUNSND['Assault Rifle'];
-    const t = AC.currentTime;
-    const out = earOut(ear);
-    const src = AC.createBufferSource(); src.buffer = noiseBuf(s.n, 2.0);
-    src.playbackRate.value = 0.94 + Math.random() * 0.12;   // no two shots identical
-    const fl = AC.createBiquadFilter(); fl.type='lowpass'; fl.frequency.value = s.f;
-    const g = AC.createGain();
-    g.gain.setValueAtTime(s.g*vol, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + s.d);
-    src.connect(fl); fl.connect(g); g.connect(out); src.start(t);
-    if(s.thump){
-      const o = AC.createOscillator(); o.type='sine';
-      o.frequency.setValueAtTime(s.thump, t);
-      o.frequency.exponentialRampToValueAtTime(Math.max(30, s.thump*0.5), t + s.d);
+    const v = GUNVOICE[type] || GUNVOICE['Assault Rifle'];
+    const t = AC.currentTime, out = earOut(ear), G0 = v.g * vol;
+    const rate = 0.95 + Math.random() * 0.1;                     // no two shots identical
+    noiseHit(out, t, 700, 1.5, 'highpass', v.crack.f, 0.7, G0 * v.crack.a * 1.6, v.crack.d + 0.004, rate);
+    noiseHit(out, t, 4400, 2.0, 'bandpass', v.body.f * rate, v.body.q, G0 * 2.2, v.body.d, rate);
+    noiseHit(out, t, 4400, 2.4, 'lowpass', v.body.f * 0.7, 0, G0 * 0.8, v.body.d * 1.2, rate);
+    if(v.rattle) noiseHit(out, t + v.rattle.t, 2200, 2.2, 'bandpass', v.body.f * 1.15, v.body.q, G0 * 2.2 * v.rattle.a, v.body.d * 0.7, rate);
+    if(v.thump){
+      const o = AC.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(v.thump.f, t);
+      o.frequency.exponentialRampToValueAtTime(Math.max(30, v.thump.f * 0.45), t + v.thump.d);
       const g2 = AC.createGain();
-      g2.gain.setValueAtTime(s.g*0.9*vol, t);
-      g2.gain.exponentialRampToValueAtTime(0.001, t + s.d*1.5);
-      o.connect(g2); g2.connect(out); o.start(t); o.stop(t + s.d*1.6);
+      g2.gain.setValueAtTime(G0 * v.thump.a, t);
+      g2.gain.exponentialRampToValueAtTime(0.0008, t + v.thump.d * 1.5);
+      o.connect(g2); g2.connect(out); o.start(t); o.stop(t + v.thump.d * 1.6);
+    }
+    // the action: two clicks (pump back/forward, bolt up/back), heard only close by
+    if(v.mech && vol > 0.25){
+      const m = t + v.mech.t, a = G0 * 1.1;
+      if(v.mech.kind === 'pump'){
+        noiseHit(out, m,        900, 3, 'bandpass', 1800, 2.5, a,       0.045);
+        noiseHit(out, m + 0.13, 900, 3, 'bandpass', 2400, 3.0, a * 1.2, 0.04);
+      } else {
+        noiseHit(out, m,        700, 3, 'bandpass', 3100, 4.0, a * 0.8, 0.03);
+        noiseHit(out, m + 0.09, 700, 3, 'bandpass', 2200, 3.5, a,       0.035);
+      }
     }
   }catch(e){}
 }
@@ -3100,6 +3256,8 @@ let settingsOpen = false;
 function syncSettingsUI(){
   $('#volsl').value = Math.round(SETTINGS.volume*100);
   $('#volval').textContent = Math.round(SETTINGS.volume*100)+'%';
+  $('#mussl').value = Math.round(SETTINGS.music*100);
+  $('#musval').textContent = Math.round(SETTINGS.music*100)+'%';
   $('#senssl').value = Math.round(SETTINGS.sens*100);
   $('#sensval').textContent = SETTINGS.sens.toFixed(2)+'x';
   const host = document.getElementById('ctlhost');
@@ -3128,6 +3286,7 @@ $('#volsl').addEventListener('input', e=>{
   saveSettings();
   sfx('hit');  // audible preview at the new level
 });
+$('#mussl').addEventListener('input', e=>{ setMusicPct(e.target.value, 'musval'); });
 $('#senssl').addEventListener('input', e=>{
   SETTINGS.sens = (+e.target.value)/100;
   $('#sensval').textContent = SETTINGS.sens.toFixed(2)+'x';
@@ -3138,8 +3297,8 @@ $('#setreset').addEventListener('click', ()=>{
   // "default" means — and it restores the key bindings, not just the sliders
   bindCapture = null;
   BINDS = Object.assign({}, DEFAULT_BINDS);
-  SETTINGS = { volume:0.8, sens:1.0, gfx:'auto', binds: BINDS };
-  gfxChanged();
+  SETTINGS = { volume:0.8, music:0.6, sens:1.0, gfx:'auto', binds: BINDS };
+  gfxChanged(); musicSetLevel();
   if(masterG) masterG.gain.value = SETTINGS.volume;
   syncSettingsUI(); saveSettings(); sfx('reload');
 });
