@@ -3400,6 +3400,7 @@ function reloadStop(){
   RELOAD_PLAYING = null;
 }
 
+let HIT_L = 1.35;   // measured: puts the snap at ~-32 dBFS, a few dB over the old beep
 function sfx(kind, vol, ear){
   if(!AC) return;
   try{
@@ -3436,18 +3437,16 @@ function sfx(kind, vol, ear){
       toneHit(masterBus(), t, 'triangle', rnd(1350, 1450), 900, 0.07*(vol||1), 0.018);
       noiseHit(masterBus(), t, 300, 3, 'lowpass', 5000, 0, 0.05*(vol||1), 0.006);
     } else if(kind==='hit' || kind==='crit'){
-      /* hitmarker: a bright metallic tick you feel land - two short inharmonic partials (so
-         it reads as metal, not a note), a click on the front and a little thump under it.
-         Calibrated a few dB LOUDER than the old beep, which people could at least hear.
-         A crit adds a second, higher tick right behind it: tick-tink. */
-      const crit = kind === 'crit', f = rnd(2850, 3000), L = 0.5;   // L: measured - sits ~3 dB over the old beep
-      toneHit(masterBus(), t, 'sine', f, f * 0.97, 0.16 * L, 0.035);
-      toneHit(masterBus(), t, 'sine', f * 1.47, f * 1.43, 0.09 * L, 0.025);
-      noiseHit(masterBus(), t, 400, 3, 'bandpass', 3000, 0.7, 0.2 * L, 0.012);
-      toneHit(masterBus(), t, 'sine', 160, 90, 0.12 * L, 0.03);
+      /* hitmarker: a sharp, dry snap - the crack, almost no body, out of the way of
+         everything else (picked from five options). A crit snaps twice, the second
+         brighter: you hear the difference without looking. L is calibrated by measurement
+         to sit ~3 dB over the old square-wave beep, which people could at least hear. */
+      const crit = kind === 'crit', L = HIT_L;
+      noiseHit(masterBus(), t, 300, 2.5, 'highpass', rnd(2600, 3000), 0.7, 0.35 * L, 0.008);
+      noiseHit(masterBus(), t + 0.004, 300, 3, 'bandpass', 1500, 1, 0.12 * L, 0.012);
       if(crit){
-        toneHit(masterBus(), t + 0.028, 'sine', f * 1.33, f * 1.3, 0.14 * L, 0.04);
-        toneHit(masterBus(), t + 0.028, 'sine', f * 1.96, f * 1.9, 0.07 * L, 0.03);
+        noiseHit(masterBus(), t + 0.03, 300, 2.5, 'highpass', rnd(3800, 4200), 0.7, 0.32 * L, 0.008);
+        noiseHit(masterBus(), t + 0.034, 300, 3, 'bandpass', 2400, 1.2, 0.1 * L, 0.01);
       }
     } else if(kind==='kill'){
       // store purchase: a small, bright metal tick - acquired, not a coin

@@ -174,7 +174,9 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('  short (~0.2s) and varied a hair every time', /quick \? 0\.14 : 0\.22/.test(src) && /p = rnd\(0\.95, 1\.05\)/.test(src));
   ok('  a second kill within ~1s is a smaller punch', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.65 : 1\)/.test(src));
 }
-ok('the hitmarker is calibrated above the old beep (people could not hear the quiet one)', /L = 0\.5;/.test(lift('sfx')));
+ok('the hitmarker is a dry snap, calibrated above the old beep (people could not hear the quiet one)',
+   /let HIT_L = 1\.35;/.test(html) && /'highpass', rnd\(2600, 3000\)/.test(lift('sfx')));
+ok('  a crit snaps twice, the second brighter', /if\(crit\)\{\s*noiseHit\(masterBus\(\), t \+ 0\.03, 300, 2\.5, 'highpass', rnd\(3800, 4200\)/.test(lift('sfx')));
 ok('Settings closes back to the pause menu; only the pause menu resumes',
    /id="setclose"[^>]*>CLOSE</.test(html) && /\$\('#setclose'\)\.addEventListener\('click', settingsBack\)/.test(html) && /closeSettings\(false\);/.test(lift('settingsBack')));
 ok('  Esc in Settings goes back too, but not while it is cancelling a key rebind', /e\.key === 'Escape' && settingsOpen && !bindCapture && !e\.defaultPrevented/.test(html));
