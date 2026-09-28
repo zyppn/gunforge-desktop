@@ -2847,7 +2847,91 @@ function au(){
   if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
   if(AC && AC.state === 'suspended'){ try{ AC.resume(); }catch(e){} }
 }
-/* per-weapon gunshots: character + loudness per class, distance handled by caller */
+/* ---- sound in space ----------------------------------------------------------------
+   Every sound used to come out of both speakers at once, from nowhere: a shot behind
+   you and a shot in front sounded the same, and anything past ~26m simply did not
+   exist. In a shooter that is information thrown away. Now a sound made somewhere in
+   the arena is placed there:
+     direction  panned left/right relative to where you are looking, and a little
+                duller when it is behind you, so front and back can be told apart
+     distance   quieter the further away (a smooth falloff, not a cliff), and duller -
+                air eats the high end first
+     echo       a shared arena reverb; the further away a shot is, the more of what
+                you hear is the room answering it, which is what "far" sounds like
+   Everyone hears the same rules, so it is information, never an advantage. Stereo
+   panning, not HRTF: HRTF costs real CPU per sound and this has to run on 2018 Macs. */
+const EAR = { REF: 9, MAX: 75 };        // metres: half-volume point, and the limit of hearing
+let ROOM = null;
+function roomBus(){
+  if(ROOM || !AC) return ROOM;
+  try{
+    // one generated impulse: a dense, fast-decaying tail, slightly different per ear
+    const len = Math.floor(AC.sampleRate * 1.2), ir = AC.createBuffer(2, len, AC.sampleRate);
+    for(let ch = 0; ch < 2; ch++){
+      const d = ir.getChannelData(ch);
+      for(let i = 0; i < len; i++) d[i] = (Math.random()*2 - 1) * Math.pow(1 - i/len, 3.4) * (i < 90 ? i/90 : 1);
+    }
+    const conv = AC.createConvolver(); conv.buffer = ir;
+    // the convolver normalises its impulse, so the tail comes out ~20 dB under the dry
+    // hit; 6x was measured to make a far shot (send 0.55) about a quarter echo
+    const g = AC.createGain(); g.gain.value = 6;
+    conv.connect(g); g.connect(masterBus());
+    ROOM = conv;
+  }catch(e){ ROOM = null; }
+  return ROOM;
+}
+/* Where a sound at world (x, z) sits for the listener. `loud` is the source's own
+   loudness (a sniper is louder than an SMG) and stretches how far it carries. */
+function earAt(x, z, loud){
+  loud = loud || 1;
+  const me = G && G.me;
+  if(!me) return { vol: loud, pan: 0, cut: 18000, wet: 0 };
+  const dx = x - me.x, dz = z - me.z, d = Math.hypot(dx, dz);
+  if(d > EAR.MAX * Math.min(1.4, loud)) return { vol: 0, pan: 0, cut: 0, wet: 0 };
+  const inv = d > 0.001 ? 1 / d : 0;
+  // camera looks down -Z at yaw 0: right = (cos yaw, -sin yaw), forward = (-sin yaw, -cos yaw)
+  const right = (dx*Math.cos(yaw) - dz*Math.sin(yaw)) * inv;
+  const fwd   = (-dx*Math.sin(yaw) - dz*Math.cos(yaw)) * inv;
+  const pan = Math.max(-1, Math.min(1, right)) * 0.85 * Math.min(1, d / 2);   // on top of you: centred
+  const behind = fwd < 0 ? 1 + fwd * 0.45 : 1;                                  // up to 45% duller behind
+  const cut = Math.max(500, Math.min(18000, 16000 * Math.exp(-d / (16 * loud)) * behind));
+  const vol = loud / (1 + d / (EAR.REF * loud));
+  const wet = Math.max(0, Math.min(0.55, (d - 4) / 40));
+  return { vol, pan, cut, wet, d };
+}
+/* The output a placed sound plugs into: its own lowpass and panner, a dry path to the
+   speakers and a send to the room. With no `ear` it is the plain master bus, exactly as
+   before - UI clicks and the hitmarker are not in the world. */
+function earOut(ear){
+  const m = masterBus();
+  if(!ear || !m) return m;
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = ear.cut;
+  let last = lp;
+  if(AC.createStereoPanner){ const pn = AC.createStereoPanner(); pn.pan.value = ear.pan; lp.connect(pn); last = pn; }
+  last.connect(m);
+  if(ear.wet > 0.01 && roomBus()){ const w = AC.createGain(); w.gain.value = ear.wet; last.connect(w); w.connect(ROOM); }
+  return lp;
+}
+/* Noise is generated once per shape and reused. Every shot used to fill a fresh buffer
+   with Math.random() - thousands of samples, for every bullet from every bot. */
+const NOISE = new Map();
+function noiseBuf(n, curve){
+  const k = n + '|' + curve;
+  let v = NOISE.get(k);
+  if(!v){
+    v = [];
+    for(let j = 0; j < 4; j++){         // four takes, picked at random, so repeats do not sound looped
+      const buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0);
+      for(let i = 0; i < n; i++) d[i] = (Math.random()*2 - 1) * Math.pow(1 - i/n, curve);
+      v.push(buf);
+    }
+    NOISE.set(k, v);
+  }
+  return v[(Math.random() * v.length) | 0];
+}
+/* per-weapon gunshots: character + loudness per class; placement comes from `ear` */
+// how far each class carries (a sniper is heard across the map, an SMG is not)
+const GUN_LOUD = { 'Sniper':1.35, 'Shotgun':1.25, 'LMG':1.05, 'Assault Rifle':0.85, 'Pistol':0.8, 'SMG':0.65 };
 const GUNSND = {
   'Pistol':        {n:1600, f:1100, g:0.13, d:0.09},
   'SMG':           {n:1100, f:1500, g:0.10, d:0.07},
@@ -2856,20 +2940,19 @@ const GUNSND = {
   'Sniper':        {n:3800, f:700,  g:0.24, d:0.30, thump:110},
   'LMG':           {n:2400, f:800,  g:0.17, d:0.13, thump:90},
 };
-function gunSound(type, vol){
+function gunSound(type, vol, ear){
   au(); if(!AC || !masterBus() || (vol||0) <= 0.03) return;
   try{
     const s = GUNSND[type] || GUNSND['Assault Rifle'];
     const t = AC.currentTime;
-    const buf = AC.createBuffer(1, s.n, AC.sampleRate);
-    const d = buf.getChannelData(0);
-    for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2.0);
-    const src = AC.createBufferSource(); src.buffer = buf;
+    const out = earOut(ear);
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(s.n, 2.0);
+    src.playbackRate.value = 0.94 + Math.random() * 0.12;   // no two shots identical
     const fl = AC.createBiquadFilter(); fl.type='lowpass'; fl.frequency.value = s.f;
     const g = AC.createGain();
     g.gain.setValueAtTime(s.g*vol, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + s.d);
-    src.connect(fl); fl.connect(g); g.connect(masterBus()); src.start(t);
+    src.connect(fl); fl.connect(g); g.connect(out); src.start(t);
     if(s.thump){
       const o = AC.createOscillator(); o.type='sine';
       o.frequency.setValueAtTime(s.thump, t);
@@ -2877,14 +2960,15 @@ function gunSound(type, vol){
       const g2 = AC.createGain();
       g2.gain.setValueAtTime(s.g*0.9*vol, t);
       g2.gain.exponentialRampToValueAtTime(0.001, t + s.d*1.5);
-      o.connect(g2); g2.connect(masterBus()); o.start(t); o.stop(t + s.d*1.6);
+      o.connect(g2); g2.connect(out); o.start(t); o.stop(t + s.d*1.6);
     }
   }catch(e){}
 }
-function sfx(kind, vol){
+function sfx(kind, vol, ear){
   if(!AC) return;
   try{
     const t = AC.currentTime;
+    const out = earOut(ear);
     if(kind==='shot'){
       const buf = AC.createBuffer(1, 2200, AC.sampleRate);
       const d = buf.getChannelData(0);
@@ -2894,25 +2978,20 @@ function sfx(kind, vol){
       const g = AC.createGain(); g.gain.setValueAtTime(0.16, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.09);
       src.connect(f); f.connect(g); g.connect(masterBus()); src.start(t);
     } else if(kind==='step'){
-      const buf = AC.createBuffer(1, 900, AC.sampleRate);
-      const d = buf.getChannelData(0);
-      for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 3);
-      const s = AC.createBufferSource(); s.buffer = buf;
+      const s = AC.createBufferSource(); s.buffer = noiseBuf(900, 3);
+      s.playbackRate.value = 0.9 + Math.random() * 0.2;
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 260;
       const g = AC.createGain(); g.gain.setValueAtTime(0.09*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.08);
-      s.connect(f); f.connect(g); g.connect(masterBus()); s.start(t);
+      s.connect(f); f.connect(g); g.connect(out); s.start(t);
     } else if(kind==='boom'){
-      const buf = AC.createBuffer(1, 5200, AC.sampleRate);
-      const d = buf.getChannelData(0);
-      for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 1.6);
-      const s = AC.createBufferSource(); s.buffer = buf;
+      const s = AC.createBufferSource(); s.buffer = noiseBuf(5200, 1.6);
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 240;
       const g = AC.createGain(); g.gain.setValueAtTime(0.3*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.35);
-      s.connect(f); f.connect(g); g.connect(masterBus()); s.start(t);
+      s.connect(f); f.connect(g); g.connect(out); s.start(t);
       const o = AC.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(60, t);
       o.frequency.exponentialRampToValueAtTime(32, t+0.3);
       const g2 = AC.createGain(); g2.gain.setValueAtTime(0.22*(vol||1), t); g2.gain.exponentialRampToValueAtTime(0.001, t+0.4);
-      o.connect(g2); g2.connect(masterBus()); o.start(t); o.stop(t+0.42);
+      o.connect(g2); g2.connect(out); o.start(t); o.stop(t+0.42);
     } else if(kind==='ui'){
       const o = AC.createOscillator(); o.type='square'; o.frequency.setValueAtTime(740, t);
       const g = AC.createGain(); g.gain.setValueAtTime(0.035*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.05);
@@ -5647,7 +5726,8 @@ function fire(e, dir){
     });
   }
   if(e.isPlayer){
-    gunSound(e.wep.type, 1);
+    // your own gun: centred and full, with a little of the arena answering it
+    gunSound(e.wep.type, 1, { pan: 0, cut: 18000, wet: 0.15 });
     // violence scales with the shot: energy = dmg x pellets, plus class mass
     const E = w.dmg * w.pellets;
     const mass = w.type==='LMG' ? 0.5 : w.type==='Shotgun' ? 0.35 : w.type==='Sniper' ? 0.45 : 0;
@@ -5668,10 +5748,9 @@ function fire(e, dir){
     u.gunMuzzle.rotation.z = Math.random()*6.28;
     u.kick = 1;
     // enemy gunfire is audible by class loudness, attenuated by distance to the player
-    const loud = e.wep.type==='Sniper'?1.35 : e.wep.type==='Shotgun'?1.25 : e.wep.type==='LMG'?1.05 : e.wep.type==='SMG'?0.65 : 0.85;
-    const dp = Math.hypot(e.x-G.me.x, e.z-G.me.z);
-    const range = 26 * loud;
-    if(dp < range) gunSound(e.wep.type, loud * (1 - dp/range));
+    const loud = GUN_LOUD[e.wep.type] || 0.85;
+    const ear = earAt(e.x, e.z, loud);
+    gunSound(e.wep.type, ear.vol, ear);
   }
   if(e.ammo<=0) startReload(e);
 }
@@ -5737,7 +5816,7 @@ function kill(t, src){
     if(src.wep && src.wep.abilities.has('fire_nova')){
       spawnBurst(t.x, t.z, 0xFF7A2A);
       const dNova = Math.hypot(t.x-G.me.x, t.z-G.me.z);
-      sfx('boom', Math.max(0.15, 1 - dNova/28) * 0.8);
+      { const ear = earAt(t.x, t.z, 1.2); sfx('boom', ear.vol * 0.8, ear); }
       for(const o of G.ents){
         if(o.dead || o === src || !hostile(src, o)) continue;
         if((o.x-t.x)**2 + (o.z-t.z)**2 < 16){ // 4u blast
@@ -6657,7 +6736,7 @@ function tick(now){
         if(e.stepAcc > (e.grunt ? 1.15 : 0.85)){
           e.stepAcc = 0;
           const dp = Math.hypot(e.x-G.me.x, e.z-G.me.z);
-          if(dp < 10) sfx('step', Math.max(0.12, 1 - dp/10) * (e.grunt ? 1.5 : 0.8));
+          if(dp < 16){ const ear = earAt(e.x, e.z, 0.5); sfx('step', ear.vol * (e.grunt ? 2.6 : 1.5), ear); }
         }
       }
       if(u.legL){
@@ -6791,7 +6870,7 @@ function tick(now){
           if(b.expl){
             spawnBurst(p.x, p.z, 0xF08A3C);
             const dExp = Math.hypot(p.x-G.me.x, p.z-G.me.z);
-            sfx('boom', Math.max(0.1, 1 - dExp/30));
+            { const ear = earAt(p.x, p.z, 1.2); sfx('boom', ear.vol, ear); }
             for(const o of G.ents){
               if(o.dead || o===e || !hostile(b.owner,o)) continue;
               // HE Payload scales off the damage that triggered it - mirrors applyHit
@@ -7314,10 +7393,9 @@ function startLiveMatch(){
         scene.add(tm);
         live.tracers.push({ mesh: tm, vx: wire[i+3], vy: wire[i+4], vz: wire[i+5], life: 1.6 });
       }
-      const d = Math.hypot(m.x0 != null ? m.x0 - G.me.x : (wire[0]||0) - G.me.x,
-                           m.z0 != null ? m.z0 - G.me.z : (wire[2]||0) - G.me.z);
-      const range = 26;
-      if(d < range) gunSound(w.type, 0.8 * (1 - d/range));
+      const sx = m.x0 != null ? m.x0 : (wire[0]||0), sz = m.z0 != null ? m.z0 : (wire[2]||0);
+      const ear = earAt(sx, sz, GUN_LOUD[w.type] || 0.85);
+      gunSound(w.type, ear.vol, ear);
     });
     // this account signed in somewhere else: the server has already taken the seat
     room.onMessage('superseded', () => { sessionSuperseded(); });
@@ -7633,6 +7711,14 @@ function liveTick(dt){
       u.hbGroup.quaternion.copy(TMPQ.invert().multiply(camera.quaternion)); // billboard: bar always faces you
     }
     r.phase += speed * dt * 1.6;
+    // footsteps for real players too - offline bots have always had them, PvP never did
+    if(speed > 1.2){
+      r.stepAcc = (r.stepAcc || 0) + speed * dt;
+      if(r.stepAcc > 0.85){
+        r.stepAcc = 0;
+        if(Math.hypot(r.cx - G.me.x, r.cz - G.me.z) < 16){ const ear = earAt(r.cx, r.cz, 0.5); sfx('step', ear.vol * 1.5, ear); }
+      }
+    }
     const amp = Math.min(1, speed/4) * 0.5;
     if(u.legL){ u.legL.rotation.x = Math.sin(r.phase)*amp; u.legR.rotation.x = -Math.sin(r.phase)*amp; }
     if(u.gunMuzzle){ u.gunMuzzle.material.opacity = Math.max(0, u.gunMuzzle.material.opacity - dt*6); }
