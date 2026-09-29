@@ -85,5 +85,14 @@ for(const mag of [7, 8, 10, 15]){
 ok('both reload-completion paths go through reloadTick (no second copy to drift)', (html.match(/reloadTick\((G\.me|e)\);/g) || []).length === 2 && !/G\.me\.ammo = G\.me\.wep\.mag;/.test(html));
 ok('firing interrupts a shell reload, offline and live', /if\(reloadInterruptible\(e\) && now >= e\.fireT\) interruptReload\(e\);/.test(lift('fire')) && /\(!me\.reloading \|\| reloadInterruptible\(me\)\)/.test(html));
 ok('the reload animation follows the real length', /const dur = me\.reloadDur \|\| me\.wep\.reload\/1000;/.test(html));
+
+{
+  const vmSrc = lift('updateViewmodelPose');
+  ok('the Warden has its own loading motion, not the mag reload squeezed shorter', /if\(me\.reloading && pl && pl\.shells\)/.test(vmSrc) && /rolled over: loading port up/.test(vmSrc));
+  ok('  one push per shell, on the beat the count ticks up', /const frac = \(\(el - pl\.open\) \/ pl\.per\) % 1;/.test(vmSrc));
+  ok('  and the pump is racked only from empty', /if\(pl\.pump && el >= loadEnd\)/.test(vmSrc));
+  ok('  firing mid-load eases the gun back up instead of snapping it', /me\._rlS = \(me\._rlS \|\| 0\) \+ \(rl - \(me\._rlS \|\| 0\)\) \* Math\.min\(1, dt \* 16\)/.test(vmSrc));
+  ok('startReload records the plan the animation follows', /e\.reloadPlan = pl; e\.reloadStart = G\.elapsed;/.test(lift('startReload')));
+}
 console.log(fails ? '\nreload: ' + fails + ' failure(s)' : '\nreload: all clear');
 process.exit(fails ? 1 : 0);
