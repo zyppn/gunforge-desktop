@@ -174,9 +174,26 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('  short (~0.2s) and varied a hair every time', /quick \? 0\.14 : 0\.22/.test(src) && /p = rnd\(0\.95, 1\.05\)/.test(src));
   ok('  a second kill within ~1s is a smaller punch', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.65 : 1\)/.test(src));
 }
-ok('the hitmarker is a dry snap, calibrated above the old beep (people could not hear the quiet one)',
-   /let HIT_L = 1\.35;/.test(html) && /'highpass', rnd\(2600, 3000\)/.test(lift('sfx')));
-ok('  a crit snaps twice, the second brighter', /if\(crit\)\{\s*noiseHit\(masterBus\(\), t \+ 0\.03, 300, 2\.5, 'highpass', rnd\(3800, 4200\)/.test(lift('sfx')));
+/* ---- the hitmarker: a muted tok that does not wear you down ---- */
+{
+  const c7 = vm.createContext({ Math: Object.create(Math), AC: null, performance: { now: () => c7.clock * 1000 }, clock: 100, plays: [],
+    au(){}, masterBus(){ return {}; }, rnd: (a, b) => (a + b) / 2,
+    toneHit(o, t, ty, f, f1, g){ c7.plays.push(g); }, noiseHit(o, t, n, c, ty, f, q, g){ c7.plays.push(g); } });
+  c7.AC = { currentTime: 0 };
+  vm.runInContext([line(/const HIT = \{[^\n]*;/), line(/let HIT_THUD = [^\n]*;/), lift('hitSound')].join('\n') + '\nthis.HIT = HIT;', c7);
+  const level = () => { const v = c7.plays.reduce((a, b) => a + b, 0); c7.plays = []; return v; };
+  c7.hitSound(false); const first = level();
+  c7.clock += 0.03; c7.hitSound(false);
+  ok('hits inside 70ms are ONE sound (a shotgun\'s pellets, two rounds in a frame)', level() === 0);
+  const stream = []; for(let k = 0; k < 10; k++){ c7.clock += 0.1; c7.hitSound(false); stream.push(level()); }
+  ok('in a stream each hit is a little quieter than the last...', stream.every((v, k) => k === 0 || v <= stream[k - 1]) && stream[1] < first);
+  ok('  ...down to a floor about 9 dB under the first', Math.abs(20 * Math.log10(stream[stream.length - 1] / first) + 9) < 0.6, (20 * Math.log10(stream[stream.length - 1] / first)).toFixed(1) + ' dB');
+  c7.clock += 1; c7.hitSound(false);
+  ok('  and recovers after a short pause', Math.abs(level() - first) < 1e-9);
+  c7.clock += 0.1; c7.hitSound(false); level(); c7.clock += 0.01; c7.hitSound(true);
+  ok('a crit is never merged away and plays at full level', level() > first);
+  ok('the tok sits clear of the thud you hear when YOU are hit (235-260Hz vs ~100Hz)', /f = rnd\(235, 260\)/.test(lift('hitSound')) && /rnd\(95, 125\)/.test(lift('hurtPlay')));
+}
 ok('Settings closes back to the pause menu; only the pause menu resumes',
    /id="setclose"[^>]*>CLOSE</.test(html) && /\$\('#setclose'\)\.addEventListener\('click', settingsBack\)/.test(html) && /closeSettings\(false\);/.test(lift('settingsBack')));
 ok('  Esc in Settings goes back too, but not while it is cancelling a key rebind', /e\.key === 'Escape' && settingsOpen && !bindCapture && !e\.defaultPrevented/.test(html));

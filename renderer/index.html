@@ -3423,7 +3423,47 @@ function reloadStop(){
   RELOAD_PLAYING = null;
 }
 
-let HIT_L = 1.35;   // measured: puts the snap at ~-32 dBFS, a few dB over the old beep
+/* ---- hitmarker ----
+   What made it annoying was less the sound than how often it fires: an SMG lands ~10
+   hits a second, and every one was a full, bright snap at the same level. So:
+     merged    hits inside 70ms are one sound (a shotgun's pellets, two rounds in a frame)
+     settles   in a stream of hits each one is a little quieter than the last (down to
+               -9 dB) and recovers after a short pause - the first hit of a fight is
+               clear, the twentieth does not drill into you
+     softer    darker than the snap it replaces, and a few dB quieter
+   A crit always plays at full level and adds a brighter second tick. */
+const HIT = { last: -9, run: 0, style: 'thud' };
+let HIT_THUD = 0.3;   // measured: first hit of a fight at ~-34 dBFS, a notch under the old snap
+function hitSound(crit){
+  au(); if(!AC || !masterBus()) return;
+  const now = performance.now() / 1000, dt = now - HIT.last;
+  if(dt < 0.07 && !crit) return;                                   // merged into the one just played
+  HIT.run = dt < 0.35 ? Math.min(HIT.run + 1, 6) : 0;
+  HIT.last = now;
+  const L = crit ? 1 : Math.pow(10, -1.5 * HIT.run / 20);          // -1.5 dB per hit in a stream, floor -9 dB
+  try{
+    const o = masterBus(), t = AC.currentTime;
+    if(HIT.style === 'thud'){
+      /* a muted "tok": the round going in. Pitched and shaped to sit clear of the thud you
+         hear when YOU are hit (that one is lower, ~100Hz, longer, with a slap on top), so
+         the two can never be confused. A dark edge on the front gives it just enough
+         definition to cut through your own gunfire. */
+      const g = HIT_THUD * L, f = rnd(235, 260);
+      noiseHit(o, t, 300, 3, 'bandpass', rnd(1100, 1300), 0.9, 0.12 * g, 0.009);   // the edge
+      toneHit(o, t, 'sine', f, f * 0.5, 0.26 * g, 0.045);                           // the tok
+      noiseHit(o, t, 900, 3, 'lowpass', 650, 0, 0.22 * g, 0.035);                   // its body
+    } else {
+      noiseHit(o, t, 300, 2.5, 'bandpass', rnd(1700, 1950), 1.1, 0.34 * L, 0.012);
+      noiseHit(o, t + 0.003, 300, 3, 'lowpass', 900, 0, 0.16 * L, 0.02);
+    }
+    if(crit){
+      // a crit: the tok lands heavier and a small bright tick follows it
+      toneHit(o, t, 'sine', 150, 70, 0.14 * HIT_THUD, 0.06);
+      noiseHit(o, t + 0.028, 300, 2.5, 'bandpass', rnd(2700, 3000), 1.3, 0.2 * HIT_THUD, 0.01);
+      toneHit(o, t + 0.028, 'sine', rnd(2200, 2300), 2100, 0.025 * HIT_THUD, 0.03);
+    }
+  }catch(e){}
+}
 function sfx(kind, vol, ear){
   if(!AC) return;
   try{
@@ -3460,17 +3500,7 @@ function sfx(kind, vol, ear){
       toneHit(masterBus(), t, 'triangle', rnd(1350, 1450), 900, 0.07*(vol||1), 0.018);
       noiseHit(masterBus(), t, 300, 3, 'lowpass', 5000, 0, 0.05*(vol||1), 0.006);
     } else if(kind==='hit' || kind==='crit'){
-      /* hitmarker: a sharp, dry snap - the crack, almost no body, out of the way of
-         everything else (picked from five options). A crit snaps twice, the second
-         brighter: you hear the difference without looking. L is calibrated by measurement
-         to sit ~3 dB over the old square-wave beep, which people could at least hear. */
-      const crit = kind === 'crit', L = HIT_L;
-      noiseHit(masterBus(), t, 300, 2.5, 'highpass', rnd(2600, 3000), 0.7, 0.35 * L, 0.008);
-      noiseHit(masterBus(), t + 0.004, 300, 3, 'bandpass', 1500, 1, 0.12 * L, 0.012);
-      if(crit){
-        noiseHit(masterBus(), t + 0.03, 300, 2.5, 'highpass', rnd(3800, 4200), 0.7, 0.32 * L, 0.008);
-        noiseHit(masterBus(), t + 0.034, 300, 3, 'bandpass', 2400, 1.2, 0.1 * L, 0.01);
-      }
+      hitSound(kind === 'crit');
     } else if(kind==='kill'){
       // store purchase: a small, bright metal tick - acquired, not a coin
       noiseHit(masterBus(), t, 500, 3, 'highpass', 2500, 0.7, 0.04, 0.012);
