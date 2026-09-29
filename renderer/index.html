@@ -3327,28 +3327,37 @@ function hurtPlay(dmg, shielded){
 }
 
 /* ---- the kill confirm ----
-   Modelled on the kill confirm big military shooters use: no ring and no melody, just a
-   deep, dry punch you feel in your chest - a sharp click on the front, a heavy thud
-   falling away under it, and a short crunch of armour giving in the middle. It is the
-   loudest of the feedback sounds, so a kill never gets lost in a firefight.
-   (Earlier passes: a two-note chime that sounded like a coin, then a steel-plate ding.)
-
-   Heard up to ~20 times a match, so it stays short (~0.2s), shifts a hair every time,
-   and a second kill within ~1s is a smaller punch, not two stacked. */
+   A round pop and, 22 ms behind it, one glassy note (A6, 1760 Hz): an FM pluck that is
+   bright for an instant and then pure. No gun parts in it on purpose - a metal clack read
+   as the LS-1's own bolt cycling half a second after the shot, and a kill sound has to
+   mean one thing. (Earlier passes: a coin-like two-note chime, a steel ding, a
+   Battlefield-style punch, a wind chime, a bolt lock.)
+   Level: matched, A-weighted, to the punch it replaced (itself calibrated against the
+   hitmarker and the guns); the pop sits ~8 dB over the note so the note stays the event.
+   Heard up to ~20 times a match: ~0.4s, the note never changes pitch, and a second kill
+   within ~1s is softer and shorter, not two stacked. */
 const KILLSND = { last: -9 };
+function fmPluck(o, t, fc, ratio, idx, a, dec){      // FM bell/glass: the brightness falls away fast
+  const car = AC.createOscillator(), mod = AC.createOscillator(), mg = AC.createGain(), g = AC.createGain();
+  car.frequency.value = fc; mod.frequency.value = fc * ratio;
+  mg.gain.value = 0; mg.gain.setValueAtTime(fc * idx, t); mg.gain.exponentialRampToValueAtTime(fc * 0.02, t + dec * 0.35);
+  g.gain.value = 0; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(a, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0008, t + dec);
+  mod.connect(mg); mg.connect(car.frequency); car.connect(g); g.connect(o);
+  car.start(t); mod.start(t); car.stop(t + dec + 0.05); mod.stop(t + dec + 0.05);
+}
 function killSound(){
   au(); if(!AC || !masterBus()) return;
   try{
-    const out = masterBus(), t = AC.currentTime;
+    const m = masterBus(), t = AC.currentTime;
     const now = performance.now() / 1000, quick = now - KILLSND.last < 1.1;
     KILLSND.last = now;
-    // 0.3: measured to sit ~8 dB over the hitmarker and under the heavy guns' shots
-    const g = (quick ? 0.65 : 1) * 0.3, p = rnd(0.95, 1.05);
-    noiseHit(out, t, 500, 3, 'bandpass', 1700 * p, 0.7, 0.3 * g, 0.012);           // the click
-    toneHit(out, t, 'sine', 150 * p, 40, 0.55 * g, quick ? 0.14 : 0.22);           // the thud
-    noiseHit(out, t, 4400, 2.2, 'lowpass', 320 * p, 0, 0.45 * g, quick ? 0.1 : 0.16); // its body
-    for(let k = 0; k < 3; k++)                                                    // the crunch
-      noiseHit(out, t + 0.008 + k * 0.011, 400, 3, 'bandpass', rnd(650, 950), 1.5, 0.16 * g, 0.02);
+    let o = m;                                                          // a touch of the room
+    if(roomBus()){ o = AC.createGain(); o.connect(m); const w = AC.createGain(); w.gain.value = 0.12; o.connect(w); w.connect(ROOM); }
+    const g = (quick ? 0.7 : 1) * 0.3, p = rnd(0.97, 1.03);
+    toneHit(o, t, 'sine', 1100 * p, 320 * p, 0.18 * g, 0.03);                      // the pop: a fast drop
+    noiseHit(o, t, 200, 3, 'bandpass', 2000, 1.5, 0.09 * g, 0.004);                  // its edge
+    toneHit(o, t, 'sine', 110, 55, 0.18 * g, 0.08);                                  // a little weight
+    fmPluck(o, t + 0.022, 1760, 3.5, 1.4, 0.06 * g, quick ? 0.22 : 0.38);           // the glass note
   }catch(e){}
 }
 

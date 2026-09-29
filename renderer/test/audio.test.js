@@ -168,12 +168,13 @@ ok('a reload cut short by death or the match ending goes quiet',
 ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends to 0.4)',
    /AC\.sampleRate \* 0\.8\)/.test(lift('roomBus')) && /g\.gain\.value = 4\.5;/.test(lift('roomBus')) && /Math\.min\(0\.4, \(d - 4\) \/ 45\)/.test(lift('earAt')));
 
-/* ---- the kill confirm: a punch, not a ding ---- */
+/* ---- the kill confirm: a round pop, then one glass note ---- */
 {
   const src = lift('killSound');
-  ok('the kill is a dry punch - click, falling thud, crunch - with nothing that rings', /'bandpass', 1700/.test(src) && /'sine', 150 \* p, 40/.test(src) && !/932|2\.76|1318/.test(src));
-  ok('  short (~0.2s) and varied a hair every time', /quick \? 0\.14 : 0\.22/.test(src) && /p = rnd\(0\.95, 1\.05\)/.test(src));
-  ok('  a second kill within ~1s is a smaller punch', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.65 : 1\)/.test(src));
+  ok('the kill is a pop then one glassy note (A6), with no gun-part clack in it', /'sine', 1100 \* p, 320 \* p/.test(src) && /fmPluck\(o, t \+ 0\.022, 1760,/.test(src) && !/1150|2950/.test(src));
+  ok('  the note never changes pitch (only the pop varies)', !/1760 \*/.test(src) && /p = rnd\(0\.97, 1\.03\)/.test(src));
+  ok('  a second kill within ~1s is softer and shorter', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.7 : 1\)/.test(src) && /quick \? 0\.22 : 0\.38/.test(src));
+  ok('  fmPluck starts its gains at 0 (no loud first block)', /mg\.gain\.value = 0;/.test(lift('fmPluck')) && /g\.gain\.value = 0;/.test(lift('fmPluck')));
 }
 /* ---- the hitmarker: a fast click that does not wear you down ---- */
 {
@@ -208,7 +209,7 @@ ok('  and sits at a measured level: under your gunfire, clearly audible (~-34 to
 
 /* ---- no prototype beeps left ---- */
 ok('no square- or sawtooth-wave beeps in any game sound (the "pixelated" ones; the music pad\'s filtered saws are not beeps)',
-   !/'(square|sawtooth)'/.test(['sfx','gunSound','killSound','hurtPlay','deathSound','whizSound','reloadPart','noiseHit','toneHit'].map(lift).join('')));
+   !/'(square|sawtooth)'/.test(['sfx','gunSound','killSound','fmPluck','hurtPlay','deathSound','whizSound','reloadPart','noiseHit','toneHit'].map(lift).join('')));
 ok('menu clicks, hitmarkers, reset and purchase are all rebuilt', ['ui', 'hit', 'reload', 'kill'].every(k => new RegExp("kind==='" + k + "'").test(lift('sfx'))));
 ok('a crit hitmarker sounds different from a normal one', /sfx\(isCrit \? 'crit' : 'hit'\)/.test(lift('showHitmark')) && /kind==='crit'/.test(lift('sfx')));
 ok('the death card never covers Settings', /body:has\(#setov\.on\) #deathcard\{opacity:0\}/.test(html));
