@@ -263,9 +263,6 @@
   #gamewrap{position:relative;border:1px solid var(--line);background:#000;user-select:none}
   #cv{display:block;width:100%;height:auto;cursor:crosshair}
   #hud{position:absolute;inset:0;pointer-events:none;font-size:12px}
-  /* While dead, everything about YOUR state comes off screen. The scoreboard,
-     killfeed and the card itself stay. */
-  #hud.dead #crosshair, #hud.dead #hudbl, #hud.dead #hudbr,
   /* kill streak emblem: five ring segments light one per kill this life; wings at 3+, glow at 5 */
   #streak{position:absolute;left:50%;bottom:19%;width:84px;height:70px;margin-left:-42px;opacity:0;transition:opacity .45s;pointer-events:none;filter:drop-shadow(0 1px 2px #000)}
   #streak.on{opacity:1;transition:opacity .08s}
@@ -281,6 +278,9 @@
   #streak.pop svg{animation:strkPop .22s ease-out}
   @keyframes strkPop{from{transform:scale(1.35)}to{transform:scale(1)}}
   #hud.dead #streak{opacity:0 !important}
+  /* While dead, everything about YOUR state comes off screen. The scoreboard,
+     killfeed and the card itself stay. */
+  #hud.dead #crosshair, #hud.dead #hudbl, #hud.dead #hudbr,
   #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov{
     opacity:0 !important; transition:opacity .18s}
   #hudtop{position:absolute;top:8px;left:0;right:0;display:flex;justify-content:center;gap:18px;text-shadow:0 1px 2px #000}
