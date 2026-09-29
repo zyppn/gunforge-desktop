@@ -6302,14 +6302,18 @@ function fire(e, dir){
    The Warden loads shell by shell: a moment to open up, one beat per MISSING shell, and
    a pump at the end only if it ran dry (a shell already chambered needs no rack). Topping
    up 2 of 6 is quick; a full reload from empty takes exactly the weapon's reload time -
-   the stat, part mods and all, still means what it says. */
-const SHELL = { open: 0.12, per: 0.12, pump: 0.16, close: 0.06 };   // fractions of the full reload time
+   the stat, part mods and all, still means what it says.
+   That holds for a bigger magazine too: the shell beat is the loading time divided by
+   the magazine, so 8 shells from empty still take the reload stat, never longer. (The
+   first version used a fixed beat, which quietly made every mag part a reload penalty.) */
+const SHELL = { open: 0.12, pump: 0.16, close: 0.06 };   // fractions of the full reload time
 function reloadPlan(e){
   const R = e.wep.reload / 1000;
   if(e.wep.type !== 'Shotgun') return { dur: R };
-  const missing = Math.max(1, e.wep.mag - e.ammo), empty = e.ammo <= 0;
-  return { dur: R * (SHELL.open + missing * SHELL.per + (empty ? SHELL.pump : SHELL.close)),
-           shells: missing, pump: empty, open: R * SHELL.open, per: R * SHELL.per };
+  const mag = Math.max(1, e.wep.mag), per = (1 - SHELL.open - SHELL.pump) / mag;   // 6 shells: 0.12 each
+  const missing = Math.max(1, mag - e.ammo), empty = e.ammo <= 0;
+  return { dur: R * (SHELL.open + missing * per + (empty ? SHELL.pump : SHELL.close)),
+           shells: missing, pump: empty, open: R * SHELL.open, per: R * per };
 }
 function startReload(e){
   if(e.reloading || e.wep.reload<=0 || e.ammo>=e.wep.mag) return;
@@ -8319,9 +8323,10 @@ function liveTick(dt){
       if(rw.type === 'Shotgun'){
         // we only see "reloading", not how many shells: so play a shell per beat for as
         // long as they keep loading - a top-up sounds short, a full reload sounds full
-        if(t.reloading && !r.wasReloading) r.shellT = rw.reload / 1000 * (SHELL.open + SHELL.per) - 0.07;
+        const beat = rw.reload / 1000 * (1 - SHELL.open - SHELL.pump) / rw.mag;
+        if(t.reloading && !r.wasReloading) r.shellT = rw.reload / 1000 * SHELL.open + beat - 0.07;
         if(t.reloading && (r.shellT -= dt) <= 0){
-          r.shellT += rw.reload / 1000 * SHELL.per;
+          r.shellT += beat;
           if(near) reloadSound(rw.type, 400, earAt(r.cx, r.cz, 0.6), false, { shells: 1, open: 0, per: 0.07, dur: 0.4 });
         }
       } else if(t.reloading && !r.wasReloading && near){

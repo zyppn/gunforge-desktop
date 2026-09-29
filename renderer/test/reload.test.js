@@ -69,6 +69,15 @@ const run = (e, secs) => { const step = 1 / 60; for(let t = 0; t < secs; t += st
   ok('magazine guns are unchanged: full time even with 25 of 30 left', Math.abs(rifle.reloadDur - 1.7) < 1e-9 && !rifle.shells);
   ok('  and cannot be fired mid-reload', !ctx.reloadInterruptible(rifle));
 }
+for(const mag of [7, 8, 10, 15]){
+  const big = Object.assign({}, warden, { wep: { type: 'Shotgun', reload: 2000, mag }, ammo: 0 }); ctx.G.elapsed = 0; sounds.length = 0; ctx.startReload(big);
+  ok('a ' + mag + '-shell Warden from empty still takes exactly the reload stat (a bigger mag is never a reload penalty)', Math.abs(big.reloadDur - 2.0) < 1e-9 && sounds[0].plan.shells === mag, big.reloadDur.toFixed(2) + 's');
+}
+{
+  const big = Object.assign({}, warden, { wep: { type: 'Shotgun', reload: 2000, mag: 8 }, ammo: 6 }); ctx.G.elapsed = 0; ctx.startReload(big);
+  const small = Object.assign({}, warden, { ammo: 4 }); ctx.startReload(small);
+  ok('  and topping up 2 shells is no slower with the bigger mag', big.reloadDur <= small.reloadDur + 1e-9, big.reloadDur.toFixed(2) + 's vs ' + small.reloadDur.toFixed(2) + 's');
+}
 {
   const fast = Object.assign({}, warden, { wep: { type: 'Shotgun', reload: 1400, mag: 6 }, ammo: 0 }); ctx.G.elapsed = 0; ctx.startReload(fast);
   ok('parts that speed up the reload speed up every shell (empty = the modded stat, 1.4s)', Math.abs(fast.reloadDur - 1.4) < 1e-9);

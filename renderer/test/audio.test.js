@@ -161,7 +161,7 @@ ok('your death has a sound, offline and live', /if\(t\.isPlayer\)\{ reloadStop\(
   ok('  no two classes share a routine', names.size === 6);
 }
 ok('reloads follow the weapon\'s REAL reload time (parts that speed it up speed the sound up)', /const ms = pl\.dur \* 1000;/.test(lift('startReload')) && /reloadSound\(e\.wep\.type, ms, null, true, pl\)/.test(lift('startReload')));
-ok('other players\' reloads are heard close by (bots and PvP; a remote Warden shell by shell)', /reloadSound\(e\.wep\.type, ms, earAt\(e\.x, e\.z, 0\.6\), false, pl\)/.test(lift('startReload')) && /reloadSound\(rw\.type, rw\.reload, earAt\(r\.cx, r\.cz, 0\.6\)\)/.test(html) && /r\.shellT \+= rw\.reload \/ 1000 \* SHELL\.per/.test(html));
+ok('other players\' reloads are heard close by (bots and PvP; a remote Warden shell by shell)', /reloadSound\(e\.wep\.type, ms, earAt\(e\.x, e\.z, 0\.6\), false, pl\)/.test(lift('startReload')) && /reloadSound\(rw\.type, rw\.reload, earAt\(r\.cx, r\.cz, 0\.6\)\)/.test(html) && /r\.shellT \+= beat;/.test(html));
 ok('a reload cut short by death or the match ending goes quiet',
    /reloadStop\(\)/.test(lift('kill')) && /reloadStop\(\)/.test(lift('abandonMatch')) && /reloadStop\(\)/.test(lift('endMatch')) && /reloadStop\(\)/.test(lift('liveResetWeapon')));
 /* ---- echo, toned down ---- */
