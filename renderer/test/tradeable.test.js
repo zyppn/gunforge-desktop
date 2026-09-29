@@ -3,8 +3,8 @@
    Tradeable: live PvP drops (and anything bought on the auction). Soulbound: offline
    drops and, since migration 022, daily-store buys - the shop is personal, so letting its
    parts move meant alt accounts were free shop rerolls. The database refuses to list a
-   bound part; the UI must agree: a mark on every card, and no AUCTION button where it
-   could only fail.
+   bound part; the UI must agree: a brass mark on tradeable cards only, and no AUCTION
+   button where it could only fail.
 
    node renderer/test/tradeable.test.js */
 const fs = require('fs'), path = require('path'), vm = require('vm');
@@ -24,12 +24,12 @@ vm.runInContext(icons + lift('tradeBadge') + lift('partFromRow'), ctx);
 
 ok('a part row from the database carries its soulbound flag', ctx.partFromRow({ uid: 'a', bound: true }).bound === true && ctx.partFromRow({ uid: 'b', bound: false }).bound === false);
 ok('tradeable parts get the brass trade mark, named on hover', /class="tb tr" title="Tradeable/.test(ctx.tradeBadge({ bound: false })));
-ok('soulbound parts get the lock, named on hover', /class="tb sb" title="Soulbound/.test(ctx.tradeBadge({ bound: true })));
+ok('soulbound parts get no mark at all (the lock is kept for a future scrap-protect toggle)', ctx.tradeBadge({ bound: true }) === '' && !/TB_ICON\.sb|class="tb sb"/.test(html));
 ok('no mark when the status is unknown (a local-only save)', ctx.tradeBadge({}) === '' && ctx.tradeBadge({ bound: 'x' }) === '');
 ctx.ACCOUNT.online = false;
 ok('no mark without an account session (no auction to trade on)', ctx.tradeBadge({ bound: false }) === '');
 ok('every part card shows the mark beside its rarity', /'<\/span>'\+tradeBadge\(p\)\+'<span class="ww">'/.test(lift('partCard')));
-ok('everything in the daily store is shown as soulbound before you buy it', /partCard\(Object\.assign\(\{ bound: true \}, it\)/.test(lift('renderStore')));
+ok('daily-store cards carry no trade mark (they are soulbound), and the store says so', /partCard\(Object\.assign\(\{ bound: true \}, it\)/.test(lift('renderStore')) && /Store parts are soulbound/.test(lift('renderStore')));
 ok('the locker has no AUCTION button on soulbound parts', /\(p\.bound \? '' : '<button class="btn sm" '\+lock\+' onclick="openList\(/.test(lift('renderInventory')));
 ok('  and opening a listing for one is refused before it reaches the server', /if\(p\.bound\)\{ toast\('SOULBOUND/.test(lift('openList')));
 console.log(fails ? '\ntradeable: ' + fails + ' failure(s)' : '\ntradeable: all clear');

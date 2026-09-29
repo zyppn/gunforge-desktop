@@ -224,7 +224,7 @@
   /* tradeable / soulbound mark: a tiny icon beside the rarity, name on hover */
   .tb{display:inline-block;width:11px;height:11px;margin-left:7px;vertical-align:-1px;cursor:help}
   .tb svg{display:block;width:100%;height:100%}
-  .tb.tr{color:var(--brass)} .tb.sb{color:#7C8A99}
+  .tb.tr{color:var(--brass)}
   .filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .fbtn{font-size:11px;padding:4px 9px;border:1px solid var(--line);color:var(--dim);cursor:pointer;background:var(--panel2)}
   .fbtn.on{border-color:var(--brass);color:var(--brass)}
@@ -1517,17 +1517,16 @@ function modText(mods){
   }).join(' · ');
 }
 /* Can this part go on the auction? Tradeable: live PvP drops (and anything bought on the
-   auction). Soulbound: offline drops and daily-store buys - yours only. A part whose
-   status is unknown (a local-only save) gets no mark rather than a wrong one. */
+   auction) get a small brass mark. Soulbound parts - offline drops and daily-store buys -
+   get none: no mark, and no AUCTION button. (A lock icon is kept free for a future
+   "protect from scrapping" toggle, so it must not mean soulbound.) A part whose status
+   is unknown (a local-only save) gets no mark either. */
 const TB_ICON = {
-  tr: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 4h8M7 1.5 9.5 4 7 6.5M10.5 8h-8M5 5.5 2.5 8 5 10.5"/></svg>',
-  sb: '<svg viewBox="0 0 12 12" fill="currentColor"><path d="M3.5 5V3.8a2.5 2.5 0 0 1 5 0V5h.5a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1.3 0h2.4V3.8a1.2 1.2 0 0 0-2.4 0z"/></svg>'
+  tr: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 4h8M7 1.5 9.5 4 7 6.5M10.5 8h-8M5 5.5 2.5 8 5 10.5"/></svg>'
 };
 function tradeBadge(p){
-  if(!p || typeof p.bound !== 'boolean' || !ACCOUNT.online) return '';
-  return p.bound
-    ? '<span class="tb sb" title="Soulbound - yours only, cannot be auctioned">' + TB_ICON.sb + '</span>'
-    : '<span class="tb tr" title="Tradeable - can be sold on the auction house">' + TB_ICON.tr + '</span>';
+  if(!p || p.bound !== false || !ACCOUNT.online) return '';
+  return '<span class="tb tr" title="Tradeable - can be sold on the auction house">' + TB_ICON.tr + '</span>';
 }
 function partCard(p, actionsHtml, tag, extraClass){
   const set = p.set ? SETS.find(s=>s.id===p.set) : null;
@@ -2508,7 +2507,7 @@ function renderInventory(filter){
    + (nListed ? ' <span style="color:var(--dim);font-size:13px">+ '+nListed+' listed</span>' : '')
    + (invFilter==='all' ? '' : ' · showing '+items.length)+'</h2>'
    +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning. Parts on the auction block are escrowed and don\'t count against your '+PART_CAP+'.'
-   +(ACCOUNT.online ? ' <span style="white-space:nowrap">'+tradeBadge({bound:false})+' tradeable (live PvP drops)</span> <span style="white-space:nowrap">'+tradeBadge({bound:true})+' soulbound (offline drops, store)</span>' : '')
+   +(ACCOUNT.online ? ' <span style="white-space:nowrap">'+tradeBadge({bound:false})+' tradeable (live PvP drops)</span>' : '')
    +'</p>'
    +(held >= PART_CAP ? '<p class="note" style="color:#E05A4E">Locker full — drops and auction buys will be refused until you scrap or list something.</p>' : '')
    +'<div class="filters">'+fbs+'</div>'
