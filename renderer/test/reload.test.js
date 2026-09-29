@@ -55,13 +55,16 @@ const run = (e, secs) => { const step = 1 / 60; for(let t = 0; t < secs; t += st
 }
 {
   const e = Object.assign({}, warden, { ammo: 0 }); ctx.G.elapsed = 0; ctx.reloadStops = 0;
-  ctx.startReload(e); run(e, 0.75);
+  ctx.startReload(e); run(e, 1.1);
   const loaded = e.ammo;
   ok('mid-load with shells in: firing is allowed...', ctx.reloadInterruptible(e) && loaded >= 2, loaded + ' loaded');
   ctx.interruptReload(e);
   ok('  ...and stops the reload, keeping what was loaded (and its sound stops)', !e.reloading && e.ammo === loaded && ctx.reloadStops === 1);
   const e2 = Object.assign({}, warden, { ammo: 0 }); ctx.G.elapsed = 0; ctx.startReload(e2); run(e2, 0.1);
   ok('  but not before the first shell is in', !ctx.reloadInterruptible(e2));
+  const e3 = Object.assign({}, warden, { ammo: 0 }); ctx.G.elapsed = 0; sounds.length = 0; ctx.startReload(e3); run(e3, 0.6);
+  ok('  from empty, not until that first shell is PUMPED into the chamber (0.8s, not 0.48s)', !ctx.reloadInterruptible(e3) && (run(e3, 0.25), ctx.reloadInterruptible(e3)));
+  ok('  and the pump comes right after shell one in the sound', sounds.length === 1 && sounds[0].plan.pump && Math.abs(sounds[0].plan.pumpT - 0.32) < 1e-9);
 }
 {
   const rifle = { wep: { type: 'Assault Rifle', reload: 1700, mag: 30 }, isPlayer: true, ammo: 25, x: 0, z: 0 };
@@ -89,10 +92,32 @@ ok('the reload animation follows the real length', /const dur = me\.reloadDur \|
 {
   const vmSrc = lift('updateViewmodelPose');
   ok('the Warden has its own loading motion, not the mag reload squeezed shorter', /if\(me\.reloading && pl && pl\.shells\)/.test(vmSrc) && /rolled over: loading port up/.test(vmSrc));
-  ok('  one push per shell, on the beat the count ticks up', /const frac = \(\(el - pl\.open\) \/ pl\.per\) % 1;/.test(vmSrc));
-  ok('  and the pump is racked only from empty', /if\(pl\.pump && el >= loadEnd\)/.test(vmSrc));
+  ok('  one push per shell, on the beat the count ticks up', /const frac = \(\(el - pl\.open - \(pt && el >= pumpAt \+ pt \? pt : 0\)\) \/ pl\.per\) % 1;/.test(vmSrc));
+  ok('  and the pump is racked only from empty, right after the first shell', /const pumpAt = pl\.open \+ pl\.per;/.test(vmSrc) && /if\(pt && el >= pumpAt && el < pumpAt \+ pt\)/.test(vmSrc));
   ok('  firing mid-load eases the gun back up instead of snapping it', /me\._rlS = \(me\._rlS \|\| 0\) \+ \(rl - \(me\._rlS \|\| 0\)\) \* Math\.min\(1, dt \* 16\)/.test(vmSrc));
-  ok('startReload records the plan the animation follows', /e\.reloadPlan = pl; e\.reloadStart = G\.elapsed;/.test(lift('startReload')));
+  ok('startReload records the plan the animation follows', /e\.reloadPlan = pl; e\.reloadStart = t0;/.test(lift('startReload')));
+}
+/* The exploit: hold the trigger on the last shell. Each new shell went in before the gun
+   could fire again, so it fired forever at full rate and never paid a pump. This holds the
+   trigger for 60s with fire()'s own reload rules and compares seconds per shot against
+   the honest way to shoot: empty the tube, full reload, repeat. */
+{
+  const fireSrc = lift('fire');
+  ok('the hold-fire simulation mirrors fire()', /if\(reloadInterruptible\(e\) && now >= e\.fireT\) interruptReload\(e\);/.test(fireSrc) && /if\(e\.reloading \|\| now < e\.fireT\) return;/.test(fireSrc) && /if\(e\.ammo <= 0\)\{ startReload\(e\); return; \}/.test(fireSrc));
+  for(const [reload, rof] of [[2000, 700], [1500, 700], [2000, 550], [1500, 550], [1000, 550]]){
+    const e = { wep: { type: 'Shotgun', reload, mag: 6, rof }, isPlayer: false, x: 99, z: 99, ammo: 0, fireT: 0 };
+    ctx.G.elapsed = 0; let shots = 0; const step = 1 / 120;
+    for(let t = 0; t < 60; t += step){
+      ctx.G.elapsed += step; ctx.reloadTick(e); const now = ctx.G.elapsed;
+      if(ctx.reloadInterruptible(e) && now >= e.fireT) ctx.interruptReload(e);
+      if(e.reloading || now < e.fireT) continue;
+      if(e.ammo <= 0){ ctx.startReload(e); continue; }
+      e.fireT = now + rof / 1000; e.ammo--; shots++;
+      if(e.ammo <= 0) ctx.startReload(e);
+    }
+    const trickle = 60 / shots, honest = (6 * rof / 1000 + reload / 1000) / 6;
+    ok('holding fire from empty is slower than emptying + reloading (' + reload + 'ms reload, ' + rof + 'ms cycle)', trickle > honest, trickle.toFixed(2) + 's/shot vs ' + honest.toFixed(2));
+  }
 }
 console.log(fails ? '\nreload: ' + fails + ' failure(s)' : '\nreload: all clear');
 process.exit(fails ? 1 : 0);

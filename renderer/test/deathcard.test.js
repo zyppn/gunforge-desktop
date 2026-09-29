@@ -179,7 +179,7 @@ console.log('\nCAMPAIGN GETS NO DEATH CARD');
     dead:false, burnT:0, slowT:0, shield:0, wep:{ abilities:new Set() } }, o);
   const box = {
     Math, Set, G:null, LoadoutCore:core,
-    spawnBurst(){}, sfx(){}, killSound(){}, deathSound(){}, reloadStop(){}, earAt(){ return {vol:0}; }, feed(){}, damage(){}, hostile(){ return false; },
+    spawnBurst(){}, sfx(){}, killSound(){}, streakKill(){}, streakReset(){}, deathSound(){}, reloadStop(){}, earAt(){ return {vol:0}; }, feed(){}, damage(){}, hostile(){ return false; },
     startDeathAnim(){}, endMatch(){ spy.ended++; },
     noteKill(n){ spy.notes.push(n); },
     showDeathCard(){ spy.shown++; }, startKillcam(){ spy.cam++; },

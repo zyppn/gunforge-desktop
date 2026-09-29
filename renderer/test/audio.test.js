@@ -145,8 +145,8 @@ ok('saved music level is checked and defaults to 60%', /SETTINGS\.music  = \(typ
   ok('  and if any pellet hit a shield, the ring plays', plays[0][1] === true);
 }
 ok('the impact rings when a shield takes the hit', /hurtSound\(dmg, !!\(G && G\.me && G\.me\.shield > 0\)\)/.test(lift('playerFlinch')));
-ok('kills use the new confirm, offline and live', (html.match(/killSound\(\);/g) || []).length >= 2 && !/sfx\('kill'\); noteKill/.test(html));
-ok('your death has a sound, offline and live', /if\(t\.isPlayer\)\{ reloadStop\(\); deathSound\(\); \}/.test(lift('kill')) && /reloadStop\(\); deathSound\(\);/.test(html));
+ok('kills use the new confirm, offline and live', (html.match(/streakKill\(\);/g) || []).length >= 2 && !/sfx\('kill'\); noteKill/.test(html));
+ok('your death has a sound, offline and live', /if\(t\.isPlayer\)\{ reloadStop\(\); deathSound\(\); streakReset\(\); \}/.test(lift('kill')) && /reloadStop\(\); deathSound\(\);/.test(html));
 /* ---- reloads ---- */
 {
   const c6 = vm.createContext({});
@@ -168,13 +168,16 @@ ok('a reload cut short by death or the match ending goes quiet',
 ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends to 0.4)',
    /AC\.sampleRate \* 0\.8\)/.test(lift('roomBus')) && /g\.gain\.value = 4\.5;/.test(lift('roomBus')) && /Math\.min\(0\.4, \(d - 4\) \/ 45\)/.test(lift('earAt')));
 
-/* ---- the kill confirm: a round pop, then one glass note ---- */
+/* ---- the kill confirm: a round pop, then one glass note that climbs with the streak ---- */
 {
   const src = lift('killSound');
-  ok('the kill is a pop then one glassy note (A6), with no gun-part clack in it', /'sine', 1100 \* p, 320 \* p/.test(src) && /fmPluck\(o, t \+ 0\.022, 1760,/.test(src) && !/1150|2950/.test(src));
-  ok('  the note never changes pitch (only the pop varies)', !/1760 \*/.test(src) && /p = rnd\(0\.97, 1\.03\)/.test(src));
-  ok('  a second kill within ~1s is softer and shorter', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.7 : 1\)/.test(src) && /quick \? 0\.22 : 0\.38/.test(src));
+  ok('the kill is a pop then one glassy note, with no gun-part clack in it', /'sine', 1100 \* p, 320 \* p/.test(src) && /fmPluck\(o, t \+ 0\.022, f,/.test(src) && !/1150|2950/.test(src));
+  ok('  the note steps up the A major pentatonic per kill this life, then holds', /const KILL_NOTES = \[1760, 1976, 2217, 2637, 2960\];/.test(html) && /Math\.min\(KILL_NOTES\.length, Math\.max\(1, n \|\| 1\)\) - 1/.test(src));
+  ok('  back-to-back kills are no longer turned down (the old quick-kill softening is gone)', !/quick/.test(src) && !/KILLSND/.test(html));
   ok('  fmPluck starts its gains at 0 (no loud first block)', /mg\.gain\.value = 0;/.test(lift('fmPluck')) && /g\.gain\.value = 0;/.test(lift('fmPluck')));
+  ok('kills go through the streak, offline and live; dying and a new match reset it',
+     (html.match(/streakKill\(\);/g) || []).length === 2 && !/[^.\w]killSound\(\);/.test(html) &&
+     (html.match(/streakReset\(\);/g) || []).length >= 4 && /deathSound\(\); streakReset\(\);/.test(html));
 }
 /* ---- the hitmarker: a fast click that does not wear you down ---- */
 {

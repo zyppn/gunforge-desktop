@@ -262,6 +262,21 @@
   /* While dead, everything about YOUR state comes off screen. The scoreboard,
      killfeed and the card itself stay. */
   #hud.dead #crosshair, #hud.dead #hudbl, #hud.dead #hudbr,
+  /* kill streak emblem: five ring segments light one per kill this life; wings at 3+, glow at 5 */
+  #streak{position:absolute;left:50%;bottom:19%;width:84px;height:70px;margin-left:-42px;opacity:0;transition:opacity .45s;pointer-events:none;filter:drop-shadow(0 1px 2px #000)}
+  #streak.on{opacity:1;transition:opacity .08s}
+  #streak svg{width:100%;height:100%;overflow:visible}
+  #streak .seg{fill:none;stroke:#39434E;stroke-width:6}
+  #streak .seg.lit{stroke:var(--brass)}
+  #streak .seg.new{animation:strkSeg .5s ease-out}
+  @keyframes strkSeg{from{stroke:#FFF6E6}to{stroke:var(--brass)}}
+  #streak text{font-family:var(--disp);font-weight:900;font-size:28px;fill:#F2F5F8;text-anchor:middle;dominant-baseline:central}
+  #streak .wing{fill:var(--brass);opacity:0;transition:opacity .2s}
+  #streak.t3 .wing.a, #streak.t4 .wing, #streak.t5 .wing{opacity:1}
+  #streak.t5 svg{filter:drop-shadow(0 0 6px rgba(232,163,61,.75))}
+  #streak.pop svg{animation:strkPop .22s ease-out}
+  @keyframes strkPop{from{transform:scale(1.35)}to{transform:scale(1)}}
+  #hud.dead #streak{opacity:0 !important}
   #hud.dead #hitmark, #hud.dead #lowhp, #hud.dead #burnov, #hud.dead #frostov{
     opacity:0 !important; transition:opacity .18s}
   #hudtop{position:absolute;top:8px;left:0;right:0;display:flex;justify-content:center;gap:18px;text-shadow:0 1px 2px #000}
@@ -410,6 +425,7 @@
         <div id="vign"></div><div id="lowhp"></div><div id="burnov"></div><div id="frostov"></div>
         <div id="crosshair"></div>
         <div id="hitmark"><i></i><i></i><i></i><i></i></div>
+        <div id="streak"></div>
         <div id="hudtop">
           <div class="box" id="timer">3:00</div>
           <div id="pingtag" style="position:absolute;top:2px;left:10px;display:none;font-size:10px;letter-spacing:.1em;opacity:.6;color:#7E8B99;pointer-events:none">PING —</div>
@@ -3327,16 +3343,18 @@ function hurtPlay(dmg, shielded){
 }
 
 /* ---- the kill confirm ----
-   A round pop and, 22 ms behind it, one glassy note (A6, 1760 Hz): an FM pluck that is
-   bright for an instant and then pure. No gun parts in it on purpose - a metal clack read
-   as the LS-1's own bolt cycling half a second after the shot, and a kill sound has to
-   mean one thing. (Earlier passes: a coin-like two-note chime, a steel ding, a
-   Battlefield-style punch, a wind chime, a bolt lock.)
+   A round pop and, 22 ms behind it, one glassy note: an FM pluck that is bright for an
+   instant and then pure. No gun parts in it on purpose - a metal clack read as the LS-1's
+   own bolt cycling half a second after the shot, and a kill sound has to mean one thing.
+   (Earlier passes: a coin-like two-note chime, a steel ding, a Battlefield-style punch, a
+   wind chime, a bolt lock.)
+   Each kill in the same life steps the note up the A major pentatonic - A6, B6, C#7, E7,
+   F#7, then it stays on F#7 - so a streak climbs instead of repeating, and back-to-back
+   kills ring as a chord rather than stacking one note. Dying resets it. Every step is
+   level-matched (the higher notes are trimmed ~1 dB so the climb is pitch, not volume).
    Level: matched, A-weighted, to the punch it replaced (itself calibrated against the
-   hitmarker and the guns); the pop sits ~8 dB over the note so the note stays the event.
-   Heard up to ~20 times a match: ~0.4s, the note never changes pitch, and a second kill
-   within ~1s is softer and shorter, not two stacked. */
-const KILLSND = { last: -9 };
+   hitmarker and the guns); the pop sits ~8 dB over the note so the note stays the event. */
+const KILL_NOTES = [1760, 1976, 2217, 2637, 2960];
 function fmPluck(o, t, fc, ratio, idx, a, dec){      // FM bell/glass: the brightness falls away fast
   const car = AC.createOscillator(), mod = AC.createOscillator(), mg = AC.createGain(), g = AC.createGain();
   car.frequency.value = fc; mod.frequency.value = fc * ratio;
@@ -3345,20 +3363,47 @@ function fmPluck(o, t, fc, ratio, idx, a, dec){      // FM bell/glass: the brigh
   mod.connect(mg); mg.connect(car.frequency); car.connect(g); g.connect(o);
   car.start(t); mod.start(t); car.stop(t + dec + 0.05); mod.stop(t + dec + 0.05);
 }
-function killSound(){
+function killSound(n){
   au(); if(!AC || !masterBus()) return;
   try{
     const m = masterBus(), t = AC.currentTime;
-    const now = performance.now() / 1000, quick = now - KILLSND.last < 1.1;
-    KILLSND.last = now;
+    const step = Math.min(KILL_NOTES.length, Math.max(1, n || 1)) - 1, f = KILL_NOTES[step], up = f / KILL_NOTES[0];
     let o = m;                                                          // a touch of the room
     if(roomBus()){ o = AC.createGain(); o.connect(m); const w = AC.createGain(); w.gain.value = 0.12; o.connect(w); w.connect(ROOM); }
-    const g = (quick ? 0.7 : 1) * 0.3, p = rnd(0.97, 1.03);
+    const g = 0.3, p = rnd(0.97, 1.03) * Math.pow(up, 0.5);                         // the pop rises a little too
     toneHit(o, t, 'sine', 1100 * p, 320 * p, 0.18 * g, 0.03);                      // the pop: a fast drop
     noiseHit(o, t, 200, 3, 'bandpass', 2000, 1.5, 0.09 * g, 0.004);                  // its edge
     toneHit(o, t, 'sine', 110, 55, 0.18 * g, 0.08);                                  // a little weight
-    fmPluck(o, t + 0.022, 1760, 3.5, 1.4, 0.06 * g, quick ? 0.22 : 0.38);           // the glass note
+    fmPluck(o, t + 0.022, f, 3.5, 1.4, 0.06 * g * Math.pow(up, -0.3), 0.38);       // the glass note
   }catch(e){}
+}
+/* Kills this life: drives the note above and the streak emblem (#streak). */
+const STREAK = { n: 0, timer: 0, el: null };
+function streakEl(){
+  if(STREAK.el) return STREAK.el;
+  const el = document.getElementById('streak'); if(!el) return null;
+  const arc = k => { const a0 = (-90 + k * 72 + 4) * Math.PI / 180, a1 = (-90 + (k + 1) * 72 - 4) * Math.PI / 180, r = 26;
+    return `<path class="seg" d="M${(r * Math.cos(a0)).toFixed(2)} ${(r * Math.sin(a0)).toFixed(2)} A${r} ${r} 0 0 1 ${(r * Math.cos(a1)).toFixed(2)} ${(r * Math.sin(a1)).toFixed(2)}"/>`; };
+  const wings = '<path class="wing a" d="M-36 -11 L-47 0 L-36 11 L-40 0 Z"/><path class="wing b" d="M-45 -16 L-58 0 L-45 16 L-50 0 Z"/>';
+  el.innerHTML = `<svg viewBox="-60 -35 120 70">${wings}<g transform="scale(-1,1)">${wings}</g>${[0,1,2,3,4].map(arc).join('')}<text x="0" y="1">1</text></svg>`;
+  return STREAK.el = el;
+}
+function streakKill(){
+  STREAK.n++;
+  killSound(STREAK.n);
+  const el = streakEl(); if(!el) return;
+  const n = STREAK.n, lit = Math.min(5, n), segs = el.querySelectorAll('.seg');
+  segs.forEach((sg, k) => { sg.classList.toggle('lit', k < lit); sg.classList.remove('new'); });
+  el.querySelector('text').textContent = n;
+  el.className = 'on t' + lit;
+  void el.offsetWidth;                                  // restart the pop and the newest segment's flash
+  el.classList.add('pop'); if(n <= 5) segs[n - 1].classList.add('new');
+  clearTimeout(STREAK.timer);
+  STREAK.timer = setTimeout(() => el.classList.remove('on'), 2800);
+}
+function streakReset(){
+  STREAK.n = 0; clearTimeout(STREAK.timer);
+  if(STREAK.el) STREAK.el.classList.remove('on');
 }
 
 /* ---- your death ----
@@ -3479,11 +3524,13 @@ function reloadSound(type, ms, ear, own, plan){
     if(plan && plan.shells){
       const R = plan.dur, sh = [];
       // each shell's click lands as that shell goes in (the ammo count ticks up on the same beat)
-      for(let k = 0; k < plan.shells; k++) sh.push([Math.max(0, plan.open + (k + 1) * plan.per - 0.07) / R, 'shell']);
-      if(plan.pump) sh.push([(plan.open + plan.shells * plan.per) / R, 'pump']);
+      // from empty: the first shell, then the pump that chambers it, then the rest
+      const pt = plan.pumpT || 0;
+      for(let k = 0; k < plan.shells; k++) sh.push([Math.max(0, plan.open + (k + 1) * plan.per + (k ? pt : 0) - 0.07) / R, 'shell']);
+      if(plan.pump) sh.push([(plan.open + plan.per) / R, 'pump']);
       seq = sh;
     }
-    const out = earOut(ear), t0 = AC.currentTime, len = Math.max(0.4, (ms || 1500) / 1000);
+    const out = earOut(ear), t0 = AC.currentTime + (plan && plan.delay || 0), len = Math.max(0.4, (ms || 1500) / 1000);
     const v = own ? 0.5 : 0.5 * (ear ? ear.vol : 1);   // measured: steps land ~-34 to -40 dBFS, under your gunfire
     if(v < 0.012) return;
     // scheduled, but through one gain we can close: a death mid-reload must not finish it
@@ -6354,12 +6401,21 @@ function fire(e, dir){
 }
 /* A reload's length. Magazine guns swap the whole mag, so it is always the full time.
    The Warden loads shell by shell: a moment to open up, one beat per MISSING shell, and
-   a pump at the end only if it ran dry (a shell already chambered needs no rack). Topping
+   a pump only if it ran dry (a shell already chambered needs no rack). Topping
    up 2 of 6 is quick; a full reload from empty takes exactly the weapon's reload time -
    the stat, part mods and all, still means what it says.
    That holds for a bigger magazine too: the shell beat is the loading time divided by
    the magazine, so 8 shells from empty still take the reload stat, never longer. (The
-   first version used a fixed beat, which quietly made every mag part a reload penalty.) */
+   first version used a fixed beat, which quietly made every mag part a reload penalty.)
+   Two rules keep loading from ever being a faster way to shoot than the tube:
+     - no loading while the gun is still cycling from a shot: the reload clock starts when
+       the pump after the shot is done (e.fireT), not at the trigger pull;
+     - from empty the first shell is racked into the chamber before anything else, so the
+       order is open, shell, PUMP, the rest - and it can fire only once that pump is done.
+   Before, the first shell landed 0.48s after the last shot on a 0.7s fire cycle: holding
+   the trigger on the last shell fired forever at full rate with no pump ever paid. Now
+   that trickle costs 1.5s a shot (stock) against 1.03s for emptying the tube and doing a
+   full reload - worse on every build (see reload.test.js). Total time is unchanged. */
 const SHELL = { open: 0.12, pump: 0.16, close: 0.06 };   // fractions of the full reload time
 function reloadPlan(e){
   const R = e.wep.reload / 1000;
@@ -6367,14 +6423,18 @@ function reloadPlan(e){
   const mag = Math.max(1, e.wep.mag), per = (1 - SHELL.open - SHELL.pump) / mag;   // 6 shells: 0.12 each
   const missing = Math.max(1, mag - e.ammo), empty = e.ammo <= 0;
   return { dur: R * (SHELL.open + missing * per + (empty ? SHELL.pump : SHELL.close)),
-           shells: missing, pump: empty, open: R * SHELL.open, per: R * per };
+           shells: missing, pump: empty, open: R * SHELL.open, per: R * per, pumpT: empty ? R * SHELL.pump : 0 };
 }
 function startReload(e){
   if(e.reloading || e.wep.reload<=0 || e.ammo>=e.wep.mag) return;
   const pl = reloadPlan(e);
-  e.reloading = true; e.reloadDur = pl.dur; e.reloadT = G.elapsed + pl.dur; e.reloadPlan = pl; e.reloadStart = G.elapsed;
-  // shells go in one at a time, so the count climbs as you load - and you can fire what is in
-  e.shells = pl.shells ? { left: pl.shells, next: G.elapsed + pl.open + pl.per, per: pl.per } : null;
+  // a shotgun cannot start loading while it is still pumping from the last shot
+  const t0 = pl.shells ? Math.max(G.elapsed, e.fireT || 0) : G.elapsed;
+  pl.delay = t0 - G.elapsed;
+  e.reloading = true; e.reloadDur = pl.dur; e.reloadT = t0 + pl.dur; e.reloadPlan = pl; e.reloadStart = t0;
+  // shells go in one at a time, so the count climbs as you load - and you can fire what is in.
+  // From empty the first one counts only once it is racked into the chamber.
+  e.shells = pl.shells ? { left: pl.shells, next: t0 + pl.open + pl.per + pl.pumpT, per: pl.per } : null;
   const ms = pl.dur * 1000;
   if(e.isPlayer) reloadSound(e.wep.type, ms, null, true, pl);
   else if(G.me && Math.hypot(e.x - G.me.x, e.z - G.me.z) < 14) reloadSound(e.wep.type, ms, earAt(e.x, e.z, 0.6), false, pl);
@@ -6431,13 +6491,13 @@ function damage(t, amount, src, isCrit){
 }
 function kill(t, src){
   t.dead = true; t.deaths++;
-  if(t.isPlayer){ reloadStop(); deathSound(); }
+  if(t.isPlayer){ reloadStop(); deathSound(); streakReset(); }
   t.burnT = 0; t.slowT = 0; t.burnSrc = null; t.burnSpread = false; t.reloading = false;
   t.target = null; t.alertSrc = null; t.alertT = 0; t.path = null;
   spawnBurst(t.x, t.z, t.grunt ? 0x8A4640 : 0xE8A33D);
   if(src && src!==t){
     src.kills++;
-    if(src.isPlayer) killSound();
+    if(src.isPlayer) streakKill();
     if(src.wep && src.wep.abilities.has('killshield')){
       const before = src.shield;
       src.shield = Math.min(LoadoutCore.BULWARK.cap, src.shield + LoadoutCore.BULWARK.perKill);
@@ -7017,6 +7077,7 @@ function startMatch(){
   }
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
   resetHeadToHead();   // the record is per match, not per session
+  streakReset();
   hideDeathCard();     // and neither is the card - nothing carries into a new match
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
@@ -7188,19 +7249,20 @@ function updateViewmodelPose(dt, me, isMoving){
     /* The Warden loads shells, it does not swap a magazine, so it gets its own motion
        instead of the mag reload squeezed into less time: the gun rolls over to show its
        loading port, each shell is a small push as your thumb seats it (on the same beat
-       the count ticks up), and from empty it rolls back and racks the pump. One shell
-       is one push; six shells are six. */
+       the count ticks up), and from empty it racks the pump right after the first shell,
+       then loads the rest. One shell is one push; six shells are six. */
     shellLoad = true;
-    const el = G.elapsed - me.reloadStart, loadEnd = pl.open + pl.shells * pl.per;
+    const pt = pl.pumpT || 0, el = Math.max(0, G.elapsed - me.reloadStart), loadEnd = pl.open + pl.shells * pl.per + pt;
     const ease = x => x * x * (3 - 2 * x);
     const tin = ease(Math.min(1, el / pl.open));
     const tout = ease(Math.max(0, Math.min(1, (el - loadEnd) / Math.max(0.05, pl.dur - loadEnd))));
     rl = tin * (1 - tout);
-    if(el > pl.open && el < loadEnd){
-      const frac = ((el - pl.open) / pl.per) % 1;
+    const pumpAt = pl.open + pl.per;                        // from empty: right after shell one
+    if(pt && el >= pumpAt && el < pumpAt + pt) pull = Math.sin((el - pumpAt) / pt * Math.PI);
+    else if(el > pl.open && el < loadEnd){
+      const frac = ((el - pl.open - (pt && el >= pumpAt + pt ? pt : 0)) / pl.per) % 1;
       push = frac > 0.55 ? Math.sin((frac - 0.55) / 0.45 * Math.PI) : 0;
     }
-    if(pl.pump && el >= loadEnd) pull = Math.sin(Math.min(1, (el - loadEnd) / Math.max(0.05, pl.dur - loadEnd)) * Math.PI);
   } else if(me.reloading){
     const dur = me.reloadDur || me.wep.reload/1000;
     const prog = 1 - Math.max(0, me.reloadT - G.elapsed)/dur; // 0 -> 1
@@ -7954,6 +8016,7 @@ function startLiveMatch(){
   live = { room:null, myId:null, remotes:new Map(), sendT:0, lastHp:100, results:false, rewarded:false };
   $('#killfeed').innerHTML=''; $('#banner').style.opacity=0;
   resetHeadToHead();   // the record is per match, not per session
+  streakReset();
   hideDeathCard();     // and neither is the card - nothing carries into a new match
   paused = false; $('#pauseov').classList.remove('on');
   show('game');
@@ -8006,9 +8069,9 @@ function startLiveMatch(){
     });
     room.onMessage('kill', m => {
       feed(m.killer+'  ⟿  '+m.victim, m.killer===P.name || m.victim===P.name);
-      if(m.killer === P.name){ killSound(); noteKill(m.victim, false); }
+      if(m.killer === P.name){ streakKill(); noteKill(m.victim, false); }
       if(m.victim === P.name){
-        reloadStop(); deathSound();
+        reloadStop(); deathSound(); streakReset();
         noteKill(m.killer, true);
         // p.eq is already synced for every player, so the killer's full build
         // is sitting in state - no extra round trip to show it.
