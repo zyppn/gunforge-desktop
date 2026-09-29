@@ -7824,6 +7824,12 @@ function endMatch(campWin){
   const localXp = kills*12 + (win?80:30) + (mode==='camp' ? wave*10 : 0);
   const localCr = kills*8 + (win?60:20) + (mode==='camp' ? wave*5 : 0);
   const online = !!ACCOUNT.online;
+  /* Signed in (Discord or guest) but the server was out of reach at launch: the menu is
+     showing the account's CACHED profile, not a local one. Rolling a local reward here
+     showed a part and credits that never existed - the next online launch loads the real
+     profile over them - and the match itself was never queued, so its real reward was
+     lost too. An account's rewards only ever come from the server: queue it, say so. */
+  const hasAccount = HAS_SUPABASE() && !!authStore();
 
   function bankLocalReward(){
     const d = rollDrop(kills, true);
@@ -7840,7 +7846,7 @@ function endMatch(campWin){
   }
 
   let drop = null;
-  if(!online) drop = bankLocalReward();
+  if(!online && !hasAccount) drop = bankLocalReward();   // a local-only save, no account
 
   // one id per match, reused by every retry so the server can dedupe replays
   const mid = uid();
@@ -7853,8 +7859,9 @@ function endMatch(campWin){
 
   // ---- 2) render results IMMEDIATELY — the UI never waits on the network ----
   // Online: reward rows render pending and are filled from the server's reply.
-  renderResults(mode, mapName, win, placeTxt, kills, deaths, localXp, localCr, lvlBefore, drop, online);
+  renderResults(mode, mapName, win, placeTxt, kills, deaths, localXp, localCr, lvlBefore, drop, online || hasAccount);
   G = null;
+  if(!online && hasAccount){ queueMatch('offline'); return; }
 
   // ---- 3) sync to server in the BACKGROUND; update the panel if/when it returns ----
   if(ACCOUNT.online){
@@ -7933,7 +7940,7 @@ function renderResults(mode, mapName, win, placeTxt, kills, deaths, xp, cr, lvlB
    +'<div id="resdrop">'+(pending
      ? '<div class="note" style="margin-top:20px;opacity:.65">◆ ASSESSING FIELD SALVAGE…</div>'
      : dropBlockHtml(drop))+'</div>'
-   +(ACCOUNT.online ? '<div class="note" style="margin-top:12px;opacity:.6" id="rewardsync">syncing to your account…</div>' : '')
+   +(pending ? '<div class="note" style="margin-top:12px;opacity:.6" id="rewardsync">syncing to your account…</div>' : '')
    +'<div class="btnrow" style="justify-content:center"><button class="btn primary" onclick="startMatch()">▸ REDEPLOY</button>'
    +'<button class="btn" onclick="renderInventory()">PARTS LOCKER</button>'
    +'<button class="btn" onclick="renderMenu()">COMMAND MENU</button></div>'
