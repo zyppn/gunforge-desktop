@@ -19,7 +19,9 @@ ok('a dead killer does not bank a shield', /killshield'\) >= 0 && !p\.dead/.test
 ok('killcam takes a remote id', /function startKillcam\(target, rid\)/.test(html));
 ok('the live death path passes it', /startKillcam\(k, m\.killerId\)/.test(html));
 ok('it reads the smoothed position', /const tx = r \? r\.cx : t\.x, tz = r \? r\.cz : t\.z/.test(html));
-ok('and looks at the smoothed position too', /camera\.lookAt\(tx, 1\.25, tz\)/.test(html));
+ok('and looks at the smoothed position too', /camera\.lookAt\(tx, 1\.35, tz\)/.test(html));
+ok('the killcam watches the killer from the FRONT, not behind', /const spot = \(ang, d\) => \(\{ x: tx \+ Math\.cos\(face \+ ang\) \* d/.test(html) && /\[0\.35, 0\.6, 0\.9, 1\.25\]/.test(html));
+ok('  and never puts the camera inside a wall', /const clear = p =>/.test(html));
 // the previous version of this grepped the whole block for "cyaw" and matched the COMMENT
 // explaining why cyaw is not used - an assertion that passes on prose is no assertion
 ok('but keeps the schema yaw, whose convention this maths expects',

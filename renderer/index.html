@@ -3417,10 +3417,18 @@ function reloadPart(out, t, kind, v){
   }
 }
 let RELOAD_PLAYING = null;     // the player's own: stopped if they die or the match ends mid-reload
-function reloadSound(type, ms, ear, own){
+function reloadSound(type, ms, ear, own, plan){
   au(); if(!AC || !masterBus()) return;
   try{
-    const seq = RELOAD_SEQ[type] || RELOAD_SEQ['Assault Rifle'];
+    let seq = RELOAD_SEQ[type] || RELOAD_SEQ['Assault Rifle'];
+    // the Warden: exactly as many shells as it is loading, and the pump only from empty
+    if(plan && plan.shells){
+      const R = plan.dur, sh = [];
+      // each shell's click lands as that shell goes in (the ammo count ticks up on the same beat)
+      for(let k = 0; k < plan.shells; k++) sh.push([Math.max(0, plan.open + (k + 1) * plan.per - 0.07) / R, 'shell']);
+      if(plan.pump) sh.push([(plan.open + plan.shells * plan.per) / R, 'pump']);
+      seq = sh;
+    }
     const out = earOut(ear), t0 = AC.currentTime, len = Math.max(0.4, (ms || 1500) / 1000);
     const v = own ? 0.5 : 0.5 * (ear ? ear.vol : 1);   // measured: steps land ~-34 to -40 dBFS, under your gunfire
     if(v < 0.012) return;
@@ -6096,20 +6104,42 @@ function stepKillcam(dt){
   const tx = r ? r.cx : t.x, tz = r ? r.cz : t.z;
   if(typeof tx !== 'number' || typeof tz !== 'number') return;
   kc.age += dt;
-  // sit behind and above them, facing the way they are facing
-  // POSITION comes from the smoothed copy; FACING still comes from the schema. r.cyaw is
-  // in the mesh's convention (-yaw, rotated a quarter turn), not the world-angle one this
-  // orbit maths wants, and a 30Hz step in rotation is nothing like as visible as one in
-  // position anyway - the judder was the camera's own location, not where it looked.
+  /* Watch them from the FRONT, the way a killcam in a hero shooter does: you see the face
+     and the gun that got you, not the back of their head. Slightly off to one side (the
+     weapon arm) so the gun never hides the face, a little above eye level, looking at
+     the chest. The facing still comes from the schema - see the note below on why the
+     position comes from the smoothed copy but the rotation does not.
+     A shot from the front can land inside a wall when they stand facing one, so the
+     camera tries its spot, then pulls closer, then swings further round to either side,
+     and takes the first place with a clear line to them. */
   const face = (typeof t.faceCur === 'number' ? t.faceCur
               : typeof t.yaw === 'number' ? t.yaw : 0);
-  const want = new THREE.Vector3(tx - Math.cos(face)*3.4, 2.9, tz - Math.sin(face)*3.4);
+  if(kc.side === undefined) kc.side = Math.random() < 0.5 ? 1 : -1;
+  const spot = (ang, d) => ({ x: tx + Math.cos(face + ang) * d, z: tz + Math.sin(face + ang) * d });
+  const clear = p => {
+    if(p.x < 0.4 || p.x > AW - 0.4 || p.z < 0.4 || p.z > AD - 0.4) return false;
+    for(const wl of (G.map && G.map.walls) || []){
+      // walls lower than the camera do not block it
+      if((wl.h || WALL_H) < 2.4) continue;
+      // sample the line from them to the camera
+      for(let k = 1; k <= 8; k++){
+        const x = tx + (p.x - tx) * k / 8, z = tz + (p.z - tz) * k / 8;
+        if(x > wl.x - 0.25 && x < wl.x + wl.w + 0.25 && z > wl.z - 0.25 && z < wl.z + wl.d + 0.25) return false;
+      }
+    }
+    return true;
+  };
+  let pick = null;
+  for(const ang of [0.35, 0.6, 0.9, 1.25].map(a => a * kc.side).concat([-0.35, -0.6, -0.9, -1.25].map(a => a * kc.side)))
+  { for(const d of [3.2, 2.6, 2.0, 1.5]){ const c = spot(ang, d); if(clear(c)){ pick = c; break; } } if(pick) break; }
+  if(!pick){ const b = spot(Math.PI, 3.0); pick = clear(b) ? b : spot(0.35 * kc.side, 1.2); }   // last resort: behind, then very close
+  const want = new THREE.Vector3(pick.x, 2.1, pick.z);
   if(!kc.cam){ kc.cam = want.clone(); }
   // ease in over the first moment so it does not cut hard off your own corpse
-  const k = Math.min(1, dt * (kc.age < 0.5 ? 4 : 9));
+  const k = Math.min(1, dt * (kc.age < 0.5 ? 4 : 7));
   kc.cam.lerp(want, k);
   camera.position.copy(kc.cam);
-  camera.lookAt(tx, 1.25, tz);
+  camera.lookAt(tx, 1.35, tz);
 }
 
 /* Cancel any death animation still running on this entity and put the mesh
@@ -6169,6 +6199,7 @@ function bMat(c){ if(!bulletMats[c]) bulletMats[c] = new THREE.MeshBasicMaterial
 
 function fire(e, dir){
   const w = e.wep, now = G.elapsed;
+  if(reloadInterruptible(e) && now >= e.fireT) interruptReload(e);
   if(e.reloading || now < e.fireT) return;
   if(e.ammo <= 0){ startReload(e); return; }
   e.fireT = now + w.rof/1000;
@@ -6267,11 +6298,42 @@ function fire(e, dir){
   }
   if(e.ammo<=0) startReload(e);
 }
+/* A reload's length. Magazine guns swap the whole mag, so it is always the full time.
+   The Warden loads shell by shell: a moment to open up, one beat per MISSING shell, and
+   a pump at the end only if it ran dry (a shell already chambered needs no rack). Topping
+   up 2 of 6 is quick; a full reload from empty takes exactly the weapon's reload time -
+   the stat, part mods and all, still means what it says. */
+const SHELL = { open: 0.12, per: 0.12, pump: 0.16, close: 0.06 };   // fractions of the full reload time
+function reloadPlan(e){
+  const R = e.wep.reload / 1000;
+  if(e.wep.type !== 'Shotgun') return { dur: R };
+  const missing = Math.max(1, e.wep.mag - e.ammo), empty = e.ammo <= 0;
+  return { dur: R * (SHELL.open + missing * SHELL.per + (empty ? SHELL.pump : SHELL.close)),
+           shells: missing, pump: empty, open: R * SHELL.open, per: R * SHELL.per };
+}
 function startReload(e){
   if(e.reloading || e.wep.reload<=0 || e.ammo>=e.wep.mag) return;
-  e.reloading = true; e.reloadT = G.elapsed + e.wep.reload/1000;
-  if(e.isPlayer) reloadSound(e.wep.type, e.wep.reload, null, true);
-  else if(G.me && Math.hypot(e.x - G.me.x, e.z - G.me.z) < 14) reloadSound(e.wep.type, e.wep.reload, earAt(e.x, e.z, 0.6));
+  const pl = reloadPlan(e);
+  e.reloading = true; e.reloadDur = pl.dur; e.reloadT = G.elapsed + pl.dur;
+  // shells go in one at a time, so the count climbs as you load - and you can fire what is in
+  e.shells = pl.shells ? { left: pl.shells, next: G.elapsed + pl.open + pl.per, per: pl.per } : null;
+  const ms = pl.dur * 1000;
+  if(e.isPlayer) reloadSound(e.wep.type, ms, null, true, pl);
+  else if(G.me && Math.hypot(e.x - G.me.x, e.z - G.me.z) < 14) reloadSound(e.wep.type, ms, earAt(e.x, e.z, 0.6), false, pl);
+}
+// advance a reload: shells land one by one; the reload ends at its time
+function reloadTick(e){
+  if(!e.reloading) return;
+  if(e.shells) while(e.shells.left > 0 && G.elapsed >= e.shells.next){
+    e.ammo = Math.min(e.wep.mag, e.ammo + 1); e.shells.left--; e.shells.next += e.shells.per;
+  }
+  if(G.elapsed >= e.reloadT){ e.reloading = false; e.ammo = e.wep.mag; e.shells = null; }
+}
+// firing mid-way through loading shells stops the reload and shoots what is already in
+function reloadInterruptible(e){ return !!(e.reloading && e.shells && e.ammo > 0); }
+function interruptReload(e){
+  e.reloading = false; e.shells = null;
+  if(e.isPlayer) reloadStop();
 }
 function damage(t, amount, src, isCrit){
   if(t.dead) return;
@@ -7064,7 +7126,7 @@ function updateViewmodelPose(dt, me, isMoving){
   // phased reload: drop + twist -> fumble jitter -> snap back with overshoot
   let rl = 0, jit = 0;
   if(me.reloading){
-    const dur = me.wep.reload/1000;
+    const dur = me.reloadDur || me.wep.reload/1000;
     const prog = 1 - Math.max(0, me.reloadT - G.elapsed)/dur; // 0 -> 1
     const down = Math.min(1, prog*3.2);                        // fast drop
     const up = prog > 0.72 ? Math.min(1, (prog-0.72)/0.28) : 0; // rise phase
@@ -7141,7 +7203,7 @@ function tick(now){
       // long as the menu was open, so you came back still empty on a gun that had had
       // four seconds to finish a two-second reload. Keep it running in live matches.
       G.elapsed += dt;
-      if(G.me.reloading && G.elapsed >= G.me.reloadT){ G.me.reloading = false; G.me.ammo = G.me.wep.mag; }
+      reloadTick(G.me);
       // and blend out of the sight rather than hanging half-scoped under the menu
       updateAdsView(dt, G.me, false);
       updateViewmodelPose(dt, G.me, false);
@@ -7204,7 +7266,7 @@ function tick(now){
       if(!e.grunt && G.mode !== 'live' && G.elapsed >= e.respawnT && G.mode!=='camp') respawn(e);
       continue;
     }
-    if(e.reloading && G.elapsed >= e.reloadT){ e.reloading=false; e.ammo=e.wep.mag; }
+    reloadTick(e);
     // In live matches the SERVER owns burn and cryo: it ticks the timers and applies
     // the DOT, then liveTick copies burnT/slowT back onto us. Ticking them here too
     // would double the damage and let a local death fire against server state.
@@ -8091,7 +8153,7 @@ function liveResetWeapon(){
   if(!G || !G.me) return;
   const me = G.me;
   me.ammo = me.wep.mag;
-  me.reloading = false; me.reloadT = 0; reloadStop();
+  me.reloading = false; me.reloadT = 0; me.shells = null; reloadStop();
   me.fireT = 0; me.lastFire = -9999;
   G.recoil = 0; G.kickPitch = 0; G.kickYaw = 0; G.shake = 0;
 }
@@ -8122,7 +8184,7 @@ function liveTick(dt){
       reloading: !!me.reloading, // cosmetic only: lets everyone else see the reload tilt
       yaw: Math.atan2(fwdZ, fwdX),
       pitch,
-      fire: (locked && !live.results && !paused) && act('fire') && !me.reloading && !me.dead
+      fire: (locked && !live.results && !paused) && act('fire') && (!me.reloading || reloadInterruptible(me)) && !me.dead
     });
   }
 
@@ -8251,11 +8313,22 @@ function liveTick(dt){
     // players never shouldered a weapon and never tilted to reload.
     poseUpper(u, t.ads || 0, !!t.reloading, dt, 5);
     // a remote player starting a reload is heard, close by, like a bot's
-    if(t.reloading && !r.wasReloading && Math.hypot(r.cx - G.me.x, r.cz - G.me.z) < 14){
+    {
       const rw = WEAPONS.find(x => x.id === (t.wid || 'm17')) || WEAPONS[0];
-      reloadSound(rw.type, rw.reload, earAt(r.cx, r.cz, 0.6));
+      const near = Math.hypot(r.cx - G.me.x, r.cz - G.me.z) < 14;
+      if(rw.type === 'Shotgun'){
+        // we only see "reloading", not how many shells: so play a shell per beat for as
+        // long as they keep loading - a top-up sounds short, a full reload sounds full
+        if(t.reloading && !r.wasReloading) r.shellT = rw.reload / 1000 * (SHELL.open + SHELL.per) - 0.07;
+        if(t.reloading && (r.shellT -= dt) <= 0){
+          r.shellT += rw.reload / 1000 * SHELL.per;
+          if(near) reloadSound(rw.type, 400, earAt(r.cx, r.cz, 0.6), false, { shells: 1, open: 0, per: 0.07, dur: 0.4 });
+        }
+      } else if(t.reloading && !r.wasReloading && near){
+        reloadSound(rw.type, rw.reload, earAt(r.cx, r.cz, 0.6));
+      }
+      r.wasReloading = !!t.reloading;
     }
-    r.wasReloading = !!t.reloading;
   });
 
   // ---- remote tracers (cosmetic) ----
