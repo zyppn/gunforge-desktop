@@ -155,7 +155,8 @@ ok('your death has a sound, offline and live', /if\(t\.isPlayer\)\{ reloadStop\(
   ok('every class has its own reload', ['Pistol','SMG','Assault Rifle','Shotgun','Sniper','LMG'].every(t => S[t] && S[t].length >= 4));
   ok('  each step lands inside the reload, in order', Object.values(S).every(q => q.every(([f], k) => f > 0 && f < 1 && (k === 0 || f > q[k-1][0]))));
   ok('  the Warden loads four shells and racks the pump', S.Shotgun.filter(x => x[1] === 'shell').length === 4 && S.Shotgun[S.Shotgun.length - 1][1] === 'pump');
-  ok('  the LS-1 works its bolt; the Goliath opens and slams its lid', S.Sniper[0][1] === 'boltup' && S.Sniper.some(x => x[1] === 'boltdown') && S.LMG.filter(x => x[1] === 'latch').length === 2);
+  ok('  the LS-1 lifts, pulls, pushes and locks its bolt; the Goliath opens its cover, swaps the box, lays the belt and shuts it',
+     ['boltlift','boltback','boltfwd','boltlock'].every(k => S.Sniper.some(x => x[1] === k)) && ['cover','boxout','boxin','links','covershut'].every(k => S.LMG.some(x => x[1] === k)));
   const names = new Set(Object.values(S).map(q => q.map(x => x[1]).join()));
   ok('  no two classes share a routine', names.size === 6);
 }
@@ -187,20 +188,23 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('hits inside 70ms are ONE sound (a shotgun\'s pellets, two rounds in a frame)', level() === 0);
   const stream = []; for(let k = 0; k < 10; k++){ c7.clock += 0.1; c7.hitSound(false); stream.push(level()); }
   ok('in a stream each hit is a little quieter than the last...', stream.every((v, k) => k === 0 || v <= stream[k - 1]) && stream[1] < first);
-  ok('  ...down to a floor about 9 dB under the first', Math.abs(20 * Math.log10(stream[stream.length - 1] / first) + 9) < 0.6, (20 * Math.log10(stream[stream.length - 1] / first)).toFixed(1) + ' dB');
+  ok('  ...down to a floor about 6 dB under the first (still clearly there)', Math.abs(20 * Math.log10(stream[stream.length - 1] / first) + 6) < 0.6, (20 * Math.log10(stream[stream.length - 1] / first)).toFixed(1) + ' dB');
   c7.clock += 1; c7.hitSound(false);
   ok('  and recovers after a short pause', Math.abs(level() - first) < 1e-9);
   c7.clock += 0.1; c7.hitSound(false); level(); c7.clock += 0.01; c7.hitSound(true);
   ok('a crit is never merged away and plays at full level', level() > first);
-  ok('it is a click, not an impact: no low tone at all, nothing a player could take for being hit', !/toneHit/.test(lift('hitSound')) && /'bandpass', rnd\(2300, 2500\)/.test(lift('hitSound')));
+  ok('it is a click, not an impact: no low tone at all, nothing a player could take for being hit', !/toneHit/.test(lift('hitSound')) && /'bandpass', rnd\(3200, 3400\), 6/.test(lift('hitSound')));
+  ok('  and it cuts through your own gunfire (measured ~7 dB over your rifle in its band)', /let HIT_CLICK = 1\.4;/.test(html));
 }
 ok('Settings closes back to the pause menu; only the pause menu resumes',
    /id="setclose"[^>]*>CLOSE</.test(html) && /\$\('#setclose'\)\.addEventListener\('click', settingsBack\)/.test(html) && /closeSettings\(false\);/.test(lift('settingsBack')));
 ok('  Esc in Settings goes back too, but not while it is cancelling a key rebind', /e\.key === 'Escape' && settingsOpen && !bindCapture && !e\.defaultPrevented/.test(html));
 
-ok('reload steps have a low body under the click, so they survive laptop speakers',
-   ['clack','slide','pump','latch','shell','boltdown'].every(k => new RegExp("case '" + k + "':[\\s\\S]*?reloadBody\\(").test(lift('reloadPart'))));
-ok('  and sit at a level measured to be audible (was ~17 dB quieter)', /const v = own \? 0\.16 :/.test(lift('reloadSound')));
+ok('reloads are built only from filtered noise - no pitched blip anywhere (the "pixel thump")',
+   !/toneHit/.test(['rClick','rThunk','rScrape','reloadPart'].map(lift).join('')) && !/function reloadBody/.test(html));
+ok('  every part a reload names actually exists', Object.values((() => { const c = vm.createContext({}); vm.runInContext(line(/const RELOAD_SEQ = \{[\s\S]*?\n\};/) + '\nthis.S = RELOAD_SEQ;', c); return c.S; })())
+   .flat().every(([, k]) => new RegExp("case '" + k + "':").test(lift('reloadPart'))));
+ok('  and sits at a measured level: under your gunfire, clearly audible (~-34 to -40 dBFS)', /const v = own \? 0\.5 :/.test(lift('reloadSound')));
 
 /* ---- no prototype beeps left ---- */
 ok('no square- or sawtooth-wave beeps in any game sound (the "pixelated" ones; the music pad\'s filtered saws are not beeps)',

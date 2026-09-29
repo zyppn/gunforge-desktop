@@ -3350,57 +3350,70 @@ function deathSound(){
 }
 
 /* ---- reloads ----
-   Each class has its own routine, timed across its real reload length (so a faster
-   reload from parts plays faster): mag out, mag in, then the action. The Warden loads
-   shells one at a time and racks the pump; the Goliath opens its lid, swaps the box,
-   lays the belt and slams it shut. Other players' reloads are audible close by - a
-   reload is an opening, and everyone can hear it the same way. */
+   Built only from filtered noise - no pitched tones at all. The first two passes put a
+   short triangle-wave "body" under each click, and a pitched blip is exactly what reads
+   as a video game beep instead of metal. Real mechanisms are clicks, scrapes and thunks:
+     click   two resonant bands at unrelated pitches (metal rings at inharmonic modes),
+             very short - bigger parts ring lower and longer
+     thunk   the weight of a part seating: dark noise, a few tens of ms
+     scrape  metal sliding on metal: noise through a band that sweeps as it moves
+     links   an ammo belt: a quick run of tiny, uneven metallic ticks
+   Each class has its own routine, timed across its real reload length (so parts that
+   speed up the reload speed up the sound). Other players' reloads are audible close by. */
 const RELOAD_SEQ = {
-  'Pistol':        [[0.08,'click'], [0.16,'swish'], [0.58,'clack'], [0.84,'slide']],
-  'SMG':           [[0.1,'click'], [0.18,'swish'], [0.55,'clack'], [0.76,'pull'], [0.86,'slide']],
-  'Assault Rifle': [[0.1,'click'], [0.17,'swish'], [0.52,'clack'], [0.6,'click'], [0.84,'slide']],
-  'Shotgun':       [[0.14,'shell'], [0.32,'shell'], [0.5,'shell'], [0.68,'shell'], [0.84,'pump']],
-  'Sniper':        [[0.08,'boltup'], [0.28,'swish'], [0.56,'clack'], [0.84,'boltdown']],
-  'LMG':           [[0.08,'latch'], [0.28,'rattle'], [0.5,'clack'], [0.66,'rattle'], [0.84,'latch'], [0.93,'pull']],
+  //                mag release   mag out        mag in (seat)        slide release
+  'Pistol':        [[0.06,'btn'], [0.14,'magout_s'], [0.56,'magin_s'], [0.82,'slide']],
+  //                mag out        mag in               handle back          handle release
+  'SMG':           [[0.08,'magout'], [0.52,'magin'], [0.72,'handleback'], [0.84,'handlefwd']],
+  //                button         mag out         mag in       seat tap        bolt release
+  'Assault Rifle': [[0.06,'btn'], [0.13,'magout'], [0.5,'magin'], [0.6,'seat'], [0.82,'boltslam']],
+  //                four shells, one at a time                                      rack
+  'Shotgun':       [[0.12,'shell'], [0.3,'shell'], [0.48,'shell'], [0.66,'shell'], [0.82,'pump']],
+  //                bolt up         bolt back        mag swap                    bolt forward      bolt down
+  'Sniper':        [[0.06,'boltlift'], [0.13,'boltback'], [0.36,'magout'], [0.56,'magin'], [0.8,'boltfwd'], [0.88,'boltlock']],
+  //                cover open     box out          box in          belt laid       cover shut       charge
+  'LMG':           [[0.06,'cover'], [0.22,'boxout'], [0.44,'boxin'], [0.6,'links'], [0.8,'covershut'], [0.9,'charge']],
 };
-/* Each step is a bright edge (the click you notice) over a short low-mid body (the part
-   that survives laptop speakers). The first pass was edges only - high, narrow and ~20ms
-   long - and measured 20-25 dB under the gunshots: technically there, practically silent,
-   worst on the SMG. Every step now lands within a few dB of the same loudness. */
-function reloadBody(out, t, f, v, dur){ toneHit(out, t, 'triangle', f, f * 0.7, v * 0.5, dur || 0.05); }
+function rClick(out, t, f, v, len){          // metal click: two inharmonic resonances + a short broadband tick
+  noiseHit(out, t, 300, 2.5, 'bandpass', f, 9, v * 1.6, len);
+  noiseHit(out, t, 300, 2.5, 'bandpass', f * 1.63, 11, v * 1.1, len * 0.8);
+  noiseHit(out, t, 200, 3, 'highpass', 2500, 0.7, v * 0.5, 0.004);
+}
+function rThunk(out, t, v, f, len){ noiseHit(out, t, 1200, 2.4, 'lowpass', f || 500, 0.8, v, len || 0.05); }
+function rScrape(out, t, v, f0, f1, len){
+  const src = AC.createBufferSource(); src.buffer = noiseBuf(8000, 0.4);
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 3;
+  bp.frequency.setValueAtTime(f0, t); bp.frequency.exponentialRampToValueAtTime(f1, t + len);
+  const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + len * 0.25);
+  g.gain.exponentialRampToValueAtTime(0.0008, t + len);
+  src.connect(bp); bp.connect(g); g.connect(out); src.start(t); src.stop(t + len + 0.02);
+}
 function reloadPart(out, t, kind, v){
-  const r = rnd(0.94, 1.06);
+  const r = rnd(0.95, 1.05);
   switch(kind){
-    case 'click':    noiseHit(out, t, 500, 3, 'bandpass', 3000*r, 3, v * 1.1, 0.025);
-                     reloadBody(out, t, 420*r, v * 0.7, 0.03); break;
-    case 'swish':    noiseHit(out, t, 4400, 1.2, 'bandpass', 1200*r, 0.9, v * 1.1, 0.14); break;
-    case 'clack':    noiseHit(out, t, 900, 3, 'bandpass', 1400*r, 1.6, v * 1.3, 0.05);
-                     noiseHit(out, t + 0.012, 700, 3, 'lowpass', 800*r, 0, v * 1.1, 0.06);
-                     reloadBody(out, t + 0.012, 190*r, v, 0.07); break;
-    case 'slide':    noiseHit(out, t, 800, 3, 'bandpass', 2200*r, 2, v, 0.035);
-                     noiseHit(out, t + 0.05, 800, 3, 'bandpass', 2900*r, 2.5, v * 1.3, 0.04);
-                     reloadBody(out, t + 0.05, 300*r, v, 0.05); break;
-    case 'pull':     noiseHit(out, t, 2200, 1.6, 'bandpass', 1800*r, 1.2, v * 1.2, 0.09);
-                     reloadBody(out, t, 260*r, v * 0.6, 0.06); break;
-    case 'shell':    noiseHit(out, t, 700, 3, 'bandpass', 2000*r, 2, v, 0.03);
-                     noiseHit(out, t + 0.03, 1400, 2, 'bandpass', 1000*r, 1.2, v * 0.9, 0.07);
-                     reloadBody(out, t + 0.03, 230*r, v * 0.8, 0.06); break;
-    case 'pump':     noiseHit(out, t, 900, 3, 'bandpass', 1600*r, 1.8, v * 1.3, 0.05);
-                     reloadBody(out, t, 170*r, v, 0.06);
-                     noiseHit(out, t + 0.13, 900, 3, 'bandpass', 2200*r, 2, v * 1.5, 0.045);
-                     reloadBody(out, t + 0.13, 210*r, v, 0.06); break;
-    case 'boltup':   noiseHit(out, t, 700, 3, 'bandpass', 2600*r, 2.5, v * 1.1, 0.035);
-                     reloadBody(out, t, 320*r, v * 0.8, 0.04);
-                     noiseHit(out, t + 0.08, 1800, 2, 'bandpass', 1700*r, 1.4, v * 0.9, 0.07); break;
-    case 'boltdown': noiseHit(out, t, 1800, 2, 'bandpass', 1700*r, 1.4, v * 0.9, 0.07);
-                     noiseHit(out, t + 0.07, 700, 3, 'bandpass', 2300*r, 2.5, v * 1.3, 0.04);
-                     reloadBody(out, t + 0.07, 280*r, v, 0.05); break;
-    case 'latch':    noiseHit(out, t, 700, 3, 'bandpass', 1100*r, 1.5, v * 1.3, 0.06);
-                     noiseHit(out, t + 0.02, 500, 3, 'bandpass', 3000*r, 3, v * 0.8, 0.025);
-                     reloadBody(out, t, 160*r, v, 0.07); break;
-    case 'rattle':   for(let k = 0; k < 5; k++){ const tk = t + k * rnd(0.025, 0.04);
-                       noiseHit(out, tk, 400, 3, 'bandpass', rnd(1800, 2800), 2.5, v * 1.5, 0.022);
-                       if(k % 2 === 0) reloadBody(out, tk, rnd(350, 450), v * 0.9, 0.025); } break;
+    case 'btn':        rClick(out, t, 3600*r, v * 0.9, 0.014); break;                                  // a small button press
+    case 'magout_s':   rScrape(out, t, v * 0.5, 2600*r, 1800*r, 0.07); break;                           // light mag sliding free
+    case 'magout':     rClick(out, t, 2400*r, v * 0.7, 0.018); rScrape(out, t + 0.01, v * 0.6, 2200*r, 1300*r, 0.11); break;
+    case 'magin_s':    rScrape(out, t - 0.05, v * 0.4, 1500*r, 2300*r, 0.05); rClick(out, t, 2600*r, v, 0.02); rThunk(out, t, v * 0.8, 600, 0.04); break;
+    case 'magin':      rScrape(out, t - 0.07, v * 0.45, 1200*r, 2100*r, 0.07); rClick(out, t, 2000*r, v * 1.1, 0.03); rThunk(out, t, v, 450, 0.06); break;
+    case 'seat':       rThunk(out, t, v * 0.7, 380, 0.05); rClick(out, t + 0.004, 2300*r, v * 0.6, 0.015); break; // palm tap to seat it
+    case 'slide':      rScrape(out, t - 0.04, v * 0.4, 2000*r, 3000*r, 0.04); rClick(out, t, 3000*r, v * 1.3, 0.025); rThunk(out, t, v * 0.6, 700, 0.03); break;
+    case 'handleback': rScrape(out, t, v * 0.6, 1600*r, 2600*r, 0.09); rClick(out, t + 0.09, 2700*r, v * 0.8, 0.015); break;
+    case 'handlefwd':  rClick(out, t, 2200*r, v * 1.2, 0.03); rThunk(out, t, v * 0.8, 520, 0.05); break;   // spring slams it home
+    case 'boltslam':   rClick(out, t, 1900*r, v * 1.4, 0.04); rThunk(out, t, v * 1.1, 420, 0.07); rScrape(out, t - 0.03, v * 0.3, 2500*r, 1500*r, 0.03); break;
+    case 'shell':      rScrape(out, t, v * 0.6, 1400*r, 2000*r, 0.06); rClick(out, t + 0.055, 3100*r, v * 1.2, 0.014); rThunk(out, t + 0.055, v * 0.6, 900, 0.03); break;
+    case 'pump':       rScrape(out, t, v * 0.5, 1500*r, 1000*r, 0.08); rClick(out, t + 0.08, 1700*r, v * 1.2, 0.035); rThunk(out, t + 0.08, v, 380, 0.06);
+                       rScrape(out, t + 0.15, v * 0.5, 1000*r, 1500*r, 0.07); rClick(out, t + 0.22, 2100*r, v * 1.3, 0.035); rThunk(out, t + 0.22, v, 420, 0.06); break;
+    case 'boltlift':   rClick(out, t, 2900*r, v * 0.8, 0.018); break;
+    case 'boltback':   rScrape(out, t, v * 0.6, 1800*r, 2800*r, 0.1); rClick(out, t + 0.1, 2400*r, v * 0.7, 0.015); break;
+    case 'boltfwd':    rScrape(out, t, v * 0.6, 2800*r, 1800*r, 0.09); break;
+    case 'boltlock':   rClick(out, t, 2100*r, v * 1.3, 0.035); rThunk(out, t, v * 0.9, 480, 0.05); break;
+    case 'cover':      rClick(out, t, 1500*r, v * 1.1, 0.04); rThunk(out, t, v * 0.7, 350, 0.06); rScrape(out, t + 0.03, v * 0.3, 900*r, 700*r, 0.12); break;  // latch and hinge
+    case 'boxout':     rScrape(out, t, v * 0.5, 1100*r, 700*r, 0.14); rThunk(out, t + 0.1, v * 0.6, 300, 0.07); break;
+    case 'boxin':      rScrape(out, t - 0.08, v * 0.45, 700*r, 1200*r, 0.08); rClick(out, t, 1600*r, v * 1.2, 0.04); rThunk(out, t, v * 1.2, 320, 0.09); break;
+    case 'links':      for(let k = 0; k < 9; k++) rClick(out, t + k * rnd(0.018, 0.032), rnd(2600, 4200), v * rnd(0.5, 0.75), 0.012); break;
+    case 'covershut':  rClick(out, t, 1400*r, v * 1.5, 0.05); rThunk(out, t, v * 1.3, 300, 0.09); break;
+    case 'charge':     rScrape(out, t, v * 0.6, 1300*r, 2200*r, 0.1); rClick(out, t + 0.1, 1800*r, v * 1.3, 0.04); rThunk(out, t + 0.1, v, 380, 0.06); break;
   }
 }
 let RELOAD_PLAYING = null;     // the player's own: stopped if they die or the match ends mid-reload
@@ -3409,7 +3422,7 @@ function reloadSound(type, ms, ear, own){
   try{
     const seq = RELOAD_SEQ[type] || RELOAD_SEQ['Assault Rifle'];
     const out = earOut(ear), t0 = AC.currentTime, len = Math.max(0.4, (ms || 1500) / 1000);
-    const v = own ? 0.16 : 0.16 * (ear ? ear.vol : 1);
+    const v = own ? 0.5 : 0.5 * (ear ? ear.vol : 1);   // measured: steps land ~-34 to -40 dBFS, under your gunfire
     if(v < 0.012) return;
     // scheduled, but through one gain we can close: a death mid-reload must not finish it
     const gate = AC.createGain(); gate.connect(out);
@@ -3432,18 +3445,20 @@ function reloadStop(){
                and recovers after a short pause
    A crit clicks twice - a quick double, the second brighter - and is never merged. */
 const HIT = { last: -9, run: 0 };
-let HIT_CLICK = 2;   // measured: peaks ~-21 dBFS, just under your own gunshot and the kill punch
+let HIT_CLICK = 1.4;   // measured: peaks ~-17 dBFS; in the 3.3kHz band it sits ~7 dB over your own rifle, so it cuts through
 function hitSound(crit){
   au(); if(!AC || !masterBus()) return;
   const now = performance.now() / 1000, dt = now - HIT.last;
   if(dt < 0.07 && !crit) return;                                   // merged into the one just played
   HIT.run = dt < 0.35 ? Math.min(HIT.run + 1, 6) : 0;
   HIT.last = now;
-  const L = crit ? 1 : Math.pow(10, -1.5 * HIT.run / 20);          // -1.5 dB per hit in a stream, floor -9 dB
+  const L = crit ? 1 : Math.pow(10, -1 * HIT.run / 20);            // -1 dB per hit in a stream, floor -6 dB
   try{
     const o = masterBus(), t = AC.currentTime, g = HIT_CLICK * L;
-    noiseHit(o, t, 200, 3, 'bandpass', rnd(2300, 2500), 2.2, 0.22 * g, 0.01);
-    noiseHit(o, t, 200, 3, 'bandpass', rnd(1100, 1250), 1.8, 0.08 * g, 0.012);   // a touch of body so it is not thin
+    // a resonant tick up where your own gunfire is thinnest (~3.3kHz), so it cuts through
+    // a firefight instead of hiding under it, plus a little mid body so it is not thin
+    noiseHit(o, t, 300, 2.5, 'bandpass', rnd(3200, 3400), 6, 0.5 * g, 0.014);
+    noiseHit(o, t, 300, 2.5, 'bandpass', rnd(1700, 1850), 2.5, 0.16 * g, 0.012);
     if(crit){
       noiseHit(o, t + 0.022, 200, 3, 'bandpass', rnd(3100, 3300), 2.4, 0.2 * HIT_CLICK, 0.01);
       noiseHit(o, t + 0.022, 200, 3, 'bandpass', 1500, 1.8, 0.06 * HIT_CLICK, 0.012);
