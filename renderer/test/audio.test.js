@@ -220,5 +220,25 @@ ok('the death card never covers Settings', /body:has\(#setov\.on\) #deathcard\{o
   ok('  the landing is on the fall animation\'s beat (~0.55s)', /d = t \+ rnd\(0\.53, 0\.57\)/.test(src));
 }
 
+/* The "some ticks are way louder" bug: a GainNode starts at gain 1, and when its first
+   scheduled value lands at the same moment the sound starts, Chromium sometimes plays the
+   first block at 1 instead - measured, 40 identical music hi-hats varied by 28 dB, and in
+   the live menu ten of them were ~20 dB over the rest. Every gain that is automated must
+   start from 0; pass-through gains (a bus, a send, a gate) are left at 1 on purpose. */
+{
+  const lines = html.split('\n'); let bad = [], checked = 0;
+  lines.forEach((l, i) => {
+    for(const m of l.matchAll(/(\b\w+) = AC\.createGain\(\);/g)){
+      const v = m[1], near = l + (lines[i + 1] || '');
+      if(!new RegExp(v + '\\.gain\\.(setValueAtTime|linearRamp|exponentialRamp)').test(near)) continue;
+      checked++; if(!l.includes(v + '.gain.value = 0;')) bad.push(i + 1);
+    }
+  });
+  ok('every automated gain starts at 0, not the default 1 (' + checked + ' of them)', checked >= 18 && !bad.length, bad.join(',') || 'none');
+  ok('the passthrough reload gate still passes sound (gain left at 1)', /const gate = AC\.createGain\(\); gate\.connect/.test(html));
+  const src = lift('noiseHit') + lift('bandFix');
+  ok('narrow band-passes pick a take with its level evened out (hitmarker, reload clicks)', /bandFix\(/.test(lift('noiseHit')) && /gain \*= tk\.g/.test(src));
+}
+
 console.log(fails ? '\naudio: ' + fails + ' failure(s)' : '\naudio: all clear');
 process.exit(fails ? 1 : 0);

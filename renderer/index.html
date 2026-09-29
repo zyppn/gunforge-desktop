@@ -2938,11 +2938,29 @@ function noiseBuf(n, curve){
   const k = n + '|' + curve;
   let v = NOISE.get(k);
   if(!v){
+    /* Four takes, picked at random so repeats do not sound looped - but every take must be
+       equally loud. A short burst with a steep fade has almost all its energy in the first
+       few dozen samples, so raw random takes came out wildly different: measured, forty
+       identical music hi-hats varied by 28 dB in peak (the "some ticks are way louder"
+       bug), and every short click in the game (hitmarker, reload parts) had the same
+       lottery. Each take is now normalised to the same energy, and its high band too,
+       since most of these go through a high- or band-pass. */
     v = [];
-    for(let j = 0; j < 4; j++){         // four takes, picked at random, so repeats do not sound looped
+    for(let j = 0; j < 4; j++){
       const buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0);
       for(let i = 0; i < n; i++) d[i] = (Math.random()*2 - 1) * Math.pow(1 - i/n, curve);
       v.push(buf);
+    }
+    const env = i => Math.pow(1 - i/n, curve);
+    let ideal = 0; for(let i = 0; i < n; i++) ideal += env(i) * env(i) / 3;   // expected energy of the shape
+    for(const buf of v){
+      const d = buf.getChannelData(0);
+      // flatten the take's spectrum a little first: a first-difference energy check stands in
+      // for "how bright is this take", and brightness is what a high-pass hears
+      let e = 0, hf = 0; for(let i = 0; i < n; i++){ e += d[i]*d[i]; if(i) hf += (d[i]-d[i-1])*(d[i]-d[i-1]); }
+      const gE = Math.sqrt(ideal / (e || 1)), gH = Math.sqrt((2 * ideal) / (hf || 1));
+      const g = Math.sqrt(gE * gH);                                          // split the difference: same body, same edge
+      for(let i = 0; i < n; i++) d[i] *= g;
     }
     NOISE.set(k, v);
   }
@@ -3052,7 +3070,7 @@ function musicStep(i, t){
     const lp = AC.createBiquadFilter(); lp.type = 'lowpass';
     const open = plan.breakdown ? 1900 : 1100;
     lp.frequency.setValueAtTime(500, t); lp.frequency.linearRampToValueAtTime(open, t + len * 0.5); lp.frequency.linearRampToValueAtTime(600, t + len);
-    const g = AC.createGain();
+    const g = AC.createGain(); g.gain.value = 0;
     g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05, t + 0.7);
     g.gain.setValueAtTime(0.05, t + len - 0.6); g.gain.linearRampToValueAtTime(0.0001, t + len + 0.3);
     lp.connect(g); g.connect(bus);
@@ -3064,14 +3082,14 @@ function musicStep(i, t){
   if(s16 % 2 === 0 && s16 !== 6 && s16 !== 14){               // bass: eighths, with two held back for a lope
     const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(chord[0] - 12);
     const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
-    const g = AC.createGain(); const a = s16 % 8 === 0 ? 0.16 : 0.1;
+    const g = AC.createGain(); g.gain.value = 0; const a = s16 % 8 === 0 ? 0.16 : 0.1;
     g.gain.setValueAtTime(a, t); g.gain.exponentialRampToValueAtTime(0.0008, t + MUSIC_STEP * 1.8);
     o.connect(lp); lp.connect(g); g.connect(bus); o.start(t); o.stop(t + MUSIC_STEP * 2);
   }
   if(arp){                                                    // arpeggio: an octave up, into the echo
     const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = mtof(chord[plan.arp[s16]] + (plan.breakdown ? 24 : 12));
     // steps back when a melody is playing over it, so the two do not fight
-    const g = AC.createGain(); const a = (s16 % 4 === 0 ? 0.045 : 0.028) * (lead ? 0.55 : 1);
+    const g = AC.createGain(); g.gain.value = 0; const a = (s16 % 4 === 0 ? 0.045 : 0.028) * (lead ? 0.55 : 1);
     g.gain.setValueAtTime(a, t); g.gain.exponentialRampToValueAtTime(0.0008, t + MUSIC_STEP * 1.5);
     o.connect(g); g.connect(bus); if(MUSIC.echo) g.connect(MUSIC.echo);
     o.start(t); o.stop(t + MUSIC_STEP * 1.6);
@@ -3084,7 +3102,7 @@ function musicStep(i, t){
       const vib = AC.createOscillator(); vib.frequency.value = 5.2;          // a little life in the held notes
       const vg = AC.createGain(); vg.gain.value = 3; vib.connect(vg); vg.connect(o.detune);
       const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1900;
-      const g = AC.createGain();
+      const g = AC.createGain(); g.gain.value = 0;
       g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.055, t + 0.03);
       g.gain.setValueAtTime(0.05, t + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.0008, t + dur + 0.15);
       o.connect(lp); lp.connect(g); g.connect(bus); if(MUSIC.echo) g.connect(MUSIC.echo);
@@ -3092,27 +3110,30 @@ function musicStep(i, t){
     }
   }
   if(plan.fill && lastBar && s16 >= 8){                        // fill: sixteenth hats and a kick pickup into the next cycle
-    const src = AC.createBufferSource(); src.buffer = noiseBuf(800, 4);
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(2400, 1);
     const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500;
-    const g = AC.createGain(); g.gain.setValueAtTime(0.018 + (s16 - 8) * 0.003, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.035);
+    const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.012 + (s16 - 8) * 0.002, t + 0.001);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.035);
     src.connect(hp); hp.connect(g); g.connect(bus); src.start(t); src.stop(t + 0.05);
     if(s16 === 14){
       const o = AC.createOscillator(); o.type = 'sine';
       o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
-      const g2 = AC.createGain(); g2.gain.setValueAtTime(0.18, t); g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.18);
+      const g2 = AC.createGain(); g2.gain.value = 0; g2.gain.setValueAtTime(0.18, t); g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.18);
       o.connect(g2); g2.connect(bus); o.start(t); o.stop(t + 0.2);
     }
   }
   if(drums && (s16 === 0 || s16 === 8)){                      // soft kick
     const o = AC.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
-    const g = AC.createGain(); g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.22);
+    const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.22);
     o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.24);
   }
   if(drums && s16 % 4 === 2){                                 // hat on the offbeats
-    const src = AC.createBufferSource(); src.buffer = noiseBuf(800, 4);
+    // a longer, gentler burst shaped by its envelope: no take can spike
+    const src = AC.createBufferSource(); src.buffer = noiseBuf(2400, 1);
     const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
-    const g = AC.createGain(); g.gain.setValueAtTime(s16 === 10 ? 0.035 : 0.022, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.04);
+    const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(s16 === 10 ? 0.02 : 0.013, t + 0.001);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.04);
     src.connect(hp); hp.connect(g); g.connect(bus); src.start(t); src.stop(t + 0.05);
   }
 }
@@ -3145,11 +3166,35 @@ const GUNVOICE = {
                      rattle:{t:0.014, a:0.3} },
 };
 // one short filtered-noise burst: the building block of every layer
+/* A narrow band-pass only hears the slice of the noise take around its centre, and in a
+   burst of a few hundred samples that slice differs a lot from take to take: measured, the
+   same hitmarker call varied 6.7 dB in energy depending on which take it drew. So for
+   band-passes each take gets a correction, measured once per (take set, band): the energy
+   of that take across the band (a few DFT bins), brought to the average of the set. */
+const NOISE_BAND = new Map();
+function bandFix(n, curve, f, q){
+  const k = n + '|' + curve + '|' + Math.round(f) + '|' + q;
+  let fix = NOISE_BAND.get(k);
+  if(!fix){
+    noiseBuf(n, curve); const takes = NOISE.get(n + '|' + curve), sr = AC.sampleRate;
+    const band = takes.map(b => { const d = b.getChannelData(0); let e = 0;
+      for(let s = -2; s <= 2; s++){ const w = 2 * Math.PI * f * (1 + s * 0.25 / q) / sr; let re = 0, im = 0;
+        for(let i = 0; i < d.length; i++){ re += d[i] * Math.cos(w * i); im -= d[i] * Math.sin(w * i); }
+        e += re * re + im * im; }
+      return e || 1e-9; });
+    const mean = band.reduce((a, b) => a + b, 0) / band.length;
+    fix = takes.map((b, j) => ({ buf: b, g: Math.sqrt(mean / band[j]) }));
+    NOISE_BAND.set(k, fix);
+  }
+  return fix[(Math.random() * fix.length) | 0];
+}
 function noiseHit(out, t, n, curve, type, f, q, gain, dur, rate){
-  const src = AC.createBufferSource(); src.buffer = noiseBuf(n, curve);
+  const src = AC.createBufferSource();
+  if(type === 'bandpass' && q >= 3){ const tk = bandFix(n, curve, f / (rate || 1), q); src.buffer = tk.buf; gain *= tk.g; }
+  else src.buffer = noiseBuf(n, curve);
   src.playbackRate.value = rate || 1;
   const fl = AC.createBiquadFilter(); fl.type = type; fl.frequency.value = f; if(q) fl.Q.value = q;
-  const g = AC.createGain();
+  const g = AC.createGain(); g.gain.value = 0;
   g.gain.setValueAtTime(gain, t);
   g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
   src.connect(fl); fl.connect(g); g.connect(out); src.start(t); src.stop(t + dur + 0.02);
@@ -3168,7 +3213,7 @@ function gunSound(type, vol, ear){
       const o = AC.createOscillator(); o.type = 'sine';
       o.frequency.setValueAtTime(v.thump.f, t);
       o.frequency.exponentialRampToValueAtTime(Math.max(30, v.thump.f * 0.45), t + v.thump.d);
-      const g2 = AC.createGain();
+      const g2 = AC.createGain(); g2.gain.value = 0;
       g2.gain.setValueAtTime(G0 * v.thump.a, t);
       g2.gain.exponentialRampToValueAtTime(0.0008, t + v.thump.d * 1.5);
       o.connect(g2); g2.connect(out); o.start(t); o.stop(t + v.thump.d * 1.6);
@@ -3195,7 +3240,7 @@ function toneHit(out, t, type, f0, f1, gain, dur){
   const o = AC.createOscillator(); o.type = type;
   o.frequency.setValueAtTime(f0, t);
   if(f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
-  const g = AC.createGain();
+  const g = AC.createGain(); g.gain.value = 0;
   g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(gain, t + Math.min(0.006, dur * 0.2));
   g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
   o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
@@ -3244,7 +3289,7 @@ function whizSound(x, z, closeness, sniper){
     bp.frequency.setValueAtTime(f0 * 0.8, t);
     bp.frequency.linearRampToValueAtTime(f0, t + dur * 0.35);            // rising as it arrives...
     bp.frequency.exponentialRampToValueAtTime(f0 * rnd(0.35, 0.5), t + dur);   // ...falling as it leaves
-    const g = AC.createGain();
+    const g = AC.createGain(); g.gain.value = 0;
     g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v * (kind === 1 ? 1.6 : 2.4), t + dur * 0.35);
     g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
     src.connect(bp); bp.connect(g); g.connect(out); src.start(t); src.stop(t + dur + 0.02);
@@ -3337,7 +3382,7 @@ function deathSound(){
     // 4) the world dulls a little under it
     { const src = AC.createBufferSource(); src.buffer = noiseBuf(44100, 0.35);
       const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(1500, t + 0.03); lp.frequency.exponentialRampToValueAtTime(130, t + 0.95);
-      const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.035, t + 0.1); g.gain.exponentialRampToValueAtTime(0.0008, t + 1.0);
+      const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.035, t + 0.1); g.gain.exponentialRampToValueAtTime(0.0008, t + 1.0);
       src.connect(lp); lp.connect(g); g.connect(o); src.start(t); src.stop(t + 1.05); }
     // 5) the body lands (the fall animation's beat), gear settles, a small bounce
     const d = t + rnd(0.53, 0.57);
@@ -3384,7 +3429,7 @@ function rScrape(out, t, v, f0, f1, len){
   const src = AC.createBufferSource(); src.buffer = noiseBuf(8000, 0.4);
   const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 3;
   bp.frequency.setValueAtTime(f0, t); bp.frequency.exponentialRampToValueAtTime(f1, t + len);
-  const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + len * 0.25);
+  const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + len * 0.25);
   g.gain.exponentialRampToValueAtTime(0.0008, t + len);
   src.connect(bp); bp.connect(g); g.connect(out); src.start(t); src.stop(t + len + 0.02);
 }
@@ -3484,22 +3529,22 @@ function sfx(kind, vol, ear){
       for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2.2);
       const src = AC.createBufferSource(); src.buffer = buf;
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value=900;
-      const g = AC.createGain(); g.gain.setValueAtTime(0.16, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.09);
+      const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.16, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.09);
       src.connect(f); f.connect(g); g.connect(masterBus()); src.start(t);
     } else if(kind==='step'){
       const s = AC.createBufferSource(); s.buffer = noiseBuf(900, 3);
       s.playbackRate.value = 0.9 + Math.random() * 0.2;
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 260;
-      const g = AC.createGain(); g.gain.setValueAtTime(0.09*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.08);
+      const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.09*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.08);
       s.connect(f); f.connect(g); g.connect(out); s.start(t);
     } else if(kind==='boom'){
       const s = AC.createBufferSource(); s.buffer = noiseBuf(5200, 1.6);
       const f = AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value = 240;
-      const g = AC.createGain(); g.gain.setValueAtTime(0.3*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.35);
+      const g = AC.createGain(); g.gain.value = 0; g.gain.setValueAtTime(0.3*(vol||1), t); g.gain.exponentialRampToValueAtTime(0.001, t+0.35);
       s.connect(f); f.connect(g); g.connect(out); s.start(t);
       const o = AC.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(60, t);
       o.frequency.exponentialRampToValueAtTime(32, t+0.3);
-      const g2 = AC.createGain(); g2.gain.setValueAtTime(0.22*(vol||1), t); g2.gain.exponentialRampToValueAtTime(0.001, t+0.4);
+      const g2 = AC.createGain(); g2.gain.value = 0; g2.gain.setValueAtTime(0.22*(vol||1), t); g2.gain.exponentialRampToValueAtTime(0.001, t+0.4);
       o.connect(g2); g2.connect(out); o.start(t); o.stop(t+0.42);
     /* The interface sounds were the last square-wave beeps from the first prototype - the
        "pixelated" sound. Rebuilt from the same parts as the combat sounds: short filtered
@@ -7837,7 +7882,7 @@ function playDropSound(rarity){
     for(let i=0;i<notes;i++){
       const o = AC.createOscillator(); o.type = 'triangle';
       o.frequency.setValueAtTime(330 * Math.pow(1.335, i), t0 + i*0.09);
-      const g = AC.createGain();
+      const g = AC.createGain(); g.gain.value = 0;
       g.gain.setValueAtTime(0.0001, t0 + i*0.09);
       g.gain.exponentialRampToValueAtTime(0.07 + tier*0.012, t0 + i*0.09 + 0.02);
       g.gain.exponentialRampToValueAtTime(0.001, t0 + i*0.09 + 0.38);
@@ -7847,7 +7892,7 @@ function playDropSound(rarity){
     if(tier >= 3){ // epic/legendary: shimmer on top
       const o = AC.createOscillator(); o.type = 'sine';
       o.frequency.setValueAtTime(1760, t0 + notes*0.09);
-      const g = AC.createGain();
+      const g = AC.createGain(); g.gain.value = 0;
       g.gain.setValueAtTime(0.05, t0 + notes*0.09);
       g.gain.exponentialRampToValueAtTime(0.001, t0 + notes*0.09 + 0.7);
       o.connect(g); g.connect(masterBus());
