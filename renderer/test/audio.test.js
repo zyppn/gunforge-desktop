@@ -174,13 +174,13 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('  short (~0.2s) and varied a hair every time', /quick \? 0\.14 : 0\.22/.test(src) && /p = rnd\(0\.95, 1\.05\)/.test(src));
   ok('  a second kill within ~1s is a smaller punch', /quick = now - KILLSND\.last < 1\.1/.test(src) && /\(quick \? 0\.65 : 1\)/.test(src));
 }
-/* ---- the hitmarker: a muted tok that does not wear you down ---- */
+/* ---- the hitmarker: a fast click that does not wear you down ---- */
 {
   const c7 = vm.createContext({ Math: Object.create(Math), AC: null, performance: { now: () => c7.clock * 1000 }, clock: 100, plays: [],
     au(){}, masterBus(){ return {}; }, rnd: (a, b) => (a + b) / 2,
     toneHit(o, t, ty, f, f1, g){ c7.plays.push(g); }, noiseHit(o, t, n, c, ty, f, q, g){ c7.plays.push(g); } });
   c7.AC = { currentTime: 0 };
-  vm.runInContext([line(/const HIT = \{[^\n]*;/), line(/let HIT_THUD = [^\n]*;/), lift('hitSound')].join('\n') + '\nthis.HIT = HIT;', c7);
+  vm.runInContext([line(/const HIT = \{[^\n]*;/), line(/let HIT_CLICK = [^\n]*;/), lift('hitSound')].join('\n') + '\nthis.HIT = HIT;', c7);
   const level = () => { const v = c7.plays.reduce((a, b) => a + b, 0); c7.plays = []; return v; };
   c7.hitSound(false); const first = level();
   c7.clock += 0.03; c7.hitSound(false);
@@ -192,7 +192,7 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('  and recovers after a short pause', Math.abs(level() - first) < 1e-9);
   c7.clock += 0.1; c7.hitSound(false); level(); c7.clock += 0.01; c7.hitSound(true);
   ok('a crit is never merged away and plays at full level', level() > first);
-  ok('the tok sits clear of the thud you hear when YOU are hit (235-260Hz vs ~100Hz)', /f = rnd\(235, 260\)/.test(lift('hitSound')) && /rnd\(95, 125\)/.test(lift('hurtPlay')));
+  ok('it is a click, not an impact: no low tone at all, nothing a player could take for being hit', !/toneHit/.test(lift('hitSound')) && /'bandpass', rnd\(2300, 2500\)/.test(lift('hitSound')));
 }
 ok('Settings closes back to the pause menu; only the pause menu resumes',
    /id="setclose"[^>]*>CLOSE</.test(html) && /\$\('#setclose'\)\.addEventListener\('click', settingsBack\)/.test(html) && /closeSettings\(false\);/.test(lift('settingsBack')));
