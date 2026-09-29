@@ -175,6 +175,22 @@ ok('the arena echo is shorter and lighter than the first pass (0.8s tail, sends 
   ok('  the note steps up the A major pentatonic per kill this life, then holds', /const KILL_NOTES = \[1760, 1976, 2217, 2637, 2960\];/.test(html) && /Math\.min\(KILL_NOTES\.length, Math\.max\(1, n \|\| 1\)\) - 1/.test(src));
   ok('  back-to-back kills are no longer turned down (the old quick-kill softening is gone)', !/quick/.test(src) && !/KILLSND/.test(html));
   ok('  fmPluck starts its gains at 0 (no loud first block)', /mg\.gain\.value = 0;/.test(lift('fmPluck')) && /g\.gain\.value = 0;/.test(lift('fmPluck')));
+  {
+    const c = vm.createContext({ Math, G: null, SETTINGS: { streak: true }, notes: [], shown: 0, clearTimeout(){}, setTimeout(){},
+      killSound(n){ c.notes.push(n); }, document: { getElementById: () => null } });
+    vm.runInContext(line(/const streakMode = [^\n]*;/) + '\n' + line(/const STREAK = \{[^\n]*;/) + '\n' + lift('streakEl') + lift('streakKill') + lift('streakReset') + '\nthis.STREAK = STREAK;', c);
+    c.streakEl = () => { c.shown++; return null; };
+    vm.runInContext('streakEl = () => { shown++; return null; }', c);
+    const play = (mode, k) => { c.G = { mode }; c.notes = []; c.shown = 0; c.streakReset(); for(let i = 0; i < k; i++) c.streakKill(); return c.notes.join(','); };
+    ok('the note climbs only in free-for-all and live PvP', play('ffa', 4) === '1,2,3,4' && play('live', 3) === '1,2,3', play('ffa', 4));
+    ok('  team modes and the campaign keep the first note and show no emblem',
+       ['tdm', 'koth', 'camp'].every(m => play(m, 4) === '1,1,1,1' && c.shown === 0));
+    c.SETTINGS.streak = false;
+    ok('  the emblem can be turned off in Settings; the note still climbs', play('ffa', 3) === '1,2,3' && c.shown === 0);
+    ok('  the setting is on by default, survives a reload and RESET turns it back on',
+       /streak: true, binds: Object\.assign/.test(html) && /SETTINGS\.streak = s\.streak !== false;/.test(html) &&
+       (html.match(/gfx:'auto', streak:true, binds: BINDS/g) || []).length === 2 && (html.match(/class="hudhost"/g) || []).length === 2);
+  }
   ok('kills go through the streak, offline and live; dying and a new match reset it',
      (html.match(/streakKill\(\);/g) || []).length === 2 && !/[^.\w]killSound\(\);/.test(html) &&
      (html.match(/streakReset\(\);/g) || []).length >= 4 && /deathSound\(\); streakReset\(\);/.test(html));

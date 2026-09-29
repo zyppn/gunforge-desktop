@@ -329,6 +329,9 @@
   .setgrid .sldrow:first-of-type{margin-top:8px}
   .segrow{display:flex;gap:6px;margin-top:8px}
   .segrow .btn{flex:1;text-align:center}
+  .hudrow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
+  .hudrow .eyebrow{margin:0}
+  .hudrow .segrow{margin:0;width:128px}
   @media (max-width:720px){ .setgrid{grid-template-columns:1fr} }
   .acctrow{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px}
   .acctrow.warn{border-color:rgba(232,163,61,.45);background:rgba(232,163,61,.06)}
@@ -463,6 +466,7 @@
                 <div class="sldrow"><label>Mouse sensitivity <span id="sensval">1.00x</span></label>
                   <input type="range" id="senssl" min="20" max="250" value="100"></div>
                 <div class="gfxhost"></div>
+                <div class="hudhost"></div>
               </div>
             </div>
             <div class="btnrow" style="margin-top:16px">
@@ -2188,6 +2192,7 @@ function menuSettings(){
    +'<div class="sldrow"><label>Mouse sensitivity <span id="msensval">'+SETTINGS.sens.toFixed(2)+'x</span></label>'
    +'<input type="range" min="20" max="250" value="'+Math.round(SETTINGS.sens*100)+'" oninput="setSensPct(this.value, \'msensval\')"></div>'
    +'<div class="gfxhost">'+gfxHtml()+'</div>'
+   +'<div class="hudhost">'+hudHtml()+'</div>'
    +'</div></div>'
    +'<div class="btnrow" style="margin-top:16px"><button class="btn sm" onclick="resetSettingsAll()">RESET TO DEFAULT</button>'
    +'<button class="btn sm primary" style="margin-left:auto" onclick="cancelBind();closeModal()">DONE</button></div>', 'wide');
@@ -2292,7 +2297,7 @@ function setSensPct(v, labelId){
 function resetSettingsAll(){
   bindCapture = null;
   BINDS = Object.assign({}, DEFAULT_BINDS);
-  SETTINGS = { volume:0.8, music:0.6, sens:1.0, gfx:'auto', binds: BINDS };   // RESET TO DEFAULT restores the keys too
+  SETTINGS = { volume:0.8, music:0.6, sens:1.0, gfx:'auto', streak:true, binds: BINDS };   // RESET TO DEFAULT restores the keys too
   try{ musicSetLevel(); if(MUSIC_SCREENS.includes((document.querySelector('.screen.on')||{}).id)) musicStart(); }catch(e){}
   gfxChanged();
   if(masterG) masterG.gain.value = 0.8;
@@ -2850,7 +2855,7 @@ function sanitizeBinds(b){
 const EYE = 1.6, PR = 0.5;
 
 /* --- settings (persisted) --- */
-let SETTINGS = { volume: 0.8, music: 0.6, sens: 1.0, gfx: 'auto', binds: Object.assign({}, DEFAULT_BINDS) };
+let SETTINGS = { volume: 0.8, music: 0.6, sens: 1.0, gfx: 'auto', streak: true, binds: Object.assign({}, DEFAULT_BINDS) };
 let bindCapture = null;   // set while the settings panel is waiting for a key
 async function loadSettings(){
   const s = await sGet('settings');
@@ -2860,6 +2865,7 @@ async function loadSettings(){
     SETTINGS.binds  = sanitizeBinds(s.binds);
     SETTINGS.gfx    = GFX_MODES.includes(s.gfx) ? s.gfx : 'auto';
     SETTINGS.music  = (typeof s.music === 'number' && isFinite(s.music)) ? Math.min(1, Math.max(0, s.music)) : 0.6;
+    SETTINGS.streak = s.streak !== false;          // on unless the player turned it off
     BINDS = SETTINGS.binds;
     if(typeof s.invSort === 'string' && INV_SORTS.some(function(d){ return d[0] === s.invSort; })){
       SETTINGS.invSort = s.invSort; invSort = s.invSort;
@@ -3377,7 +3383,11 @@ function killSound(n){
     fmPluck(o, t + 0.022, f, 3.5, 1.4, 0.06 * g * Math.pow(up, -0.3), 0.38);       // the glass note
   }catch(e){}
 }
-/* Kills this life: drives the note above and the streak emblem (#streak). */
+/* Kills this life: drives the note above and the streak emblem (#streak).
+   Only where kills are YOURS to chain - free-for-all and live PvP. Team modes and the
+   campaign keep the plain first note and show no emblem. The emblem can also be
+   switched off in Settings (the climbing note stays: it is feedback, not clutter). */
+const streakMode = () => !!(G && (G.mode === 'ffa' || G.mode === 'live'));
 const STREAK = { n: 0, timer: 0, el: null };
 function streakEl(){
   if(STREAK.el) return STREAK.el;
@@ -3389,8 +3399,10 @@ function streakEl(){
   return STREAK.el = el;
 }
 function streakKill(){
+  if(!streakMode()){ killSound(1); return; }
   STREAK.n++;
   killSound(STREAK.n);
+  if(SETTINGS.streak === false) return;
   const el = streakEl(); if(!el) return;
   const n = STREAK.n, lit = Math.min(5, n), segs = el.querySelectorAll('.seg');
   segs.forEach((sg, k) => { sg.classList.toggle('lit', k < lit); sg.classList.remove('new'); });
@@ -3760,7 +3772,7 @@ $('#setreset').addEventListener('click', ()=>{
   // "default" means — and it restores the key bindings, not just the sliders
   bindCapture = null;
   BINDS = Object.assign({}, DEFAULT_BINDS);
-  SETTINGS = { volume:0.8, music:0.6, sens:1.0, gfx:'auto', binds: BINDS };
+  SETTINGS = { volume:0.8, music:0.6, sens:1.0, gfx:'auto', streak:true, binds: BINDS };
   gfxChanged(); musicSetLevel();
   if(masterG) masterG.gain.value = SETTINGS.volume;
   syncSettingsUI(); saveSettings(); sfx('reload');
@@ -3826,7 +3838,20 @@ function gfxHtml(){
     + GFX_MODES.map(k => '<button class="btn sm' + (k === m ? ' primary' : '') + '" onclick="setGfx(\'' + k + '\')">' + k.toUpperCase() + '</button>').join('')
     + '</div><p class="note" style="margin-top:6px">' + GFX_INFO[m] + '</p>';
 }
-function paintGfx(){ document.querySelectorAll('.gfxhost').forEach(h => { h.innerHTML = gfxHtml(); }); }
+function paintGfx(){ document.querySelectorAll('.gfxhost').forEach(h => { h.innerHTML = gfxHtml(); }); paintHud(); }
+/* ---- HUD: the kill streak marker can be turned off ---- */
+function hudHtml(){
+  const on = SETTINGS.streak !== false;
+  // one line, label and switch side by side: the panel has to fit without scrolling
+  return '<div class="hudrow"><span class="eyebrow">Kill streak marker</span><div class="segrow">'
+    + '<button class="btn sm' + (on ? ' primary' : '') + '" onclick="setStreakHud(true)">ON</button>'
+    + '<button class="btn sm' + (on ? '' : ' primary') + '" onclick="setStreakHud(false)">OFF</button></div></div>';
+}
+function paintHud(){ document.querySelectorAll('.hudhost').forEach(h => { h.innerHTML = hudHtml(); }); }
+function setStreakHud(on){
+  SETTINGS.streak = !!on; saveSettings(); paintHud();
+  if(!on && STREAK.el) STREAK.el.classList.remove('on');
+}
 function setGfx(m){
   if(!GFX_MODES.includes(m) || m === gfxMode()) return;
   SETTINGS.gfx = m; saveSettings(); gfxChanged(); paintGfx();
