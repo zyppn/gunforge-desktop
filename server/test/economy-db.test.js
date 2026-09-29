@@ -39,10 +39,18 @@ await db.exec(`
 `);
 const strip = t => t.replace(/^\s*create extension[^;]*;/gmi, '').replace(/^\s*notify[^;]*;/gmi, '');
 const files = ['supabase-pvp.sql', ...fs.readdirSync(path.join(ROOT, 'migrations')).filter(f => f.endsWith('.sql')).sort().map(f => 'migrations/' + f)];
-for(const f of files) await db.exec(strip(fs.readFileSync(path.join(ROOT, f), 'utf8')));
-ok('schema + every migration loads in order (' + files.length + ' files)', true);
-
 const q = (s, p) => db.query(s, p);
+/* Everything before 022 first, so a store part bought (and listed) under the old rules
+   exists when 022 runs - that is the case the migration has to clean up. */
+const before022 = files.filter(f => !/migrations\/0(2[2-9]|[3-9]\d)/.test(f)), after022 = files.filter(f => !before022.includes(f));
+for(const f of before022) await db.exec(strip(fs.readFileSync(path.join(ROOT, f), 'utf8')));
+const oldBuyer = (await q(`insert into players(auth_uid, callsign, credits) values (gen_random_uuid(), 'OLDSTORE', 50000) returning id, auth_uid`)).rows[0];
+const oldBuy = (await q(`select buy_store_part($1, '2026-09-01', 7::smallint, 25000, '{"weapon":"warden","slot":"barrel","rarity":"legendary","name":"Old Legend","mods":{}}'::jsonb) as r`, [oldBuyer.id])).rows[0].r;
+const oldPart = oldBuy.part.uid;
+const oldList = (await q(`insert into listings(part_uid, seller_id, price) values ($1, $2, 1) returning id`, [oldPart, oldBuyer.id])).rows[0].id;
+ok('(before 022) a store part came out tradeable and could sit on the auction', oldBuy.part.bound === false && !!oldList);
+for(const f of after022) await db.exec(strip(fs.readFileSync(path.join(ROOT, f), 'utf8')));
+ok('schema + every migration loads in order (' + files.length + ' files)', true);
 const player = async (name, credits) => (await q(
   `insert into players(auth_uid, callsign, credits) values (gen_random_uuid(), $1, $2) returning id, auth_uid`, [name, credits])).rows[0];
 const part = async (owner, name) => (await q(
@@ -58,6 +66,20 @@ const as = async (role, who, sql, p) => {
   }catch(e){ await db.exec('rollback'); return { error: e.message }; }
 };
 const asPlayer = (who, sql, p) => as('authenticated', who, sql, p);
+
+/* ---- 022: store parts are soulbound (no shop rerolls through alt accounts) ---- */
+ok('a store part bought before 022 is now soulbound', (await q(`select bound from parts where uid = $1`, [oldPart])).rows[0].bound === true);
+ok('  and its listing was taken down, the part still with its owner',
+   (await q(`select l.status = 'cancelled' and p.owner_id = $2 as b from listings l join parts p on p.uid = l.part_uid where l.id = $1`, [oldList, oldBuyer.id])).rows[0].b);
+const shopper = (await q(`insert into players(auth_uid, callsign, credits) values (gen_random_uuid(), 'SHOPPER', 30000) returning id, auth_uid`)).rows[0];
+const nb = (await as('service_role', null, `select buy_store_part($1, '2026-09-29', 7::smallint, 25000, '{"weapon":"ls1","slot":"optic","rarity":"legendary","name":"New Legend","mods":{}}'::jsonb) as r`, [shopper.id])).r;
+ok('a store purchase now comes out soulbound', nb && nb.ok && nb.part.bound === true, nb && JSON.stringify(nb.part && nb.part.bound));
+const tryList = await asPlayer(shopper, `select list_part($1, 100) as id`, [nb.part.uid]);
+ok('  and cannot be listed on the auction', /soulbound/.test(tryList.error || ''), tryList.error || 'LISTED');
+const sneak = (await q(`insert into parts(owner_id, weapon_id, slot, rarity, name, source, bound) values ($1,'m17','barrel','epic','Sneak','store',false) returning bound`, [shopper.id])).rows[0].bound;
+ok('  a store part written any other way is bound too (trigger)', sneak === true);
+const dropP = (await q(`insert into parts(owner_id, weapon_id, slot, rarity, name, source, bound) values ($1,'m17','barrel','epic','PvP Drop','pvp',false) returning bound`, [shopper.id])).rows[0].bound;
+ok('  live PvP drops stay tradeable', dropP === false);
 
 /* ---- the auction ---- */
 const seller = await player('SELLER', 1000), buyer = await player('BUYER', 1000);
@@ -112,6 +134,8 @@ const pub = (await q(`select tablename from pg_publication_tables where pubname 
 ok('Realtime publishes players and listings (the seller hears about a sale)', pub.includes('players') && pub.includes('listings'), pub.join(','));
 await db.exec(strip(fs.readFileSync(path.join(ROOT, 'migrations', '021_auction_pays_instantly.sql'), 'utf8')));
 ok('021 is safe to run twice', true);
+await db.exec(strip(fs.readFileSync(path.join(ROOT, 'migrations', '022_store_parts_soulbound.sql'), 'utf8')));
+ok('022 is safe to run twice', true);
 
 console.log(fails ? '\neconomy-db: ' + fails + ' failure(s)' : '\neconomy-db: all clear');
 process.exit(fails ? 1 : 0);

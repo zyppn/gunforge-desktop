@@ -165,7 +165,21 @@ It prints two small tables at the end: both guards should show
 `server/test/economy-db.test.js` runs a real sale, a refused sale, a scrap and the
 guard against Postgres on every `./ship.sh`.
 
-## 8. Moving to Steam later
+## 8. Store parts are soulbound
+
+Run `server/migrations/022_store_parts_soulbound.sql` in the SQL editor
+(`pbcopy < server/migrations/022_store_parts_soulbound.sql`). Every account gets its own
+daily shop, so while store parts could be listed, guest or alt accounts were free shop
+rerolls: fund the alt through the auction, buy the legendary its shop rolled, "sell" it
+to your main. Now a part bought in the store is bound to the buyer (equip or scrap,
+never auction), store parts bought earlier are bound too, and any of them on the
+auction are taken down (the part stays with its owner). Live PvP drops stay tradeable.
+The game shows a small brass arrows mark on tradeable parts and a lock on soulbound ones.
+
+`server/test/economy-db.test.js` runs it on Postgres, including a store part bought and
+listed before the migration.
+
+## 9. Moving to Steam later
 
 Yes, this carries over. Accounts are keyed by the Supabase user id
 (`players.auth_uid`), not by how someone signs in. Discord is one identity on that user,

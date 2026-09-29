@@ -221,6 +221,10 @@
      same specificity loses to this one. */
   .part .acts{display:flex;gap:6px;margin-top:auto;padding-top:9px;flex-wrap:wrap}
   .part .eqtag{color:var(--green);font-size:10.5px;letter-spacing:1px}
+  /* tradeable / soulbound mark: a tiny icon beside the rarity, name on hover */
+  .tb{display:inline-block;width:11px;height:11px;margin-left:7px;vertical-align:-1px;cursor:help}
+  .tb svg{display:block;width:100%;height:100%}
+  .tb.tr{color:var(--brass)} .tb.sb{color:#7C8A99}
   .filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .fbtn{font-size:11px;padding:4px 9px;border:1px solid var(--line);color:var(--dim);cursor:pointer;background:var(--panel2)}
   .fbtn.on{border-color:var(--brass);color:var(--brass)}
@@ -727,7 +731,8 @@ let ACCOUNT = { online: false, uid: null };
 function partFromRow(r){
   return { uid: r.uid, weapon: r.weapon_id, slot: r.slot, rarity: r.rarity,
            name: r.name, mods: r.mods || {}, ability: r.ability || null, set: r.set_id || null,
-           got: r.created_at ? Date.parse(r.created_at) : undefined };
+           got: r.created_at ? Date.parse(r.created_at) : undefined,
+           bound: !!r.bound };                     // soulbound: can never be listed
 }
 
 // Every economy mutation goes through a security-definer RPC now: the client
@@ -1511,6 +1516,19 @@ function modText(mods){
     return '<span style="color:'+(good?'var(--green)':'var(--red)')+'">'+sign+Math.round(v*100)+'% '+MODNAMES[k]+'</span>';
   }).join(' · ');
 }
+/* Can this part go on the auction? Tradeable: live PvP drops (and anything bought on the
+   auction). Soulbound: offline drops and daily-store buys - yours only. A part whose
+   status is unknown (a local-only save) gets no mark rather than a wrong one. */
+const TB_ICON = {
+  tr: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 4h8M7 1.5 9.5 4 7 6.5M10.5 8h-8M5 5.5 2.5 8 5 10.5"/></svg>',
+  sb: '<svg viewBox="0 0 12 12" fill="currentColor"><path d="M3.5 5V3.8a2.5 2.5 0 0 1 5 0V5h.5a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1.3 0h2.4V3.8a1.2 1.2 0 0 0-2.4 0z"/></svg>'
+};
+function tradeBadge(p){
+  if(!p || typeof p.bound !== 'boolean' || !ACCOUNT.online) return '';
+  return p.bound
+    ? '<span class="tb sb" title="Soulbound - yours only, cannot be auctioned">' + TB_ICON.sb + '</span>'
+    : '<span class="tb tr" title="Tradeable - can be sold on the auction house">' + TB_ICON.tr + '</span>';
+}
 function partCard(p, actionsHtml, tag, extraClass){
   const set = p.set ? SETS.find(s=>s.id===p.set) : null;
   const w = WEAPONS.find(x=>x.id===p.weapon);
@@ -1521,7 +1539,7 @@ function partCard(p, actionsHtml, tag, extraClass){
   return '<div class="part'+(extraClass ? ' '+extraClass : '')+'" data-r="'+p.rarity+'">'
     + '<div class="phead"><div class="pmain">'
     + '<div class="pn">'+esc(p.name)+'</div>'
-    + '<div class="rw"><span class="rr">'+RAR[p.rarity].n+'</span><span class="ww">'+esc(w.name)+' · '+SLOTN[p.slot]+'</span>'+(tag||'')+'</div>'
+    + '<div class="rw"><span class="rr">'+RAR[p.rarity].n+'</span>'+tradeBadge(p)+'<span class="ww">'+esc(w.name)+' · '+SLOTN[p.slot]+'</span>'+(tag||'')+'</div>'
     + '<div class="mods">'+modText(p.mods)+'</div>'
     + (p.ability ? '<div class="abil">◆ '+ABILITIES[p.ability].n+' — '+ABILITIES[p.ability].d+'</div>' : '')
     + (set ? '<div class="setn">⬡ '+esc(set.name)+' set piece ('+set.need+' to activate) — '+esc(set.bonus)+'</div>' : '')
@@ -1628,12 +1646,12 @@ function renderStore(){
         + ' onclick="storeBuy('+it.idx+')">'+(afford ? 'BUY ' + it.price.toLocaleString() + ' CR'
                                                     : it.price.toLocaleString()+' CR') + '</button>';
     const tag = owned ? '<span class="eqtag">✓ PURCHASED</span>' : '';
-    return partCard(it, acts, tag, owned ? 'soldout' : '');
+    return partCard(Object.assign({ bound: true }, it), acts, tag, owned ? 'soldout' : '');
   }).join('');
 
   $('#store').innerHTML = head
    + '<p class="note">Eight parts, generated for you alone — no two operators see the same shop. '
-   + 'Set pieces are never sold here; those stay earned. Rotates at 7:00 PM Central: '
+   + 'Set pieces are never sold here; those stay earned. Store parts are soulbound: yours to equip or scrap, never to auction. Rotates at 7:00 PM Central: '
    + '<b id="storetick2" style="color:var(--brass)">'+storeCountdown(STORE.refreshAt)+'</b></p>'
    + '<div class="partgrid storegrid">'+cards+'</div>'
    + '<div class="btnrow"><button class="btn" onclick="renderMenu()">← BACK</button></div>';
@@ -2478,7 +2496,7 @@ function renderInventory(filter){
         +'<button class="btn sm danger" disabled>SCRAP +'+RAR[p.rarity].scrap+'</button>'
       : (isEq ? '<button class="btn sm" onclick="invUnequip(\''+p.uid+'\')">UNEQUIP</button>'
               : '<button class="btn sm primary" onclick="invEquip(\''+p.uid+'\')">EQUIP</button>')
-        +'<button class="btn sm" '+lock+' onclick="openList(\''+p.uid+'\')">AUCTION</button>'
+        +(p.bound ? '' : '<button class="btn sm" '+lock+' onclick="openList(\''+p.uid+'\')">AUCTION</button>')
         +'<button class="btn sm danger" '+lock+' onclick="trashPart(\''+p.uid+'\')">SCRAP +'+RAR[p.rarity].scrap+'</button>';
     const tag = isLs ? '<span class="eqtag">\u29D6 LISTED</span>'
               : isEq ? '<span class="eqtag">● EQUIPPED</span>' : '';
@@ -2489,7 +2507,9 @@ function renderInventory(filter){
    '<div class="eyebrow">Parts Locker</div><h2>Inventory — <span style="color:'+capColor+'">'+held+' / '+PART_CAP+'</span> parts'
    + (nListed ? ' <span style="color:var(--dim);font-size:13px">+ '+nListed+' listed</span>' : '')
    + (invFilter==='all' ? '' : ' · showing '+items.length)+'</h2>'
-   +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning. Parts on the auction block are escrowed and don\'t count against your '+PART_CAP+'.</p>'
+   +'<p class="note">Parts drop with a chance at the end of each match — rarer finishes carry bigger modifiers and unique abilities. Equipped parts must be unequipped before scrapping or auctioning. Parts on the auction block are escrowed and don\'t count against your '+PART_CAP+'.'
+   +(ACCOUNT.online ? ' <span style="white-space:nowrap">'+tradeBadge({bound:false})+' tradeable (live PvP drops)</span> <span style="white-space:nowrap">'+tradeBadge({bound:true})+' soulbound (offline drops, store)</span>' : '')
+   +'</p>'
    +(held >= PART_CAP ? '<p class="note" style="color:#E05A4E">Locker full — drops and auction buys will be refused until you scrap or list something.</p>' : '')
    +'<div class="filters">'+fbs+'</div>'
    +'<div class="filters" style="margin-top:6px"><span class="sortlbl">SORT</span>'
@@ -2572,6 +2592,7 @@ async function getListings(){
 
 function openList(uidv){
   const p = getPart(uidv); if(!p) return;
+  if(p.bound){ toast('SOULBOUND \u2014 THIS PART CANNOT BE AUCTIONED'); return; }
   const suggest = RAR[p.rarity].scrap * 4;
   modal('<div class="eyebrow">Create listing</div><h2>'+esc(p.name)+'</h2>'
    +'<p class="note">List this part on the shared auction house. Every operator can see and buy it. Suggested price for '+RAR[p.rarity].n+': ~'+suggest+' CR.</p>'
